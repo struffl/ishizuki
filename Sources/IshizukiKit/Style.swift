@@ -46,6 +46,18 @@ public enum Style {
     public static let good = Colour(red: 140, green: 176, blue: 150, fallback: 108)
     public static let warn = Colour(red: 202, green: 172, blue: 124, fallback: 179)
     public static let bad = Colour(red: 198, green: 132, blue: 132, fallback: 167)
+
+    public static let barkLight = Colour(red: 176, green: 144, blue: 110, fallback: 180)
+    public static let bark = Colour(red: 146, green: 116, blue: 88, fallback: 137)
+    public static let barkDeep = Colour(red: 108, green: 84, blue: 64, fallback: 95)
+    public static let leaf = Colour(red: 118, green: 166, blue: 114, fallback: 108)
+    public static let leafDeep = Colour(red: 84, green: 128, blue: 90, fallback: 71)
+    public static let leafBright = Colour(red: 160, green: 200, blue: 142, fallback: 150)
+    public static let stone = Colour(red: 132, green: 146, blue: 162, fallback: 103)
+    public static let stoneDeep = Colour(red: 94, green: 108, blue: 124, fallback: 60)
+    public static let blossom = Colour(red: 226, green: 164, blue: 192, fallback: 175)
+    public static let blossomDeep = Colour(red: 198, green: 92, blue: 112, fallback: 168)
+    public static let blossomPlum = Colour(red: 172, green: 136, blue: 206, fallback: 140)
   }
 
   public static func paint(_ text: String, _ colour: Colour, bold: Bool = false) -> String {
