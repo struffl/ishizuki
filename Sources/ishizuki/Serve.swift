@@ -51,7 +51,11 @@ struct Serve: ParsableCommand {
     help: "Prefix caches kept for reuse. Defaults to a share of the GPU wired ceiling.")
   var cacheSlots: Int?
 
-  @Option(name: .long, help: "Seconds idle before caches are released. 0 disables.")
+  @Option(
+    name: .long,
+    help:
+      "Seconds idle before the reusable buffer pool is released. Prefix caches are kept. 0 disables."
+  )
   var idleTimeout: Double = 120
 
   @Option(name: .long, help: "Seconds idle before the model is unloaded entirely. 0 disables.")
@@ -100,11 +104,14 @@ struct Serve: ParsableCommand {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
 
-    let resolvedSlots = cacheSlots ?? ResidencyManager.defaultCacheSlots
+    let budget = ResidencyManager.budget(
+      kvBits: kvConfig.bits,
+      contextTokens: Int(262_144 * max(contextScale, 1)))
+    let resolvedSlots = cacheSlots ?? budget.slots
+    let resolvedCacheLimit = cacheLimitGB.map { Int($0 * 1_073_741_824) } ?? budget.bufferCache
     let residency = ResidencyManager.Options(
       wiredBytes: Int(wireGB * 1_073_741_824),
-      cacheLimit: cacheLimitGB.map { Int($0 * 1_073_741_824) }
-        ?? ResidencyManager.defaultCacheLimit,
+      cacheLimit: resolvedCacheLimit,
       idleSeconds: idleTimeout,
       evictSeconds: evictTimeout)
 
@@ -131,17 +138,29 @@ struct Serve: ParsableCommand {
         + Style.field(
           "budget",
           Style.faint(
-            "ceiling \(gigabytes(ResidencyManager.gpuCeiling)), "
-              + "buffer cache \(gigabytes(residency.cacheLimit)), "
+            "ceiling \(gigabytes(budget.ceiling)), "
+              + "context reserve \(gigabytes(budget.contextBytes)), "
+              + "buffer cache \(gigabytes(resolvedCacheLimit)), "
               + "\(resolvedSlots) prefix slots")),
     ]
     if idleTimeout > 0 {
       header.append(
-        "  " + Style.field("idle", Style.faint("caches released after \(Int(idleTimeout))s")))
+        "  "
+          + Style.field(
+            "idle", Style.faint("buffer pool released after \(Int(idleTimeout))s")))
     }
     if evictTimeout > 0 {
       header.append(
         "  " + Style.field("evict", Style.faint("model unloaded after \(Int(evictTimeout))s")))
+    }
+    if !budget.fitsFullContext {
+      header.append(
+        "  "
+          + Style.field(
+            "warning",
+            Style.warn(
+              "the wired ceiling cannot hold weights plus one full context; "
+                + "long sessions will fall back to re-prefill")))
     }
     if wireGB > 0 {
       header.append(

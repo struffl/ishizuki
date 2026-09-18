@@ -125,14 +125,37 @@ public final class ResidencyManager: @unchecked Sendable {
     return Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.75)
   }
 
-  public static var defaultCacheLimit: Int {
-    let quarter = gpuCeiling / 4
-    return min(max(quarter, 1_073_741_824), 8 * 1_073_741_824)
+  public struct Budget: Sendable {
+    public var ceiling: Int
+    public var weights: Int
+    public var contextBytes: Int
+    public var bufferCache: Int
+    public var slots: Int
+    public var fitsFullContext: Bool
   }
 
-  public static var defaultCacheSlots: Int {
-    let perSlot = 12 * 1_073_741_824
-    return min(max(gpuCeiling / perSlot, 1), 6)
+  /// Weights plus one full context of KV come first; the buffer cache only gets what is left.
+  public static func budget(
+    kvBits: Float?, contextTokens: Int, weights: Int = 9_663_676_416
+  ) -> Budget {
+    let gigabyte = 1_073_741_824
+    let ceiling = gpuCeiling
+
+    let bits = Double(kvBits ?? 16)
+    let perToken = Int(Double(32768) * bits / 8) + 2048
+    let contextBytes = perToken * contextTokens
+
+    let afterWeights = max(ceiling - weights, 0)
+    let fits = afterWeights >= contextBytes
+    let afterContext = max(afterWeights - contextBytes, 0)
+
+    let bufferCache = min(max(afterContext / 2, gigabyte), 8 * gigabyte)
+    let spare = max(afterContext - bufferCache, 0)
+    let slots = min(1 + spare / max(contextBytes, 1), 6)
+
+    return Budget(
+      ceiling: ceiling, weights: weights, contextBytes: contextBytes,
+      bufferCache: bufferCache, slots: slots, fitsFullContext: fits)
   }
 
   private static func sysctlValue(_ name: String) -> UInt64? {
