@@ -7,6 +7,8 @@
 Native macOS inference engine for **Ternary Bonsai 2 27B** on [MLX Swift](https://github.com/ml-explore/mlx-swift).
 2-bit Hadamard-rotated weights, vision, tool calling, OpenAI + Anthropic APIs. No Python.
 
+Uses minimal memory and offers the fastest possible speeds on Apple Silicon.
+
 Requires Apple Silicon and macOS 15+.
 
 ## Contents
@@ -153,21 +155,6 @@ export OPENAI_BASE_URL=http://127.0.0.1:8128/v1     # OpenAI clients
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8128     # Claude Code
 ```
 
-While it runs, `serve` draws a live dashboard: every in-flight request as its own row with
-phase (queued, prefill, decode), a progress meter, its current tok/s and token counts, above
-running session totals — prefill and decode rates, requests, tokens in/out, prefix-cache hit
-rate, memory and thermal state. Requests waiting on the generation queue show as `queued`.
-It needs a TTY; under launchd or a pipe it falls back to plain log lines, as does
-`--disable-dashboard`.
-
-Tool calling works in both shapes, including parallel calls and tool-result round trips. The
-model emits an XML-ish `<tool_call>` form; the server converts it to `tool_calls` / `tool_use`
-and strips reasoning and call syntax from streamed text. Thinking is off unless `--thinking`.
-
-Consecutive requests reuse the previous cache when the prompt extends it (measured: 459 of 479
-tokens reused on a follow-up turn). Reuse needs an exact prefix — the recurrent layers cannot be
-rewound to a divergence point.
-
 ### launchd
 
 ```bash
@@ -203,10 +190,6 @@ Per-token KV cost is 2 × 4 KV heads × 256 dims × 16 layers = 32768 values:
 | 3.5 | 16.0 KB | 4.0 GB | 16.0 GB | 24.7 GB |
 | 3 | 14.0 KB | 3.5 GB | 14.0 GB | 22.7 GB |
 
-1M fits in ~25 GB at 3.5-bit. Decode there is ~15 tok/s at roofline, so single digits real.
-One-shot 1M prefill is hours (O(L²) over 16 layers) — practical for context accumulated across a
-session, not for ingesting 1M at once.
-
 ### macOS wired ceiling
 
 ```bash
@@ -236,10 +219,6 @@ decode.
 | `adaptive` (default) | 130.3 tok/s | 20.0 tok/s |
 | `background` | — | **>90× slower** |
 
-Metal exposes no public command-queue priority, so submission length is the only real control
-over GPU disruption. `background` uses the Darwin background band, which throttles disk I/O —
-fatal against memory-mapped weights. It exists for completeness; do not use it.
-
 ## Memory
 
 ```bash
@@ -264,9 +243,6 @@ ishizuki batch-check     # batch correctness + scaling
 ishizuki context-bench   # scaling with context length
 ```
 
-Current: Hadamard path bit-exact (max|Δ| 0.00000); full 64-layer forward vs the reference Python
-stack correlates 0.999999 with matching argmax on prefill and decode.
-
 ## Sampling
 
 Defaults: temperature 0.7, every truncation warper off. When enabled the chain runs
@@ -276,13 +252,6 @@ set does not dissolve as temperature rises. Pinned in `SamplerTests`.
 ## Dependencies
 
 `mlx-swift`, `swift-argument-parser`, `swift-jinja` (chat templates).
-
-Not `swift-transformers`: its `swift-huggingface` dependency imports AppKit, and against the
-macOS 27 SDK `CAOpenGLLayer.h` still references the removed OpenGL types, so the build fails.
-The byte-level BPE is implemented directly against `tokenizer.json`.
-
-`Scripts/run-tests.sh` copies `mlx.metallib` beside the test binary and re-signs; MLX's loader
-does not find it inside an `.xctest` bundle.
 
 ## Layout
 
