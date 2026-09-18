@@ -55,9 +55,16 @@ struct MemoryBudgetTests {
     #expect(ladder.notePrefixEviction() == nil)
   }
 
-  @Test("the buffer pool doubles only on repeated saturation")
+  @Test("the buffer pool doubles on repeated saturation, never past the kv it recycles")
   func poolDoublesOnSustainedPressure() {
+    let small = budget()
+    #expect(small.notePoolPressure(cacheMemory: 512 * megabyte) == nil)
+    #expect(small.notePoolPressure(cacheMemory: 512 * megabyte) == nil)
+    #expect(small.notePoolPressure(cacheMemory: 512 * megabyte) == nil)
+    #expect(small.tier.bufferCache == MemoryBudget.bufferFloor)
+
     let ladder = budget()
+    _ = ladder.observe(contextTokens: 200_000)
     #expect(ladder.notePoolPressure(cacheMemory: 32 * megabyte) == nil)
     #expect(ladder.notePoolPressure(cacheMemory: 512 * megabyte) == nil)
     #expect(ladder.notePoolPressure(cacheMemory: 32 * megabyte) == nil)

@@ -161,9 +161,13 @@ public final class MemoryBudget: @unchecked Sendable {
     guard saturations >= Self.saturationsBeforeGrowth else { return nil }
     saturations = 0
     guard poolTier < Self.bufferCeiling else { return nil }
+    let previous = poolTier
     poolTier = min(poolTier * 2, Self.bufferCeiling)
     let grown = allowance
-    guard grown > applied else { return nil }
+    guard grown > applied else {
+      poolTier = previous
+      return nil
+    }
     return step("buffer pool \(gigabytes(applied)) → \(gigabytes(grown))")
   }
 
@@ -187,10 +191,12 @@ public final class MemoryBudget: @unchecked Sendable {
 
   private var kvCommitment: Int { slots * contextTokens * bytesPerToken }
 
+  /// The pool is worth no more than the KV it recycles, and no more than the room left.
   private var allowance: Int {
     if let pinnedBufferCache { return pinnedBufferCache }
     let free = max(ceiling - weights - Self.workingReserve - kvCommitment, 0)
-    return min(max(min(poolTier, free), Self.bufferFloor), Self.bufferCeiling)
+    let earned = min(max(kvCommitment, Self.bufferFloor), Self.bufferCeiling)
+    return min(max(min(poolTier, free), Self.bufferFloor), earned)
   }
 
   private var currentTier: Tier {

@@ -147,10 +147,6 @@ struct Serve: ParsableCommand {
                 + "longer sessions fall back to re-prefill")))
     }
 
-    if let notice = SelfUpdate.notice() {
-      header.append("  " + Style.field("update", Style.warn(notice)))
-    }
-
     var settings = [
       "  " + Style.field("scheduling", Style.faint(Politeness.describe(level))),
       "  "

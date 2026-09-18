@@ -246,7 +246,7 @@ and stops at what the wired ceiling can still hold:
 |---|---|---|---|
 | context reserve | 8K tokens | a prompt asks for more | 262K, or what fits |
 | prefix slots | 1 | a warm prefix is evicted for want of a slot | 8, or what fits |
-| buffer pool | 0.5 GB | MLX saturates the pool twice running | 8 GB, or the spare room |
+| buffer pool | 0.5 GB | MLX saturates the pool twice running | the KV it recycles, 8 GB at most |
 
 Growth is a high-water mark: a tier holds until the model is unloaded, then returns to the
 floor. Context wins over slots — reserving more per conversation sheds slots rather than
