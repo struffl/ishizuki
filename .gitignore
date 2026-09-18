@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+assets/ishizuki.icns
+ishizuki-*.pkg
+.env
