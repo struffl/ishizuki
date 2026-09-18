@@ -201,12 +201,13 @@ public final class APIServer: @unchecked Sendable {
 
     var filter = StreamFilter(thinking: request.thinking)
 
-    let result = generator.generate(
+    let result = try withError { box in
+      generator.generate(
       promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
       cache: cache, promptEmbeddings: embeddings, positions: positions,
       cachedPrefixLength: reused,
       constraint: constraint,
-      isCancelled: isCancelled,
+      isCancelled: { box.firstError != nil || isCancelled?() == true },
       onProgress: { [stats = self.stats] progress in
         switch progress {
         case .prefill(let done, let total):
@@ -225,6 +226,7 @@ public final class APIServer: @unchecked Sendable {
         onText(visible)
       }
       return true
+    }
     }
     if let onText, !result.cancelled, let tail = filter.flush(), !tail.isEmpty {
       onText(tail)
@@ -561,7 +563,7 @@ public final class APIServer: @unchecked Sendable {
         ],
       ])
     } catch {
-      writer.sendError(status: 400, type: "invalid_request_error", message: "\(error)")
+      fail(writer, error)
     }
   }
 
@@ -675,7 +677,7 @@ public final class APIServer: @unchecked Sendable {
         enableThinking: parsed.thinking, tools: parsed.tools)
       writer.send(json: ["input_tokens": try model().tokenizer.encode(rendered).count])
     } catch {
-      writer.sendError(status: 400, type: "invalid_request_error", message: "\(error)")
+      fail(writer, error)
     }
   }
 
@@ -692,6 +694,22 @@ public final class APIServer: @unchecked Sendable {
       return effort != "none"
     }
     return nil
+  }
+
+  /// A request that failed mid-generation must not try to send a second status line: the
+  /// stream is already committed, so it is closed instead. An MLX failure is ours, not the
+  /// caller's, so it reports as a 500.
+  private func fail(_ writer: ResponseWriter, _ error: Error) {
+    log?("request failed: \(error)")
+    guard !writer.hasBegun else {
+      writer.finish()
+      return
+    }
+    let isInternal = error is MLXError
+    writer.sendError(
+      status: isInternal ? 500 : 400,
+      type: isInternal ? "api_error" : "invalid_request_error",
+      message: "\(error)")
   }
 
   private func stringContent(_ value: Any?) -> String {
