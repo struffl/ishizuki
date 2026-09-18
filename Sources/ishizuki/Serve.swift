@@ -36,13 +36,6 @@ struct Serve: ParsableCommand {
   @Option(name: .long) var topK: Int = 0
   @Option(name: .long) var minP: Float = 0.0
 
-  @Flag(
-    name: .long,
-    help:
-      "Let the model think before answering. Off by default: it is slow and most harnesses only want the answer."
-  )
-  var thinking = false
-
   @Option(
     name: .long,
     help:
@@ -55,8 +48,8 @@ struct Serve: ParsableCommand {
 
   @Option(
     name: .long,
-    help: "Prefix caches kept for reuse. More slots survive interleaved requests.")
-  var cacheSlots: Int = 4
+    help: "Prefix caches kept for reuse. Defaults to a share of the GPU wired ceiling.")
+  var cacheSlots: Int?
 
   @Option(name: .long, help: "Seconds idle before caches are released. 0 disables.")
   var idleTimeout: Double = 120
@@ -69,8 +62,10 @@ struct Serve: ParsableCommand {
 
   @Option(
     name: .long,
-    help: "Cap MLX's reusable buffer cache, in GB. 0 lets it grow unbounded.")
-  var cacheLimitGB: Double = 4
+    help:
+      "Cap MLX's reusable buffer cache, in GB. Defaults to a quarter of the GPU wired ceiling; 0 lets it grow unbounded."
+  )
+  var cacheLimitGB: Double?
 
   @Option(
     name: .long,
@@ -105,16 +100,17 @@ struct Serve: ParsableCommand {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
 
+    let resolvedSlots = cacheSlots ?? ResidencyManager.defaultCacheSlots
     let residency = ResidencyManager.Options(
       wiredBytes: Int(wireGB * 1_073_741_824),
-      cacheLimit: Int(cacheLimitGB * 1_073_741_824),
+      cacheLimit: cacheLimitGB.map { Int($0 * 1_073_741_824) }
+        ?? ResidencyManager.defaultCacheLimit,
       idleSeconds: idleTimeout,
       evictSeconds: evictTimeout)
 
     let server = try APIServer(
       directory: modelURL,
       modelName: servedName,
-      thinking: thinking,
       samplingOptions: SamplingOptions(
         temperature: temperature, topP: topP, topK: topK, minP: minP),
       kvConfig: kvConfig,
@@ -122,7 +118,7 @@ struct Serve: ParsableCommand {
       politeness: level,
       ropeScaling: contextScale > 1
         ? RopeScaling(method: .yarn, factor: contextScale) : .none,
-      cacheSlots: cacheSlots,
+      cacheSlots: resolvedSlots,
       preload: hot || !lazyLoad)
 
     var header = [
@@ -131,6 +127,13 @@ struct Serve: ParsableCommand {
       "  " + Style.field("OpenAI", Style.faint("export OPENAI_BASE_URL=http://127.0.0.1:\(port)/v1")),
       "  " + Style.field("Anthropic", Style.faint("export ANTHROPIC_BASE_URL=http://127.0.0.1:\(port)")),
       "  " + Style.field("scheduling", Style.faint(Politeness.describe(level))),
+      "  "
+        + Style.field(
+          "budget",
+          Style.faint(
+            "ceiling \(gigabytes(ResidencyManager.gpuCeiling)), "
+              + "buffer cache \(gigabytes(residency.cacheLimit)), "
+              + "\(resolvedSlots) prefix slots")),
     ]
     if idleTimeout > 0 {
       header.append(
@@ -162,6 +165,10 @@ struct Serve: ParsableCommand {
     }
 
     dispatchMain()
+  }
+
+  private func gigabytes(_ bytes: Int) -> String {
+    bytes == 0 ? "unbounded" : String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
   }
 
   private func installFarewell(for server: APIServer) {

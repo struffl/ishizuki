@@ -24,7 +24,7 @@ public final class APIServer: @unchecked Sendable {
 
   public init(
     directory: URL, modelName: String = "ternary-bonsai-2-27b",
-    thinking: Bool = false, samplingOptions: SamplingOptions = SamplingOptions(),
+    thinking: Bool = true, samplingOptions: SamplingOptions = SamplingOptions(),
     kvConfig: KVCacheConfig = KVCacheConfig(),
     residency: ResidencyManager.Options = ResidencyManager.Options(),
     politeness: Politeness.Level = .adaptive,
