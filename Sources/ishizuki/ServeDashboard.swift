@@ -7,7 +7,7 @@ import IshizukiKit
 import MLX
 
 final class ServeDashboard: @unchecked Sendable {
-  private let stats: ServeStats
+  private let server: APIServer
   private let header: [String]
   private let logLimit = 6
 
@@ -15,15 +15,19 @@ final class ServeDashboard: @unchecked Sendable {
   private var logLines: [String] = []
   private var painted = 0
   private var stopped = false
+  private var peakHeld = 0
 
   private var timer: DispatchSourceTimer?
   private var signals: [DispatchSourceSignal] = []
   private let queue = DispatchQueue(label: "ishizuki.dashboard")
 
-  init(stats: ServeStats, header: [String]) {
-    self.stats = stats
+  init(server: APIServer, header: [String]) {
+    self.server = server
     self.header = header
   }
+
+  private var stats: ServeStats { server.stats }
+  private var budget: MemoryBudget { server.budget }
 
   static var isSupported: Bool { isatty(STDOUT_FILENO) == 1 && Style.depth != .none }
 
@@ -220,14 +224,89 @@ final class ServeDashboard: @unchecked Sendable {
             + Style.faint(
               "  \(totals.cacheHits) hit · \(totals.cacheMisses) miss · "
                 + "\(group(totals.cachedTokens)) tok reused")))
-    lines.append("  " + Style.field("memory", Style.faint(ResidencyManager.describeMemory())))
+    lines.append(contentsOf: loadLines(totals))
 
-    var conditions = [Style.faint("thermal \(Politeness.thermalDescription)")]
+    let residency = server.residency.options
+    var conditions = [Style.accent(server.politeness.rawValue)]
+    conditions.append(Style.faint("thermal \(Politeness.thermalDescription)"))
     if Politeness.isLowPowerMode { conditions.append(Style.warn("low power")) }
+    if residency.idleSeconds > 0 {
+      conditions.append(Style.faint("pool freed at \(Int(residency.idleSeconds))s idle"))
+    }
+    if residency.evictSeconds > 0 {
+      conditions.append(Style.faint("unload at \(Int(residency.evictSeconds))s idle"))
+    }
     conditions.append(Style.faint("up \(duration(totals.uptime))"))
     lines.append("  " + Style.field("state", conditions.joined(separator: Style.faint(" · "))))
 
     return lines
+  }
+
+  private func loadLines(_ totals: ServeStats.Totals) -> [String] {
+    let memory = Memory.snapshot()
+    let weights = budget.weightBytes
+    let held = max(weights, memory.activeMemory) + memory.cacheMemory
+    let ceiling = max(budget.ceiling, 1)
+    let tier = budget.tier
+    peakHeld = max(peakHeld, held, max(weights, memory.peakMemory))
+
+    var lines: [String] = []
+    lines.append(
+      "  "
+        + Style.field(
+          "memory",
+          gauge(Double(held) / Double(ceiling))
+            + " " + Style.bright(pad(percent(Double(held) / Double(ceiling)), 4, right: false))
+            + " " + Style.faint("\(gigabytes(held)) / \(gigabytes(ceiling))")
+            + Style.faint(
+              "   weights \(gigabytes(weights))"
+                + " · peak \(gigabytes(peakHeld))")))
+
+    if let usage = GPUMeter.utilization() {
+      lines.append(
+        "  "
+          + Style.field(
+            "gpu",
+            gauge(usage)
+              + " " + Style.bright(pad(percent(usage), 4, right: false))
+              + Style.muted(" busy")))
+    }
+
+    lines.append(
+      "  "
+        + Style.field(
+          "budget",
+          Style.accent(budget.describe())
+            + Style.faint(" · \(gigabytes(budget.headroom)) spare")))
+    lines.append(
+      "  "
+        + Style.field(
+          "context",
+          Style.accent(MemoryBudget.tokens(totals.peakContextTokens) + " peak")
+            + Style.faint(
+              " · \(MemoryBudget.tokens(tier.contextTokens)) reserved"
+                + " · \(MemoryBudget.tokens(budget.maxContextTokens)) ceiling"
+                + " · \(compact(server.sessions.cachedBytes)) kv held")))
+    return lines
+  }
+
+  private func percent(_ fraction: Double) -> String {
+    String(format: "%.0f%%", min(max(fraction, 0), 1) * 100)
+  }
+
+  private func gauge(_ fraction: Double, width: Int = 14) -> String {
+    let clamped = min(max(fraction, 0), 1)
+    let filled = Int((Double(width) * clamped).rounded())
+    let bar = String(repeating: "━", count: filled)
+    let colour: String
+    if clamped >= 0.85 {
+      colour = Style.bad(bar)
+    } else if clamped >= 0.6 {
+      colour = Style.warn(bar)
+    } else {
+      colour = Style.good(bar)
+    }
+    return colour + Style.faint(String(repeating: "╌", count: width - filled))
   }
 
   private func paint(_ lines: [String]) {
@@ -276,6 +355,16 @@ private func group(_ value: Int) -> String {
     out.append(digit)
   }
   return out
+}
+
+private func gigabytes(_ bytes: Int) -> String {
+  String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+}
+
+private func compact(_ bytes: Int) -> String {
+  bytes < 1_073_741_824
+    ? String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    : gigabytes(bytes)
 }
 
 private func duration(_ seconds: Double) -> String {

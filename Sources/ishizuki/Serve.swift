@@ -48,7 +48,9 @@ struct Serve: ParsableCommand {
 
   @Option(
     name: .long,
-    help: "Prefix caches kept for reuse. Defaults to a share of the GPU wired ceiling.")
+    help:
+      "Pin the number of prefix caches kept for reuse. Default starts at 1 and doubles under pressure."
+  )
   var cacheSlots: Int?
 
   @Option(
@@ -67,7 +69,7 @@ struct Serve: ParsableCommand {
   @Option(
     name: .long,
     help:
-      "Cap MLX's reusable buffer cache, in GB. Defaults to a quarter of the GPU wired ceiling; 0 lets it grow unbounded."
+      "Pin MLX's reusable buffer cache, in GB. Default starts at 0.5 and doubles under pressure; 0 leaves it to MLX."
   )
   var cacheLimitGB: Double?
 
@@ -104,14 +106,14 @@ struct Serve: ParsableCommand {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
 
-    let budget = ResidencyManager.budget(
+    let budget = MemoryBudget(
       kvBits: kvConfig.bits,
-      contextTokens: Int(262_144 * max(contextScale, 1)))
-    let resolvedSlots = cacheSlots ?? budget.slots
-    let resolvedCacheLimit = cacheLimitGB.map { Int($0 * 1_073_741_824) } ?? budget.bufferCache
+      maxContextTokens: Int(262_144 * max(contextScale, 1)),
+      weights: MemoryBudget.weightBytes(in: modelURL) ?? MemoryBudget.defaultWeights,
+      slots: cacheSlots,
+      bufferCache: cacheLimitGB.map { Int($0 * 1_073_741_824) })
     let residency = ResidencyManager.Options(
       wiredBytes: Int(wireGB * 1_073_741_824),
-      cacheLimit: resolvedCacheLimit,
       idleSeconds: idleTimeout,
       evictSeconds: evictTimeout)
 
@@ -125,7 +127,7 @@ struct Serve: ParsableCommand {
       politeness: level,
       ropeScaling: contextScale > 1
         ? RopeScaling(method: .yarn, factor: contextScale) : .none,
-      cacheSlots: resolvedSlots,
+      budget: budget,
       preload: hot || !lazyLoad)
 
     var header = [
@@ -133,37 +135,42 @@ struct Serve: ParsableCommand {
       "",
       "  " + Style.field("OpenAI", Style.faint("export OPENAI_BASE_URL=http://127.0.0.1:\(port)/v1")),
       "  " + Style.field("Anthropic", Style.faint("export ANTHROPIC_BASE_URL=http://127.0.0.1:\(port)")),
-      "  " + Style.field("scheduling", Style.faint(Politeness.describe(level))),
-      "  "
-        + Style.field(
-          "budget",
-          Style.faint(
-            "ceiling \(gigabytes(budget.ceiling)), "
-              + "context reserve \(gigabytes(budget.contextBytes)), "
-              + "buffer cache \(gigabytes(resolvedCacheLimit)), "
-              + "\(resolvedSlots) prefix slots")),
     ]
-    if idleTimeout > 0 {
-      header.append(
-        "  "
-          + Style.field(
-            "idle", Style.faint("buffer pool released after \(Int(idleTimeout))s")))
-    }
-    if evictTimeout > 0 {
-      header.append(
-        "  " + Style.field("evict", Style.faint("model unloaded after \(Int(evictTimeout))s")))
-    }
     if !budget.fitsFullContext {
       header.append(
         "  "
           + Style.field(
             "warning",
             Style.warn(
-              "the wired ceiling cannot hold weights plus one full context; "
-                + "long sessions will fall back to re-prefill")))
+              "the ceiling holds about \(MemoryBudget.tokens(budget.maxContextThatFits)) tokens "
+                + "of context, not the full \(MemoryBudget.tokens(budget.maxContextTokens)); "
+                + "longer sessions fall back to re-prefill")))
+    }
+
+    if let notice = SelfUpdate.notice() {
+      header.append("  " + Style.field("update", Style.warn(notice)))
+    }
+
+    var settings = [
+      "  " + Style.field("scheduling", Style.faint(Politeness.describe(level))),
+      "  "
+        + Style.field(
+          "budget",
+          Style.faint(
+            "starts at \(budget.describe()), doubling on demand "
+              + "within a \(gigabytes(budget.ceiling)) ceiling")),
+    ]
+    if idleTimeout > 0 {
+      settings.append(
+        "  "
+          + Style.field("idle", Style.faint("buffer pool released after \(Int(idleTimeout))s")))
+    }
+    if evictTimeout > 0 {
+      settings.append(
+        "  " + Style.field("evict", Style.faint("model unloaded after \(Int(evictTimeout))s")))
     }
     if wireGB > 0 {
-      header.append(
+      settings.append(
         "  " + Style.field("wired", Style.faint("\(wireGB) GB requested while serving")))
     }
 
@@ -172,12 +179,12 @@ struct Serve: ParsableCommand {
         FileHandle.standardError.write(Data("[bonsai] \(message)\n".utf8))
       }
       try server.listen(port: port)
-      for line in header { print(line) }
+      for line in header + settings { print(line) }
       print("  " + Style.field("memory", Style.faint(ResidencyManager.describeMemory())))
       fflush(stdout)
       installFarewell(for: server)
     } else {
-      let dashboard = ServeDashboard(stats: server.stats, header: header)
+      let dashboard = ServeDashboard(server: server, header: header)
       server.log = { [dashboard] message in dashboard.append(log: message) }
       try server.listen(port: port)
       dashboard.start()

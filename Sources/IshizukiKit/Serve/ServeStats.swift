@@ -55,6 +55,7 @@ public final class ServeStats: @unchecked Sendable {
     public var cacheMisses = 0
     public var lastPrefillRate = 0.0
     public var lastDecodeRate = 0.0
+    public var peakContextTokens = 0
 
     public var prefillRate: Double {
       prefillSeconds > 0 ? Double(prefilledTokens) / prefillSeconds : 0
@@ -136,6 +137,9 @@ public final class ServeStats: @unchecked Sendable {
     totals.decodeSeconds += generation.generationSeconds
     totals.lastPrefillRate = generation.promptTokensPerSecond
     totals.lastDecodeRate = generation.generationTokensPerSecond
+    totals.peakContextTokens = max(
+      totals.peakContextTokens,
+      generation.promptTokens + cached + generation.generatedTokens)
     if reused { totals.cacheHits += 1 } else { totals.cacheMisses += 1 }
     if let id { recorded.insert(id) }
   }

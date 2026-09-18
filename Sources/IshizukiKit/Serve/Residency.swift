@@ -8,16 +8,13 @@ import MLX
 public final class ResidencyManager: @unchecked Sendable {
   public struct Options: Sendable {
     public var wiredBytes: Int
-    public var cacheLimit: Int
     public var idleSeconds: Double
     public var evictSeconds: Double
 
     public init(
-      wiredBytes: Int = 0, cacheLimit: Int = 0,
-      idleSeconds: Double = 60, evictSeconds: Double = 0
+      wiredBytes: Int = 0, idleSeconds: Double = 60, evictSeconds: Double = 0
     ) {
       self.wiredBytes = wiredBytes
-      self.cacheLimit = cacheLimit
       self.idleSeconds = idleSeconds
       self.evictSeconds = evictSeconds
     }
@@ -36,9 +33,6 @@ public final class ResidencyManager: @unchecked Sendable {
 
   public init(options: Options) {
     self.options = options
-    if options.cacheLimit > 0 {
-      Memory.cacheLimit = options.cacheLimit
-    }
   }
 
   public func beginRequest() {
@@ -123,39 +117,6 @@ public final class ResidencyManager: @unchecked Sendable {
       return Int(megabytes) * 1_048_576
     }
     return Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.75)
-  }
-
-  public struct Budget: Sendable {
-    public var ceiling: Int
-    public var weights: Int
-    public var contextBytes: Int
-    public var bufferCache: Int
-    public var slots: Int
-    public var fitsFullContext: Bool
-  }
-
-  /// Weights plus one full context of KV come first; the buffer cache only gets what is left.
-  public static func budget(
-    kvBits: Float?, contextTokens: Int, weights: Int = 9_663_676_416
-  ) -> Budget {
-    let gigabyte = 1_073_741_824
-    let ceiling = gpuCeiling
-
-    let bits = Double(kvBits ?? 16)
-    let perToken = Int(Double(32768) * bits / 8) + 2048
-    let contextBytes = perToken * contextTokens
-
-    let afterWeights = max(ceiling - weights, 0)
-    let fits = afterWeights >= contextBytes
-    let afterContext = max(afterWeights - contextBytes, 0)
-
-    let bufferCache = min(max(afterContext / 2, gigabyte), 8 * gigabyte)
-    let spare = max(afterContext - bufferCache, 0)
-    let slots = min(1 + spare / max(contextBytes, 1), 6)
-
-    return Budget(
-      ceiling: ceiling, weights: weights, contextBytes: contextBytes,
-      bufferCache: bufferCache, slots: slots, fitsFullContext: fits)
   }
 
   private static func sysctlValue(_ name: String) -> UInt64? {

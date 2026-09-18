@@ -50,7 +50,7 @@ struct Launch: ParsableCommand {
   @Option(
     name: .long,
     help:
-      "Cap MLX's reusable buffer cache, in GB. Defaults to a quarter of the GPU wired ceiling; 0 lets it grow unbounded."
+      "Pin MLX's reusable buffer cache, in GB. Default starts at 0.5 and doubles under pressure; 0 leaves it to MLX."
   )
   var cacheLimitGB: Double?
   @Option(name: .long, help: "Scheduling: adaptive (default), polite, normal, background.")
@@ -153,11 +153,13 @@ struct Launch: ParsableCommand {
       directory: modelURL,
       modelName: servedName,
       kvConfig: kvConfig,
-      residency: ResidencyManager.Options(
-        cacheLimit: cacheLimitGB.map { Int($0 * 1_073_741_824) }
-          ?? ResidencyManager.budget(kvBits: kvBits, contextTokens: 262_144).bufferCache,
-        idleSeconds: 0, evictSeconds: evictTimeout),
+      residency: ResidencyManager.Options(idleSeconds: 0, evictSeconds: evictTimeout),
       politeness: level,
+      budget: MemoryBudget(
+        kvBits: kvConfig.bits,
+        maxContextTokens: contextWindow,
+        weights: MemoryBudget.weightBytes(in: modelURL) ?? MemoryBudget.defaultWeights,
+        bufferCache: cacheLimitGB.map { Int($0 * 1_073_741_824) }),
       preload: true)
     server.log = { _ in }
     try server.listen(port: port)
