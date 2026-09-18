@@ -7,6 +7,7 @@ public final class SessionCache: @unchecked Sendable {
   public struct Lease {
     public let cache: ModelCache
     public let reused: Int
+    public let recycled: Bool
     fileprivate let slot: Slot
   }
 
@@ -26,13 +27,36 @@ public final class SessionCache: @unchecked Sendable {
   private let lock = NSLock()
   private var slots: [Slot] = []
 
-  public let capacity: Int
+  private var slotCapacity: Int
   public private(set) var lastReusedTokens = 0
   public private(set) var hits = 0
   public private(set) var misses = 0
 
-  public init(capacity: Int = 4) {
-    self.capacity = max(1, capacity)
+  public init(capacity: Int = 1) {
+    self.slotCapacity = max(1, capacity)
+  }
+
+  public var capacity: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return slotCapacity
+  }
+
+  /// Raising it lets the next miss keep its prefix; lowering it drops the coldest idle slots.
+  public func setCapacity(_ value: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    slotCapacity = max(1, value)
+    guard slots.count > slotCapacity else { return }
+    var surplus = slots.count - slotCapacity
+    var dropped: Set<ObjectIdentifier> = []
+    for slot in slots.filter({ !$0.busy }).sorted(by: { $0.lastUsed < $1.lastUsed })
+    where surplus > 0 {
+      slot.cache.reset()
+      dropped.insert(ObjectIdentifier(slot))
+      surplus -= 1
+    }
+    slots.removeAll { dropped.contains(ObjectIdentifier($0)) }
   }
 
   public func prepare(
@@ -59,7 +83,7 @@ public final class SessionCache: @unchecked Sendable {
       best.busy = true
       lastReusedTokens = bestReusable
       hits += 1
-      return Lease(cache: best.cache, reused: bestReusable, slot: best)
+      return Lease(cache: best.cache, reused: bestReusable, recycled: false, slot: best)
     }
 
     lastReusedTokens = 0
@@ -70,13 +94,13 @@ public final class SessionCache: @unchecked Sendable {
       recycled.tokens = promptTokens
       recycled.lastUsed = Date()
       recycled.busy = true
-      return Lease(cache: recycled.cache, reused: 0, slot: recycled)
+      return Lease(cache: recycled.cache, reused: 0, recycled: true, slot: recycled)
     }
 
     let slot = Slot(tokens: promptTokens, cache: model.text.makeCache(kvConfig: kvConfig))
     slot.busy = true
     slots.append(slot)
-    return Lease(cache: slot.cache, reused: 0, slot: slot)
+    return Lease(cache: slot.cache, reused: 0, recycled: false, slot: slot)
   }
 
   public func commit(_ lease: Lease, generated: [Int]) {
@@ -117,6 +141,12 @@ public final class SessionCache: @unchecked Sendable {
     return slots.reduce(0) { $0 + $1.tokens.count }
   }
 
+  public var cachedBytes: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return slots.reduce(0) { $0 + $1.cache.byteCount }
+  }
+
   public var slotCount: Int {
     lock.lock()
     defer { lock.unlock() }
@@ -124,7 +154,7 @@ public final class SessionCache: @unchecked Sendable {
   }
 
   private func evictableSlot(matching kvConfig: KVCacheConfig) -> Slot? {
-    guard slots.count >= capacity else { return nil }
+    guard slots.count >= slotCapacity else { return nil }
     return
       slots
       .filter { !$0.busy && $0.cache.kvConfig == kvConfig }

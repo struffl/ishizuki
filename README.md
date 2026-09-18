@@ -238,12 +238,30 @@ decode.
 
 ## Memory
 
+Nothing is sized from the machine up front. A cold server holds the weights, one prefix
+cache of 8K tokens, and a 0.5 GB buffer pool. Each tier doubles when the work runs into it,
+and stops at what the wired ceiling can still hold:
+
+| Tier | Starts at | Doubles when | Stops at |
+|---|---|---|---|
+| context reserve | 8K tokens | a prompt asks for more | 262K, or what fits |
+| prefix slots | 1 | a warm prefix is evicted for want of a slot | 8, or what fits |
+| buffer pool | 0.5 GB | MLX saturates the pool twice running | 8 GB, or the spare room |
+
+Growth is a high-water mark: a tier holds until the model is unloaded, then returns to the
+floor. Context wins over slots — reserving more per conversation sheds slots rather than
+overcommitting the ceiling. Each step is logged, and the dashboard carries the live tier,
+the peak, and what is actually held.
+
+Pin a tier and it stops moving:
+
 ```bash
 ishizuki serve \
-  --idle-timeout 120 \      # release caches
-  --evict-timeout 900 \     # unload model
+  --cache-slots 4 \         # pin prefix caches
+  --cache-limit-gb 2 \      # pin MLX buffer pool
+  --idle-timeout 120 \      # release the pool when idle
+  --evict-timeout 900 \     # unload the model when idle
   --wire-gb 9 \             # keep resident while busy
-  --cache-limit-gb 2 \      # cap MLX buffer pool
   --lazy-load
 ```
 

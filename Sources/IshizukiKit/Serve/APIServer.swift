@@ -15,6 +15,7 @@ public final class APIServer: @unchecked Sendable {
   public let ropeScaling: RopeScaling
   public let residency: ResidencyManager
   public let sessions: SessionCache
+  public let budget: MemoryBudget
   public let stats = ServeStats()
 
   private var loaded: BonsaiModel?
@@ -29,7 +30,7 @@ public final class APIServer: @unchecked Sendable {
     residency: ResidencyManager.Options = ResidencyManager.Options(),
     politeness: Politeness.Level = .adaptive,
     ropeScaling: RopeScaling = .none,
-    cacheSlots: Int = 4,
+    budget: MemoryBudget? = nil,
     preload: Bool = true
   ) throws {
     self.politeness = politeness
@@ -40,8 +41,16 @@ public final class APIServer: @unchecked Sendable {
     self.defaultThinking = thinking
     self.samplingOptions = samplingOptions
     self.kvConfig = kvConfig
-    self.sessions = SessionCache(capacity: cacheSlots)
+    let budget =
+      budget
+      ?? MemoryBudget(
+        kvBits: kvConfig.bits,
+        maxContextTokens: ropeScaling.effectiveContext,
+        weights: MemoryBudget.weightBytes(in: directory) ?? MemoryBudget.defaultWeights)
+    self.budget = budget
+    self.sessions = SessionCache(capacity: budget.tier.slots)
     self.residency = ResidencyManager(options: residency)
+    budget.apply()
 
     if preload { _ = try model() }
 
@@ -59,9 +68,17 @@ public final class APIServer: @unchecked Sendable {
         self.sessions.evict()
         self.loaded = nil
         Memory.clearCache()
+        self.applyBudget(budget.reset())
         self.log?("idle: unloaded model (\(ResidencyManager.describeMemory()))")
       }
     }
+  }
+
+  private func applyBudget(_ step: MemoryBudget.Step?) {
+    guard let step else { return }
+    budget.apply()
+    sessions.setCapacity(step.tier.slots)
+    log?("budget: \(step.summary)")
   }
 
   @discardableResult
@@ -169,6 +186,8 @@ public final class APIServer: @unchecked Sendable {
     var options = samplingOptions
     if let temperature = request.temperature { options.temperature = temperature }
 
+    applyBudget(budget.observe(contextTokens: promptTokens.count + request.maxTokens))
+
     var cache: ModelCache?
     var reused = 0
     var lease: SessionCache.Lease?
@@ -178,6 +197,9 @@ public final class APIServer: @unchecked Sendable {
       lease = prepared
       cache = prepared.cache
       reused = prepared.reused
+      if prepared.recycled {
+        applyBudget(budget.notePrefixEviction())
+      }
       if reused > 0 {
         log?("cache: reused \(reused) of \(promptTokens.count) prompt tokens")
       }
@@ -232,6 +254,7 @@ public final class APIServer: @unchecked Sendable {
       onText(tail)
     }
     if let lease { sessions.commit(lease, generated: result.tokens) }
+    applyBudget(budget.notePoolPressure(cacheMemory: Memory.cacheMemory))
     if result.cancelled {
       stats.cancel(id)
       log?(
