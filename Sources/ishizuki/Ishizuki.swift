@@ -13,6 +13,7 @@ struct Ishizuki: ParsableCommand {
     subcommands: [
       Demo.self, Generate.self, Serve.self, Launch.self, Pull.self, Update.self, InstallAgent.self,
       BatchCheck.self, KernelCheck.self,
-      ContextBench.self, KVBench.self, SpecBench.self, Verify.self, VerifyLogits.self,
+      ContextBench.self, KVBench.self, PrefillBench.self, SpecBench.self, Verify.self,
+      VerifyLogits.self,
     ])
 }
