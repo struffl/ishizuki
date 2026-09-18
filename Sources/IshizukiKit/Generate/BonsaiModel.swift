@@ -32,7 +32,13 @@ public final class BonsaiModel: @unchecked Sendable {
     let factory = PackedModuleFactory(
       store: store, config: config, tensorPrefix: tensorPrefix)
     var scaling = ropeScaling
-    if scaling.isActive {
+    let rope = config.textConfig.ropeParameters
+    if !scaling.isActive, rope.ropeType == "yarn", let factor = rope.factor, factor > 1 {
+      scaling = RopeScaling(
+        method: .yarn, factor: factor,
+        originalContext: rope.originalMaxPositionEmbeddings
+          ?? config.textConfig.maxPositionEmbeddings)
+    } else if scaling.isActive {
       scaling.originalContext = config.textConfig.maxPositionEmbeddings
     }
     self.text = try TextModel(

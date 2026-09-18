@@ -100,7 +100,7 @@ struct Generate: ParsableCommand {
       Memory.cacheLimit = cacheLimit * 1024 * 1024
     }
 
-    let packURL = URL(filePath: model)
+    let packURL = URL(filePath: resolvedModelPath(model, repo: repo))
     if !offline {
       try ModelDownloader.ensure(directory: packURL, repo: repo)
     }

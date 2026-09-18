@@ -180,6 +180,23 @@ ishizuki serve --kv-bits 3.5
 Drop the MLX pack there, or point `--model` at one anywhere.
 Run `ishizuki <command> --help` for the full option surface.
 
+### Models
+
+The default is the flagship **Bonsai 2 27B** Hadamard pack. The earlier ternary MLX packs
+(plain Qwen3 base, scale-only 2-bit affine weights, no Hadamard rotation) load too. Pass one
+to `--repo` and it downloads into its own directory beside the default, so `--model` follows
+along and later commands find it:
+
+```bash
+ishizuki generate --repo prism-ml/Ternary-Bonsai-8B-mlx-2bit  --prompt "Explain gated delta networks."
+ishizuki serve    --repo prism-ml/Ternary-Bonsai-4B-mlx-2bit
+ishizuki pull     --repo prism-ml/Ternary-Bonsai-1.7B-mlx-2bit
+```
+
+Their trained YaRN context is read straight from the pack, so long prompts work without any flag.
+The 1-bit binary packs are not supported: MLX's affine quantized matmul and the `QMVWide` kernel
+are 2-bit, so a 1-bit pack would need real new kernels rather than a config change.
+
 ## Serve
 
 One port, both API shapes. Streaming (SSE) on both.

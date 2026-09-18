@@ -18,6 +18,7 @@ struct Pull: ParsableCommand {
 
   func run() throws {
     try ModelDownloader.ensure(
-      directory: URL(filePath: model), repo: repo, revision: revision, token: token, verify: verify)
+      directory: URL(filePath: resolvedModelPath(model, repo: repo)), repo: repo,
+      revision: revision, token: token, verify: verify)
   }
 }
