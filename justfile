@@ -24,6 +24,10 @@ release:
 serve *args: release
     {{ bin }} serve {{ args }}
 
+# talk to the model in the terminal, the quick demo. e.g. just demo --fold-thinking
+demo *args: release
+    {{ bin }} demo {{ args }}
+
 # download / repair the model pack from HuggingFace (uses $HF_TOKEN if set)
 pull *args: release
     {{ bin }} pull {{ args }}
