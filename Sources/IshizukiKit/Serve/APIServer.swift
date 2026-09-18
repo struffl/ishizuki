@@ -379,7 +379,7 @@ public final class APIServer: @unchecked Sendable {
       maxTokens: body["max_tokens"] as? Int ?? 1024,
       temperature: (body["temperature"] as? NSNumber)?.floatValue,
       stream: body["stream"] as? Bool ?? false,
-      thinking: body["thinking"] as? Bool ?? defaultThinking,
+      thinking: thinkingPreference(body) ?? defaultThinking,
       images: images)
   }
 
@@ -610,6 +610,21 @@ public final class APIServer: @unchecked Sendable {
     } catch {
       writer.sendError(status: 400, type: "invalid_request_error", message: "\(error)")
     }
+  }
+
+  /// `thinking`, or the `chat_template_kwargs.enable_thinking` form that llama.cpp and oMLX
+  /// clients send, since the top-level OpenAI fields for this are not carried by either.
+  private func thinkingPreference(_ body: [String: Any]) -> Bool? {
+    if let direct = body["thinking"] as? Bool { return direct }
+    if let kwargs = body["chat_template_kwargs"] as? [String: Any],
+      let enabled = kwargs["enable_thinking"] as? Bool
+    {
+      return enabled
+    }
+    if let effort = body["reasoning_effort"] as? String {
+      return effort != "none"
+    }
+    return nil
   }
 
   private func stringContent(_ value: Any?) -> String {
