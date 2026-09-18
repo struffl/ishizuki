@@ -97,7 +97,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
     let promptStart = Date()
     let promptIds = MLXArray(promptTokens.map { Int32($0) })
       .reshaped([1, promptTokens.count])
-    var logits = model.text(promptIds, cache: cache)
+    var logits = model.text.lastLogits(inputs: promptIds, cache: cache)
     eval(logits)
     let promptSeconds = -promptStart.timeIntervalSinceNow
 

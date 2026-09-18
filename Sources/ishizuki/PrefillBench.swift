@@ -206,20 +206,24 @@ struct PrefillBench: ParsableCommand {
 
     rows.append(
       Row(
-        label: "lm_head  \(text.hiddenSize)→\(text.vocabSize)  (all positions)",
+        label: "lm_head  \(text.hiddenSize)→\(text.vocabSize)  (last position)",
         layers: 1,
-        seconds: time { eval(bonsai.text.lmHead(hidden)) }, bucket: .head))
+        seconds: time { eval(bonsai.text.lastLogits(hidden)) }, bucket: .head))
 
     let tokens = MLXArray(Array(repeating: Int32(1), count: chunk)).reshaped([1, chunk])
     let measured = time(2) {
       let cache = bonsai.text.makeCache()
-      eval(bonsai.text(tokens, cache: cache))
+      eval(bonsai.text.hidden(inputs: tokens, cache: cache))
     }
 
-    report(chunk: chunk, rows: rows, measured: measured)
+    let allPositions = time { eval(bonsai.text.lmHead(hidden)) }
+
+    report(chunk: chunk, rows: rows, measured: measured, allPositions: allPositions)
   }
 
-  private func report(chunk: Int, rows: [Row], measured: Double) {
+  private func report(
+    chunk: Int, rows: [Row], measured: Double, allPositions: Double
+  ) {
     let modelled = rows.reduce(0) { $0 + $1.total }
 
     print("")
@@ -265,7 +269,12 @@ struct PrefillBench: ParsableCommand {
     print("")
     print(Style.bad(verdict("delta-rule scan", bucketTotal(.scan))))
     print(Style.good(verdict("offloadable (gate/up + GDN z)", bucketTotal(.offloadable))))
-    print(Style.warn(verdict("lm_head over all positions", bucketTotal(.head))))
+    print(
+      Style.warn(
+        pad("  lm_head over all positions", 34)
+          + String(
+            format: "%8.1f ms   %5.1f%% if it were not sliced", allPositions * 1000,
+            allPositions / (measured + allPositions) * 100)))
     print(
       Style.faint(
         "  " + pad("throughput", 32)
