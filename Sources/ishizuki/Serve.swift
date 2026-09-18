@@ -101,7 +101,7 @@ struct Serve: ParsableCommand {
     let level = Politeness.Level(rawValue: politeness) ?? .adaptive
     Politeness.apply(level)
 
-    let modelURL = URL(filePath: model)
+    let modelURL = URL(filePath: resolvedModelPath(model, repo: repo))
     if !offline {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }

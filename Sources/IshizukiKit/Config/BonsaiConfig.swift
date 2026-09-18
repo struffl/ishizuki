@@ -68,6 +68,8 @@ public struct BonsaiConfig: Codable, Sendable {
     public var partialRotaryFactor: Float?
     public var mropeSection: [Int]?
     public var mropeInterleaved: Bool?
+    public var factor: Float?
+    public var originalMaxPositionEmbeddings: Int?
 
     enum CodingKeys: String, CodingKey {
       case ropeType = "rope_type"
@@ -75,6 +77,8 @@ public struct BonsaiConfig: Codable, Sendable {
       case partialRotaryFactor = "partial_rotary_factor"
       case mropeSection = "mrope_section"
       case mropeInterleaved = "mrope_interleaved"
+      case factor
+      case originalMaxPositionEmbeddings = "original_max_position_embeddings"
     }
   }
 
@@ -179,13 +183,80 @@ public struct BonsaiConfig: Codable, Sendable {
 
   public static func load(directory: URL) throws -> BonsaiConfig {
     let data = try Data(contentsOf: directory.appending(path: "config.json"))
+    if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+      object["schema_version"] == nil
+    {
+      return try standard(object)
+    }
     return try JSONDecoder().decode(BonsaiConfig.self, from: data)
   }
 
-  public func validate() throws {
-    guard modelType == "prism_hadamard_qwen35" else {
+  static func standard(_ o: [String: Any]) throws -> BonsaiConfig {
+    func int(_ key: String) -> Int? { (o[key] as? NSNumber)?.intValue }
+    func double(_ key: String) -> Double? { (o[key] as? NSNumber)?.doubleValue }
+    guard let hidden = int("hidden_size"), let layers = int("num_hidden_layers"),
+      let heads = int("num_attention_heads")
+    else {
       throw BonsaiError.unsupportedModel(
-        "expected model_type 'prism_hadamard_qwen35', found '\(modelType)'")
+        "config.json is missing the core transformer dimensions")
+    }
+    let modelType = o["model_type"] as? String ?? "qwen3"
+
+    var rope: [String: Any] = ["rope_theta": double("rope_theta") ?? 1_000_000]
+    if let scaling = o["rope_scaling"] as? [String: Any] {
+      if let type = scaling["rope_type"] as? String { rope["rope_type"] = type }
+      if let factor = (scaling["factor"] as? NSNumber)?.doubleValue { rope["factor"] = factor }
+      if let original = (scaling["original_max_position_embeddings"] as? NSNumber)?.intValue {
+        rope["original_max_position_embeddings"] = original
+      }
+    }
+
+    var text: [String: Any] = [
+      "model_type": modelType,
+      "hidden_size": hidden,
+      "intermediate_size": int("intermediate_size") ?? hidden * 4,
+      "num_hidden_layers": layers,
+      "num_attention_heads": heads,
+      "num_key_value_heads": int("num_key_value_heads") ?? heads,
+      "head_dim": int("head_dim") ?? hidden / heads,
+      "rms_norm_eps": double("rms_norm_eps") ?? 1e-6,
+      "vocab_size": int("vocab_size") ?? 0,
+      "max_position_embeddings": int("max_position_embeddings") ?? 32768,
+      "tie_word_embeddings": (o["tie_word_embeddings"] as? Bool) ?? false,
+      "layer_types": (o["layer_types"] as? [String])
+        ?? Array(repeating: "full_attention", count: layers),
+      "linear_num_value_heads": 0, "linear_num_key_heads": 0,
+      "linear_value_head_dim": 0, "linear_key_head_dim": 0, "linear_conv_kernel_dim": 0,
+      "rope_parameters": rope,
+    ]
+    if let bos = int("bos_token_id") { text["bos_token_id"] = bos }
+    if let eos = int("eos_token_id") { text["eos_token_id"] = eos }
+
+    let quantization = o["quantization"] as? [String: Any]
+    let pack: [String: Any] = [
+      "schema_version": 0,
+      "model_type": modelType,
+      "text_config": text,
+      "modules": [],
+      "quantization": [
+        "bits": (quantization?["bits"] as? NSNumber)?.intValue ?? 2,
+        "group_size": (quantization?["group_size"] as? NSNumber)?.intValue ?? 128,
+        "mode": "affine",
+      ],
+      "components": ["text": true, "vision": false, "mtp": false],
+    ]
+    return try JSONDecoder().decode(
+      BonsaiConfig.self, from: try JSONSerialization.data(withJSONObject: pack))
+  }
+
+  public static let hadamardModelType = "prism_hadamard_qwen35"
+  public static let legacyModelTypes: Set<String> = ["qwen3"]
+
+  public func validate() throws {
+    guard modelType == Self.hadamardModelType || Self.legacyModelTypes.contains(modelType) else {
+      throw BonsaiError.unsupportedModel(
+        "expected model_type '\(Self.hadamardModelType)' or a legacy type in "
+          + "\(Self.legacyModelTypes.sorted()), found '\(modelType)'")
     }
     guard quantization.bits == 2, quantization.groupSize == 128,
       quantization.mode == "affine"

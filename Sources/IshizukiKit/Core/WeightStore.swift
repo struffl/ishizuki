@@ -52,29 +52,34 @@ public struct PackedModuleFactory {
   }
 
   public func linear(_ path: String) throws -> PackedLinear {
-    guard let record = records[path] else {
+    if let record = records[path] {
+      guard !record.embedding else {
+        throw BonsaiError.shapeMismatch("\(path) is an embedding, not a linear")
+      }
+      return try packedLinear(path, block: record.block)
+    }
+    guard records.isEmpty else {
       throw BonsaiError.missingWeight("no packed-module record for \(path)")
     }
-    guard !record.embedding else {
-      throw BonsaiError.shapeMismatch("\(path) is an embedding, not a linear")
-    }
-    let key = tensorPrefix + path
-    return try PackedLinear(
-      weight: store(key + ".weight"),
-      scales: store(key + ".scales"),
-      biases: store(key + ".biases"),
-      signs: store.optional(key + ".signs"),
-      block: record.block,
-      groupSize: groupSize,
-      bits: bits)
+    return try packedLinear(path, block: 0)
+  }
+
+  public func tiedHead(_ path: String) throws -> PackedLinear {
+    try packedLinear(path, block: records[path]?.block ?? 0)
   }
 
   public func embedding(_ path: String) throws -> PackedEmbedding {
-    guard let record = records[path] else {
-      throw BonsaiError.missingWeight("no packed-module record for \(path)")
-    }
-    guard record.embedding else {
-      throw BonsaiError.shapeMismatch("\(path) is not marked as an embedding")
+    let block: Int
+    if let record = records[path] {
+      guard record.embedding else {
+        throw BonsaiError.shapeMismatch("\(path) is not marked as an embedding")
+      }
+      block = record.block
+    } else {
+      guard records.isEmpty else {
+        throw BonsaiError.missingWeight("no packed-module record for \(path)")
+      }
+      block = 0
     }
     let key = tensorPrefix + path
     return try PackedEmbedding(
@@ -82,7 +87,19 @@ public struct PackedModuleFactory {
       scales: store(key + ".scales"),
       biases: store(key + ".biases"),
       signs: store.optional(key + ".signs"),
-      block: record.block,
+      block: block,
+      groupSize: groupSize,
+      bits: bits)
+  }
+
+  private func packedLinear(_ path: String, block: Int) throws -> PackedLinear {
+    let key = tensorPrefix + path
+    return try PackedLinear(
+      weight: store(key + ".weight"),
+      scales: store(key + ".scales"),
+      biases: store(key + ".biases"),
+      signs: store.optional(key + ".signs"),
+      block: block,
       groupSize: groupSize,
       bits: bits)
   }

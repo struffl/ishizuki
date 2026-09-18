@@ -77,11 +77,16 @@ struct Verify: ParsableCommand {
   }
 }
 
-let defaultModelPath =
-  applicationSupportDirectory
-  .appending(path: "Ishizuki/models/Ternary-Bonsai-2-27B-mlx-2bit").path
+let modelsDirectory = applicationSupportDirectory.appending(path: "Ishizuki/models")
 
 let defaultRepo = "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit"
+
+let defaultModelPath = modelsDirectory.appending(path: "Ternary-Bonsai-2-27B-mlx-2bit").path
+
+func resolvedModelPath(_ model: String, repo: String) -> String {
+  guard model == defaultModelPath, repo != defaultRepo else { return model }
+  return modelsDirectory.appending(path: (repo as NSString).lastPathComponent).path
+}
 
 private let applicationSupportDirectory =
   FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

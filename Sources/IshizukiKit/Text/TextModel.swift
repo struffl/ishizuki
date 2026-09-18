@@ -97,7 +97,11 @@ public final class TextModel: @unchecked Sendable {
     self.layers = built
 
     self.norm = try store(factory.tensorPrefix + "model.norm.weight")
-    self.lmHead = try factory.linear("lm_head")
+    if text.tieWordEmbeddings, !store.has(factory.tensorPrefix + "lm_head.weight") {
+      self.lmHead = try factory.tiedHead("model.embed_tokens")
+    } else {
+      self.lmHead = try factory.linear("lm_head")
+    }
   }
 
   public func hidden(
