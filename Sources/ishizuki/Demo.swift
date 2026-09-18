@@ -7,9 +7,9 @@ import Foundation
 import IshizukiKit
 import MLX
 
-struct Chat: ParsableCommand {
+struct Demo: ParsableCommand {
   static let configuration = CommandConfiguration(
-    commandName: "chat",
+    commandName: "demo",
     abstract: "Talk to 石付き in the terminal.")
 
   @Option(name: .long, help: "Path to the MLX pack directory.")

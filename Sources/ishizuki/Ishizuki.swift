@@ -11,7 +11,7 @@ struct Ishizuki: ParsableCommand {
     abstract: "石付き — Bonsai 2 inference on MLX Swift.",
     version: BuildInfo.version,
     subcommands: [
-      Chat.self, Generate.self, Serve.self, Launch.self, Pull.self, Update.self, InstallAgent.self,
+      Demo.self, Generate.self, Serve.self, Launch.self, Pull.self, Update.self, InstallAgent.self,
       BatchCheck.self, KernelCheck.self,
       ContextBench.self, KVBench.self, SpecBench.self, Verify.self, VerifyLogits.self,
     ])
