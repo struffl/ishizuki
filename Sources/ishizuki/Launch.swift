@@ -155,7 +155,7 @@ struct Launch: ParsableCommand {
       kvConfig: kvConfig,
       residency: ResidencyManager.Options(
         cacheLimit: cacheLimitGB.map { Int($0 * 1_073_741_824) }
-          ?? ResidencyManager.defaultCacheLimit,
+          ?? ResidencyManager.budget(kvBits: kvBits, contextTokens: 262_144).bufferCache,
         idleSeconds: 0, evictSeconds: evictTimeout),
       politeness: level,
       preload: true)

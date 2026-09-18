@@ -48,8 +48,9 @@ public final class APIServer: @unchecked Sendable {
     self.residency.onIdle = { [weak self] in
       guard let self else { return }
       self.generationQueue.async {
-        self.sessions.evict()
-        self.log?("idle: released caches (\(ResidencyManager.describeMemory()))")
+        // Prefix caches survive idle: dropping them costs a full re-prefill on the next
+        // turn. The reclaimable buffer pool has already been freed by the residency timer.
+        self.log?("idle: released buffer pool (\(ResidencyManager.describeMemory()))")
       }
     }
     self.residency.onEvict = { [weak self] in
