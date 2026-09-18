@@ -14,6 +14,7 @@ Requires Apple Silicon and macOS 15+.
 ## Contents
 
 - [Install](#install)
+- [Update](#update)
 - [Agents](#agents) — Hermes, Claude Code, Pi
 - [Run](#run)
 - [Serve](#serve)
@@ -58,6 +59,36 @@ just package         # signed + notarized .pkg (identities from .env — see .en
 just tarball         # signed + notarized loose binary + metallib
 just dist            # both
 ```
+
+## Update
+
+```bash
+ishizuki update
+```
+
+Replaces the executable and the metallib beside it, in place, wherever ishizuki was
+installed from — the `.pkg`, the tarball, or `just install`. Models, configuration files,
+and the launchd agent are left alone, and a server that is already running keeps the code
+it started with until you restart it.
+
+Nothing is written until both checks pass: the download's sha256 matches the digest GitHub
+publishes for that asset, and the new executable carries an intact Developer ID signature
+from the same team as the binary it replaces. If either fails, or a file cannot be moved
+into place, the old files are put back.
+
+```bash
+ishizuki update --check        # report what is available, change nothing
+ishizuki update --tag v0.1.7   # install a specific release
+ishizuki update --force        # reinstall the current version
+ishizuki --version
+```
+
+`serve` and `launch` mention a newer release in their header, from a check refreshed in the
+background once a day. Set `ISHIZUKI_NO_UPDATE_CHECK=1` to turn that off.
+
+Updating writes to the install directory: a `~/.local` install needs no password, a
+system-wide one needs `sudo`. The updater looks for a release asset named
+`ishizuki-<tag>-macos-<arch>.tar.gz`, which is what `just tarball` produces.
 
 ## Agents
 
@@ -292,7 +323,7 @@ set does not dissolve as temperature rises. Pinned in `SamplerTests`.
 
 ```
 Sources/IshizukiKit/
-  Config/      pack config + validation
+  Config/      pack config + validation, model fetch, self-update
   Core/        Hadamard, packed layers, caches, KV quantization, custom kernels
   Text/        attention, gated delta net, MLP, RoPE + scaling
   Vision/      encoder, image processing, multimodal splicing
@@ -300,8 +331,9 @@ Sources/IshizukiKit/
   Generate/    model, sampler, generation loop, prefix cache
   Speculative/ drafters + verified decoding
   Serve/       HTTP, OpenAI + Anthropic APIs, residency, politeness
-Sources/ishizuki/     generate serve install-agent verify verify-logits
-                      kv-bench spec-bench batch-check context-bench kernel-check
+Sources/ishizuki/     generate serve launch pull update install-agent
+                      verify verify-logits kv-bench spec-bench batch-check
+                      context-bench kernel-check
 ```
 
 ## License
