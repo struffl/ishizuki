@@ -78,6 +78,7 @@ public enum Style {
   }
 
   public static func banner(_ subtitle: String) -> String {
-    bright("石付き") + muted("  ishizuki") + "\n" + faint(subtitle)
+    bright("石付き") + muted("  ishizuki") + faint("  " + BuildInfo.version)
+      + "\n" + faint(subtitle)
   }
 }

@@ -15,6 +15,10 @@ ARCH="$(uname -m)"
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 
+echo "==> Stamping version $VERSION"
+trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
+./Scripts/stamp-version.sh "$VERSION"
+
 echo "==> Building release"
 "$SWIFT" build -c release
 
@@ -27,7 +31,7 @@ NAME="ishizuki-$VERSION-macos-$ARCH"
 TAR="$NAME.tar.gz"
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+trap 'rm -rf "$STAGE"; git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
 payload="$STAGE/$NAME"
 mkdir -p "$payload"
 

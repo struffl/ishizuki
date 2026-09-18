@@ -17,6 +17,10 @@ VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0)}
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 
+echo "==> Stamping version $VERSION"
+trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
+./Scripts/stamp-version.sh "$VERSION"
+
 echo "==> Building release"
 "$SWIFT" build -c release
 
@@ -33,7 +37,7 @@ actool "assets/Ishizuki.icon" --compile "$ICON_OUT" --app-icon Ishizuki \
 ICNS="$ICON_OUT/Ishizuki.icns"
 
 STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE" "$ICON_OUT"' EXIT
+trap 'rm -rf "$STAGE" "$ICON_OUT"; git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
 libexec="$STAGE/root/.local/libexec/ishizuki"
 bindir="$STAGE/root/.local/bin"
 mkdir -p "$libexec" "$bindir"

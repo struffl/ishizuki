@@ -61,9 +61,12 @@ icon:
     @echo "wrote assets/ishizuki.icns"
 
 # install to ~/.local, rootless (override with PREFIX=...)
-install: release icon
+install: icon
     #!/usr/bin/env bash
     set -euo pipefail
+    trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
+    ./Scripts/stamp-version.sh "{{ version }}"
+    {{ swift }} build -c release
     prefix="{{ prefix }}"
     install -d "$prefix/libexec/ishizuki" "$prefix/bin"
     install -m 0755 {{ bin }} "$prefix/libexec/ishizuki/ishizuki"
