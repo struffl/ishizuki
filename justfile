@@ -98,6 +98,13 @@ uninstall:
 package: release
     ./Scripts/package.sh {{ version }}
 
+# build a signed, notarized loose tarball (binary + metallib)
+tarball: release
+    ./Scripts/tarball.sh {{ version }}
+
+# both release artifacts
+dist: package tarball
+
 # remove build artifacts
 clean:
     rm -rf .build

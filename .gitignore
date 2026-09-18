@@ -4,4 +4,5 @@
 .DS_Store
 assets/ishizuki.icns
 ishizuki-*.pkg
+ishizuki-*.tar.gz
 .env

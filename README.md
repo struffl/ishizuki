@@ -42,11 +42,21 @@ notarized, and it installs to your home folder (`~/.local`), so there's **no adm
 
 Add `--purge` to also delete downloaded models.
 
+Or take the loose binary, `ishizuki-<version>-macos-arm64.tar.gz` — the executable and the
+metallib it loads, signed and notarized. Put the two anywhere, together:
+
+```bash
+tar -xzf ishizuki-<version>-macos-arm64.tar.gz
+./ishizuki-<version>-macos-arm64/ishizuki serve
+```
+
 From source needs Xcode 16+ and [`just`](https://github.com/casey/just) (`brew install just`):
 
 ```bash
 just install         # rootless build + install to ~/.local
 just package         # signed + notarized .pkg (identities from .env — see .env.example)
+just tarball         # signed + notarized loose binary + metallib
+just dist            # both
 ```
 
 ## Agents
