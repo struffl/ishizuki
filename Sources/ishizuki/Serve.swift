@@ -67,8 +67,10 @@ struct Serve: ParsableCommand {
   @Option(name: .long, help: "Ask the OS to keep this many GB wired while serving. 0 disables.")
   var wireGB: Double = 0
 
-  @Option(name: .long, help: "Cap MLX's reusable buffer cache, in GB. 0 leaves the default.")
-  var cacheLimitGB: Double = 0
+  @Option(
+    name: .long,
+    help: "Cap MLX's reusable buffer cache, in GB. 0 lets it grow unbounded.")
+  var cacheLimitGB: Double = 4
 
   @Option(
     name: .long,
