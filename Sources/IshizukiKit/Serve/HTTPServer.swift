@@ -48,6 +48,9 @@ public final class ResponseWriter: @unchecked Sendable {
 
   public var isCancelled: Bool { cancellation.isCancelled }
 
+  /// True once a status line has gone out, so a later failure cannot send a second one.
+  public var hasBegun: Bool { headersSent }
+
   public func send(status: Int = 200, json: Any) {
     let body =
       (try? JSONSerialization.data(withJSONObject: json, options: [.withoutEscapingSlashes]))
