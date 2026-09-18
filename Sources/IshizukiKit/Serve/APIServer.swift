@@ -94,6 +94,12 @@ public final class APIServer: @unchecked Sendable {
 
   private func route(_ request: HTTPRequest, _ writer: ResponseWriter, _ id: Int?) {
     defer { stats.end(id) }
+    if writer.isCancelled {
+      stats.cancel(id)
+      if let id { log?("#\(id) cancelled while queued") }
+      writer.finish()
+      return
+    }
     let path = request.path.split(separator: "?").first.map(String.init) ?? request.path
 
     switch (request.method, path) {
@@ -133,8 +139,11 @@ public final class APIServer: @unchecked Sendable {
   private func complete(
     _ request: Request,
     id: Int? = nil,
+    isCancelled: (@Sendable () -> Bool)? = nil,
     onText: ((String) -> Void)? = nil
-  ) throws -> (parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int) {
+  ) throws -> (
+    parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool
+  ) {
     residency.beginRequest()
     defer { residency.endRequest() }
 
@@ -197,6 +206,7 @@ public final class APIServer: @unchecked Sendable {
       cache: cache, promptEmbeddings: embeddings, positions: positions,
       cachedPrefixLength: reused,
       constraint: constraint,
+      isCancelled: isCancelled,
       onProgress: { [stats = self.stats] progress in
         switch progress {
         case .prefill(let done, let total):
@@ -216,13 +226,24 @@ public final class APIServer: @unchecked Sendable {
       }
       return true
     }
-    if let onText, let tail = filter.flush(), !tail.isEmpty { onText(tail) }
+    if let onText, !result.cancelled, let tail = filter.flush(), !tail.isEmpty {
+      onText(tail)
+    }
     if let lease { sessions.commit(lease, generated: result.tokens) }
-    stats.enter(id, phase: .finishing)
-    stats.record(id, generation: result.stats, cached: reused, reused: reused > 0)
+    if result.cancelled {
+      stats.cancel(id)
+      log?(
+        "cancelled by client after \(result.stats.promptTokens) prefilled, "
+          + "\(result.tokens.count) generated")
+    } else {
+      stats.enter(id, phase: .finishing)
+      stats.record(id, generation: result.stats, cached: reused, reused: reused > 0)
+    }
 
     let raw = request.thinking ? "<think>" + result.text : result.text
-    return (ToolCallParser.parse(raw), promptTokens.count, result.tokens.count)
+    return (
+      ToolCallParser.parse(raw), promptTokens.count, result.tokens.count, result.cancelled
+    )
   }
 
   private func handleOpenAI(
@@ -255,8 +276,14 @@ public final class APIServer: @unchecked Sendable {
         }
         chunk(["role": "assistant", "content": ""])
 
-        let completion = try complete(parsed, id: id) { text in
+        let completion = try complete(
+          parsed, id: id, isCancelled: { writer.isCancelled }
+        ) { text in
           chunk(["content": text])
+        }
+        if completion.cancelled {
+          writer.finish()
+          return
         }
         if !completion.parsed.toolCalls.isEmpty {
           for (index, call) in completion.parsed.toolCalls.enumerated() {
@@ -278,7 +305,11 @@ public final class APIServer: @unchecked Sendable {
         return
       }
 
-      let completion = try complete(parsed, id: id)
+      let completion = try complete(parsed, id: id, isCancelled: { writer.isCancelled })
+      if completion.cancelled {
+        writer.finish()
+        return
+      }
       var message: [String: Any] = [
         "role": "assistant",
         "content": completion.parsed.content.isEmpty
@@ -441,13 +472,19 @@ public final class APIServer: @unchecked Sendable {
             "content_block": ["type": "text", "text": ""],
           ])
 
-        let completion = try complete(parsed, id: id) { text in
+        let completion = try complete(
+          parsed, id: id, isCancelled: { writer.isCancelled }
+        ) { text in
           writer.sendEvent(
             name: "content_block_delta",
             data: [
               "type": "content_block_delta", "index": 0,
               "delta": ["type": "text_delta", "text": text],
             ])
+        }
+        if completion.cancelled {
+          writer.finish()
+          return
         }
         writer.sendEvent(
           name: "content_block_stop",
@@ -493,7 +530,11 @@ public final class APIServer: @unchecked Sendable {
         return
       }
 
-      let completion = try complete(parsed, id: id)
+      let completion = try complete(parsed, id: id, isCancelled: { writer.isCancelled })
+      if completion.cancelled {
+        writer.finish()
+        return
+      }
       var blocks: [[String: Any]] = []
       if !completion.parsed.content.isEmpty {
         blocks.append(["type": "text", "text": completion.parsed.content])

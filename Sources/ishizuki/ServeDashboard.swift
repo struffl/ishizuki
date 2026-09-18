@@ -200,6 +200,10 @@ final class ServeDashboard: @unchecked Sendable {
             + (totals.failed > 0
               ? Style.bad("\(totals.failed)") + Style.muted(" failed")
               : Style.faint("0 failed"))
+            + (totals.cancelled > 0
+              ? Style.faint(" · ") + Style.warn("\(totals.cancelled)")
+                + Style.muted(" cancelled")
+              : "")
             + Style.faint(" · \(totals.arrived) seen")))
     lines.append(
       "  "

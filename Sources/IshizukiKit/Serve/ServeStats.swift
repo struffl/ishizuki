@@ -44,6 +44,7 @@ public final class ServeStats: @unchecked Sendable {
     public var arrived = 0
     public var completed = 0
     public var failed = 0
+    public var cancelled = 0
     public var promptTokens = 0
     public var prefilledTokens = 0
     public var cachedTokens = 0
@@ -137,6 +138,14 @@ public final class ServeStats: @unchecked Sendable {
     totals.lastDecodeRate = generation.generationTokensPerSecond
     if reused { totals.cacheHits += 1 } else { totals.cacheMisses += 1 }
     if let id { recorded.insert(id) }
+  }
+
+  public func cancel(_ id: Int?) {
+    guard let id else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    totals.cancelled += 1
+    recorded.insert(id)
   }
 
   public func end(_ id: Int?) {
