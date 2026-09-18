@@ -6,3 +6,6 @@ assets/ishizuki.icns
 ishizuki-*.pkg
 ishizuki-*.tar.gz
 .env
+*.swp
+*.swo
+*~
