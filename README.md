@@ -165,6 +165,13 @@ export OPENAI_BASE_URL=http://127.0.0.1:8128/v1     # OpenAI clients
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8128     # Claude Code
 ```
 
+`response_format` with a `json_schema` constrains decoding: the schema is expanded to the set of
+documents it admits, held as a byte trie, and each step samples only from the tokens that stay
+inside it, so the reply is schema-valid by construction rather than by retry. The schema's
+language has to be finite — enums, bounded integer ranges, booleans, `additionalProperties:
+false`. Anything unbounded is refused with a 400, as is GBNF `grammar`, so a client that probes
+for a constraint mechanism falls through to the one that works.
+
 ### launchd
 
 ```bash

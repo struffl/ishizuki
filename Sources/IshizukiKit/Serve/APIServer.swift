@@ -127,6 +127,7 @@ public final class APIServer: @unchecked Sendable {
     var stream: Bool
     var thinking: Bool
     var images: [ProcessedImage]
+    var responseSchema: [String: Any]?
   }
 
   private func complete(
@@ -179,6 +180,13 @@ public final class APIServer: @unchecked Sendable {
       record.maxTokens = request.maxTokens
     }
 
+    var constraint: OutputConstraint?
+    if let schema = request.responseSchema {
+      let documents = try JSONSchema.documents(schema)
+      constraint = OutputConstraint(documents: documents)
+      log?("schema: constrained to \(documents.count) documents")
+    }
+
     let generator = Generator(
       model: model, kvConfig: kvConfig, politeness: politeness)
 
@@ -188,6 +196,7 @@ public final class APIServer: @unchecked Sendable {
       promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
       cache: cache, promptEmbeddings: embeddings, positions: positions,
       cachedPrefixLength: reused,
+      constraint: constraint,
       onProgress: { [stats = self.stats] progress in
         switch progress {
         case .prefill(let done, let total):
@@ -374,13 +383,29 @@ public final class APIServer: @unchecked Sendable {
       return function
     }
 
+    if body["grammar"] != nil {
+      throw BonsaiError.unsupportedModel(
+        "GBNF grammars are not supported; send response_format with a json_schema instead")
+    }
+    let schema = jsonSchema(from: body["response_format"])
+
     return Request(
       messages: messages, tools: tools,
       maxTokens: body["max_tokens"] as? Int ?? 1024,
       temperature: (body["temperature"] as? NSNumber)?.floatValue,
       stream: body["stream"] as? Bool ?? false,
-      thinking: thinkingPreference(body) ?? defaultThinking,
-      images: images)
+      // A constrained document has no room for a reasoning block.
+      thinking: schema != nil ? false : (thinkingPreference(body) ?? defaultThinking),
+      images: images,
+      responseSchema: schema)
+  }
+
+  private func jsonSchema(from value: Any?) -> [String: Any]? {
+    guard let format = value as? [String: Any],
+      format["type"] as? String == "json_schema",
+      let wrapper = format["json_schema"] as? [String: Any]
+    else { return nil }
+    return wrapper["schema"] as? [String: Any]
   }
 
   private func handleAnthropic(
@@ -593,7 +618,8 @@ public final class APIServer: @unchecked Sendable {
       temperature: (body["temperature"] as? NSNumber)?.floatValue,
       stream: body["stream"] as? Bool ?? false,
       thinking: thinking,
-      images: images)
+      images: images,
+      responseSchema: nil)
   }
 
   private func handleCountTokens(_ request: HTTPRequest, _ writer: ResponseWriter) {

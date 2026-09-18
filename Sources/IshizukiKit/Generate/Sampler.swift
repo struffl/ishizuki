@@ -47,6 +47,21 @@ public struct Sampler {
     return MLXRandom.categorical(scores / options.temperature, axis: -1).item(Int.self)
   }
 
+  /// Sample restricted to `allowed`, by gathering just those logits. The allowed set is small,
+  /// so this is cheaper than masking the full vocabulary and keeps the warper chain intact.
+  public func callAsFunction(_ logits: MLXArray, allowed: [Int]) -> Int? {
+    guard !allowed.isEmpty else { return nil }
+    let indices = MLXArray(allowed.map { Int32($0) })
+    let gathered = logits.reshaped([-1])[indices].reshaped([1, allowed.count])
+    let scores = truncatedScores(gathered)
+
+    guard options.temperature > 0 else {
+      return allowed[scores.argMax(axis: -1).item(Int.self)]
+    }
+    let choice = MLXRandom.categorical(scores / options.temperature, axis: -1).item(Int.self)
+    return allowed[choice]
+  }
+
   public func truncatedScores(_ logits: MLXArray, recentTokens: [Int] = []) -> MLXArray {
     var scores = logits.asType(.float32)
 
