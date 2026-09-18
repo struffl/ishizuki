@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Darwin
 import Foundation
 import MLX
 
@@ -115,6 +116,35 @@ public final class ResidencyManager: @unchecked Sendable {
     _ = semaphore.wait(timeout: .now() + 2)
     self.ticket = nil
     isWired = false
+  }
+
+  public static var gpuCeiling: Int {
+    if let megabytes = sysctlValue("iogpu.wired_limit_mb"), megabytes > 0 {
+      return Int(megabytes) * 1_048_576
+    }
+    return Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.75)
+  }
+
+  public static var defaultCacheLimit: Int {
+    let quarter = gpuCeiling / 4
+    return min(max(quarter, 1_073_741_824), 8 * 1_073_741_824)
+  }
+
+  public static var defaultCacheSlots: Int {
+    let perSlot = 12 * 1_073_741_824
+    return min(max(gpuCeiling / perSlot, 1), 6)
+  }
+
+  private static func sysctlValue(_ name: String) -> UInt64? {
+    var size = 0
+    guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0, size <= 8 else { return nil }
+    var raw = [UInt8](repeating: 0, count: size)
+    guard sysctlbyname(name, &raw, &size, nil, 0) == 0 else { return nil }
+    return raw.withUnsafeBytes { buffer in
+      size >= 8
+        ? buffer.loadUnaligned(as: UInt64.self)
+        : UInt64(buffer.loadUnaligned(as: UInt32.self))
+    }
   }
 
   public static func describeMemory() -> String {

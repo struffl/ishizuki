@@ -47,8 +47,12 @@ struct Launch: ParsableCommand {
   var kvBits: Float = 3.5
   @Option(name: .long, help: "Seconds idle before the model is unloaded entirely. 0 disables.")
   var evictTimeout: Double = 0
-  @Option(name: .long, help: "Cap MLX's reusable buffer cache, in GB. 0 lets it grow unbounded.")
-  var cacheLimitGB: Double = 4
+  @Option(
+    name: .long,
+    help:
+      "Cap MLX's reusable buffer cache, in GB. Defaults to a quarter of the GPU wired ceiling; 0 lets it grow unbounded."
+  )
+  var cacheLimitGB: Double?
   @Option(name: .long, help: "Scheduling: adaptive (default), polite, normal, background.")
   var politeness: String = "adaptive"
   @Option(name: .long, help: "Context window advertised to the tool.")
@@ -150,7 +154,8 @@ struct Launch: ParsableCommand {
       modelName: servedName,
       kvConfig: kvConfig,
       residency: ResidencyManager.Options(
-        cacheLimit: Int(cacheLimitGB * 1_073_741_824),
+        cacheLimit: cacheLimitGB.map { Int($0 * 1_073_741_824) }
+          ?? ResidencyManager.defaultCacheLimit,
         idleSeconds: 0, evictSeconds: evictTimeout),
       politeness: level,
       preload: true)
