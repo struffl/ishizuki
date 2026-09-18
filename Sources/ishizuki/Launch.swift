@@ -131,7 +131,9 @@ struct Launch: ParsableCommand {
       new
     }
     try process.run()
+    let terminal = TerminalHandoff(to: process.processIdentifier)
     process.waitUntilExit()
+    terminal.restore()
 
     if let server { Farewell.print(tokens: server.stats.snapshot().totals.totalTokens) }
     server?.stop()
@@ -202,6 +204,36 @@ struct Launch: ParsableCommand {
 
 private final class Reachable: @unchecked Sendable {
   var value = false
+}
+
+/// Lends the controlling terminal to the spawned tool.
+///
+/// Foundation spawns children into a process group of their own, which leaves them in the
+/// background: the first raw-mode or tty read a full-screen tool makes stops it on SIGTTIN or
+/// SIGTTOU before it ever paints. Handing the foreground over for the duration fixes that.
+private final class TerminalHandoff {
+  private let previous: pid_t
+  private let lent: Bool
+
+  init(to child: pid_t) {
+    guard isatty(STDIN_FILENO) == 1 else {
+      previous = -1
+      lent = false
+      return
+    }
+    signal(SIGTTOU, SIG_IGN)
+    signal(SIGTTIN, SIG_IGN)
+    previous = tcgetpgrp(STDIN_FILENO)
+    lent = tcsetpgrp(STDIN_FILENO, child) == 0
+    if lent { kill(-child, SIGCONT) }
+  }
+
+  func restore() {
+    if lent, previous > 0 { tcsetpgrp(STDIN_FILENO, previous) }
+    guard previous != -1 else { return }
+    signal(SIGTTOU, SIG_DFL)
+    signal(SIGTTIN, SIG_DFL)
+  }
 }
 
 struct LaunchPlan {
