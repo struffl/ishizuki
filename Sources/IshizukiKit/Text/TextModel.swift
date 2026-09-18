@@ -136,6 +136,20 @@ public final class TextModel: @unchecked Sendable {
     return lmHead(h)
   }
 
+  public func lastLogits(_ h: MLXArray) -> MLXArray {
+    lmHead(h[0..., -1, 0...]).expandedDimensions(axis: 1)
+  }
+
+  public func lastLogits(
+    inputs: MLXArray?, inputEmbeddings: MLXArray? = nil,
+    cache: ModelCache? = nil, positions: MLXArray? = nil
+  ) -> MLXArray {
+    lastLogits(
+      hidden(
+        inputs: inputs, inputEmbeddings: inputEmbeddings, cache: cache,
+        positions: positions))
+  }
+
   public func makeCache(kvConfig: KVCacheConfig = KVCacheConfig()) -> ModelCache {
     ModelCache(config: config, kvConfig: kvConfig)
   }

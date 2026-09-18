@@ -84,8 +84,9 @@ public final class Generator: @unchecked Sendable {
     if isCancelled?() == true { return abandoned() }
 
     if let promptEmbeddings {
-      logits = model.text(
-        nil, inputEmbeddings: promptEmbeddings, cache: cache, positions: positions)
+      logits = model.text.lastLogits(
+        inputs: nil, inputEmbeddings: promptEmbeddings, cache: cache,
+        positions: positions)
       eval(logits)
       prefilled = prefillTotal
       onProgress?(.prefill(done: prefillTotal, total: prefillTotal))
@@ -101,13 +102,14 @@ public final class Generator: @unchecked Sendable {
         let end = min(index + prefillChunkSize, promptTokens.count)
         let chunk = MLXArray(promptTokens[index..<end].map { Int32($0) })
           .reshaped([1, end - index])
-        last = model.text(chunk, cache: cache)
+        last = model.text.hidden(inputs: chunk, cache: cache)
         eval(last!)
         index = end
         prefilled = index - cachedPrefixLength
         onProgress?(.prefill(done: prefilled, total: prefillTotal))
       }
-      logits = last!
+      logits = model.text.lastLogits(last!)
+      eval(logits)
     }
     let promptSeconds = -promptStart.timeIntervalSinceNow
 
@@ -130,7 +132,9 @@ public final class Generator: @unchecked Sendable {
       let token: Int
       if let constraint {
         // A complete document may stop here; an exhausted one must.
-        guard let picked = sampler(nextLogits, allowed: constraint.allowedTokens(tokenizer: model.tokenizer))
+        guard
+          let picked = sampler(
+            nextLogits, allowed: constraint.allowedTokens(tokenizer: model.tokenizer))
         else {
           stoppedOnEOS = constraint.isComplete
           break
