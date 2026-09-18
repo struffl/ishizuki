@@ -1,0 +1,36 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "StockCake-Majestic_Bonsai_Display-238846-standard.jpg",
+          "name" : "StockCake-Majestic_Bonsai_Display-238846-standard",
+          "position" : {
+            "scale" : 1.5,
+            "translation-in-points" : [
+              143,
+              100
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.6
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

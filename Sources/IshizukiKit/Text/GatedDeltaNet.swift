@@ -1,0 +1,247 @@
+// SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
+// SPDX-License-Identifier: MIT
+
+import Foundation
+import MLX
+import MLXFast
+import MLXNN
+
+public final class GatedDeltaNet: @unchecked Sendable {
+  private let inProjQKV: PackedLinear
+  private let inProjZ: PackedLinear
+  private let inProjA: MLXArray
+  private let inProjB: MLXArray
+  private let conv1dWeight: MLXArray
+  private let aLog: MLXArray
+  private let dtBias: MLXArray
+  private let normWeight: MLXArray
+  private let outProj: PackedLinear
+
+  private let numValueHeads: Int
+  private let numKeyHeads: Int
+  private let keyHeadDim: Int
+  private let valueHeadDim: Int
+  private let keyDim: Int
+  private let valueDim: Int
+  private let convDim: Int
+  private let kernelSize: Int
+  private let normEps: Float
+  private let headRepeat: Int
+
+  private let unitKeyNorm: MLXArray
+
+  public init(
+    config: BonsaiConfig.TextConfig, layer: Int,
+    factory: PackedModuleFactory, store: WeightStore
+  ) throws {
+    let prefix = "model.layers.\(layer).linear_attn"
+    let tensorPrefix = factory.tensorPrefix + prefix
+
+    self.numValueHeads = config.linearNumValueHeads
+    self.numKeyHeads = config.linearNumKeyHeads
+    self.keyHeadDim = config.linearKeyHeadDim
+    self.valueHeadDim = config.linearValueHeadDim
+    self.keyDim = numKeyHeads * keyHeadDim
+    self.valueDim = numValueHeads * valueHeadDim
+    self.convDim = keyDim * 2 + valueDim
+    self.kernelSize = config.linearConvKernelDim
+    self.normEps = config.rmsNormEps
+
+    guard numValueHeads % numKeyHeads == 0 else {
+      throw BonsaiError.unsupportedModel(
+        "linear_num_value_heads (\(numValueHeads)) is not a multiple of "
+          + "linear_num_key_heads (\(numKeyHeads))")
+    }
+    self.headRepeat = numValueHeads / numKeyHeads
+
+    self.inProjQKV = try factory.linear(prefix + ".in_proj_qkv")
+    self.inProjZ = try factory.linear(prefix + ".in_proj_z")
+    self.outProj = try factory.linear(prefix + ".out_proj")
+
+    self.inProjA = try store(tensorPrefix + ".in_proj_a.weight")
+    self.inProjB = try store(tensorPrefix + ".in_proj_b.weight")
+    self.conv1dWeight = try store(tensorPrefix + ".conv1d.weight")
+    self.aLog = try store(tensorPrefix + ".A_log")
+    self.dtBias = try store(tensorPrefix + ".dt_bias")
+    self.normWeight = try store(tensorPrefix + ".norm.weight")
+
+    self.unitKeyNorm = MLXArray.ones([keyHeadDim], dtype: .float32)
+  }
+
+  public func callAsFunction(_ x: MLXArray, cache: GatedDeltaNetCache?) -> MLXArray {
+    let b = x.dim(0)
+    let s = x.dim(1)
+
+    let qkv = inProjQKV(x)
+    let z = inProjZ(x).reshaped([b, s, numValueHeads, valueHeadDim])
+    let aRaw = matmul(x, inProjA.T.asType(x.dtype))
+    let bRaw = matmul(x, inProjB.T.asType(x.dtype))
+
+    let keep = kernelSize - 1
+    let convState =
+      cache?.convState ?? MLXArray.zeros([b, keep, convDim], dtype: qkv.dtype)
+    let convInput = concatenated([convState, qkv], axis: 1)
+    cache?.convState = convInput[0..., (convInput.dim(1) - keep)..., 0...]
+
+    let convOut = silu(conv1d(convInput, conv1dWeight, groups: convDim))
+
+    var q = convOut[0..., 0..., ..<keyDim].reshaped([b, s, numKeyHeads, keyHeadDim])
+    var k = convOut[0..., 0..., keyDim..<(2 * keyDim)]
+      .reshaped([b, s, numKeyHeads, keyHeadDim])
+    let v = convOut[0..., 0..., (2 * keyDim)...]
+      .reshaped([b, s, numValueHeads, valueHeadDim])
+
+    let invScale = Float(keyHeadDim).squareRoot()
+    q =
+      (1.0 / (invScale * invScale))
+      * MLXFast.rmsNorm(q, weight: unitKeyNorm.asType(q.dtype), eps: 1e-6)
+    k =
+      (1.0 / invScale)
+      * MLXFast.rmsNorm(k, weight: unitKeyNorm.asType(k.dtype), eps: 1e-6)
+
+    let beta = sigmoid(bRaw)
+    let g = exp(-exp(aLog.asType(.float32)) * softplus((aRaw + dtBias).asType(.float32)))
+
+    let state =
+      cache?.recurrentState
+      ?? MLXArray.zeros(
+        [b, numValueHeads, valueHeadDim, keyHeadDim], dtype: .float32)
+
+    let (y, newState) = GatedDeltaNet.deltaRule(
+      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat)
+
+    cache?.recurrentState = newState
+    cache?.advance(s)
+
+    let normalized = MLXFast.rmsNorm(y, weight: normWeight.asType(y.dtype), eps: normEps)
+    let gated = (silu(z.asType(.float32)) * normalized.asType(.float32)).asType(x.dtype)
+
+    return outProj(gated.reshaped([b, s, valueDim]))
+  }
+
+  static func deltaRule(
+    q: MLXArray, k: MLXArray, v: MLXArray, g: MLXArray, beta: MLXArray,
+    state: MLXArray, headRepeat: Int
+  ) -> (MLXArray, MLXArray) {
+    #if !targetEnvironment(simulator)
+      if Device.defaultDevice().deviceType == .gpu, let kernel = metalKernel {
+        let outputs = kernel(
+          [q, k, v, g, beta, state, q.dim(1)],
+          template: [
+            ("InT", q.dtype), ("StT", state.dtype),
+            ("Dk", k.dim(3)), ("Dv", v.dim(3)),
+            ("Hk", k.dim(2)), ("Hv", v.dim(2)),
+          ],
+          grid: (32, v.dim(3), q.dim(0) * v.dim(2)),
+          threadGroup: (32, 4, 1),
+          outputShapes: [[q.dim(0), q.dim(1), v.dim(2), v.dim(3)], state.shape],
+          outputDTypes: [q.dtype, state.dtype])
+        return (outputs[0], outputs[1])
+      }
+    #endif
+    return opsDeltaRule(
+      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat)
+  }
+
+  static func opsDeltaRule(
+    q: MLXArray, k: MLXArray, v: MLXArray, g: MLXArray, beta: MLXArray,
+    state initialState: MLXArray, headRepeat: Int
+  ) -> (MLXArray, MLXArray) {
+    let steps = q.dim(1)
+    let qr = headRepeat > 1 ? repeated(q, count: headRepeat, axis: 2) : q
+    let kr = headRepeat > 1 ? repeated(k, count: headRepeat, axis: 2) : k
+
+    var state = initialState
+    var outputs: [MLXArray] = []
+    outputs.reserveCapacity(steps)
+
+    for t in 0..<steps {
+      let qt = qr[0..., t].asType(.float32).expandedDimensions(axis: 2)
+      let kt = kr[0..., t].asType(.float32).expandedDimensions(axis: 2)
+      let vt = v[0..., t].asType(.float32)
+      let gt = g[0..., t].expandedDimensions(axes: [-1, -2])
+      let betaT = beta[0..., t].asType(.float32).expandedDimensions(axis: -1)
+
+      state = state * gt
+      let kvMemory = (state * kt).sum(axis: -1)
+      let delta = (vt - kvMemory) * betaT
+      state = state + kt * delta.expandedDimensions(axis: -1)
+      outputs.append((state * qt).sum(axis: -1).asType(q.dtype))
+    }
+
+    return (stacked(outputs, axis: 1), state)
+  }
+
+  private static let metalKernel: MLXFast.MLXFastKernel? = {
+    #if canImport(Metal)
+      let source = """
+            auto n = thread_position_in_grid.z;
+            auto b_idx = n / Hv;
+            auto hv_idx = n % Hv;
+            auto hk_idx = hv_idx / (Hv / Hk);
+            constexpr int n_per_t = Dk / 32;
+
+            auto q_ = q + b_idx * T * Hk * Dk + hk_idx * Dk;
+            auto k_ = k + b_idx * T * Hk * Dk + hk_idx * Dk;
+
+            auto v_ = v + b_idx * T * Hv * Dv + hv_idx * Dv;
+            y += b_idx * T * Hv * Dv + hv_idx * Dv;
+
+            auto dk_idx = thread_position_in_threadgroup.x;
+            auto dv_idx = thread_position_in_grid.y;
+
+            auto i_state = state_in + (n * Dv + dv_idx) * Dk;
+            auto o_state = state_out + (n * Dv + dv_idx) * Dk;
+
+            float state[n_per_t];
+            for (int i = 0; i < n_per_t; ++i) {
+              auto s_idx = n_per_t * dk_idx + i;
+              state[i] = static_cast<float>(i_state[s_idx]);
+            }
+
+            auto g_ = g + b_idx * T * Hv;
+            auto beta_ = beta + b_idx * T * Hv;
+
+            for (int t = 0; t < T; ++t) {
+              float kv_mem = 0.0f;
+              for (int i = 0; i < n_per_t; ++i) {
+                auto s_idx = n_per_t * dk_idx + i;
+                state[i] = state[i] * g_[hv_idx];
+                kv_mem += state[i] * k_[s_idx];
+              }
+              kv_mem = simd_sum(kv_mem);
+
+              auto delta = (v_[dv_idx] - kv_mem) * beta_[hv_idx];
+
+              float out = 0.0f;
+              for (int i = 0; i < n_per_t; ++i) {
+                auto s_idx = n_per_t * dk_idx + i;
+                state[i] = state[i] + k_[s_idx] * delta;
+                out += state[i] * q_[s_idx];
+              }
+              out = simd_sum(out);
+              if (thread_index_in_simdgroup == 0) {
+                y[dv_idx] = static_cast<InT>(out);
+              }
+              q_ += Hk * Dk;
+              k_ += Hk * Dk;
+              v_ += Hv * Dv;
+              y += Hv * Dv;
+              g_ += Hv;
+              beta_ += Hv;
+            }
+            for (int i = 0; i < n_per_t; ++i) {
+              auto s_idx = n_per_t * dk_idx + i;
+              o_state[s_idx] = static_cast<StT>(state[i]);
+            }
+        """
+      return MLXFast.metalKernel(
+        name: "bonsai_gated_delta_step",
+        inputNames: ["q", "k", "v", "g", "beta", "state_in", "T"],
+        outputNames: ["y", "state_out"],
+        source: source)
+    #else
+      return nil
+    #endif
+  }()
+}
