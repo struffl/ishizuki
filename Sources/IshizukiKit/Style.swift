@@ -60,15 +60,18 @@ public enum Style {
     public static let blossomPlum = Colour(red: 172, green: 136, blue: 206, fallback: 140)
   }
 
-  public static func paint(_ text: String, _ colour: Colour, bold: Bool = false) -> String {
+  public static func paint(
+    _ text: String, _ colour: Colour, bold: Bool = false, italic: Bool = false
+  ) -> String {
+    let face = (bold ? "1;" : "") + (italic ? "3;" : "")
     switch depth {
     case .none:
       return text
     case .ansi256:
-      return "\u{1B}[\(bold ? "1;" : "")38;5;\(colour.fallback)m\(text)\u{1B}[0m"
+      return "\u{1B}[\(face)38;5;\(colour.fallback)m\(text)\u{1B}[0m"
     case .trueColor:
       return
-        "\u{1B}[\(bold ? "1;" : "")38;2;\(colour.red);\(colour.green);\(colour.blue)m\(text)\u{1B}[0m"
+        "\u{1B}[\(face)38;2;\(colour.red);\(colour.green);\(colour.blue)m\(text)\u{1B}[0m"
     }
   }
 

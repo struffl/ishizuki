@@ -86,10 +86,11 @@ struct Demo: ParsableCommand {
     generator.politeness = level
     let sessions = SessionCache(capacity: 1)
 
+    let effort = ReasoningEffort(rawValue: reasoning)
     var session = ChatSession(
       system: system,
-      thinking: !noThinking,
-      effort: ReasoningEffort(rawValue: reasoning))
+      thinking: !noThinking && effort != ReasoningEffort.none,
+      effort: effort == ReasoningEffort.none ? nil : effort)
 
     print(Style.banner("🌸 a conversation with " + Style.bright("石付き")))
     print("")
@@ -132,7 +133,7 @@ struct Demo: ParsableCommand {
         messages: session.transcript,
         addGenerationPrompt: true,
         enableThinking: session.thinking,
-        reasoningEffort: session.effort)
+        reasoningEffort: session.thinking ? session.effort : nil)
       let promptTokens = bonsai.tokenizer.encode(prompt)
 
       let lease = sessions.prepare(for: promptTokens, model: bonsai)
@@ -251,8 +252,8 @@ private struct ChatSession {
           say(Style.warn("effort is one of: none, low, medium, high, xhigh"))
           return .handled
         }
-        thinking = level != .none
-        effort = level
+        thinking = level != ReasoningEffort.none
+        effort = thinking ? level : nil
       }
       say("thinking " + describeThinking)
       return .handled
@@ -327,6 +328,7 @@ private struct ReplyStream {
   private var lastPaint = Date.distantPast
   private var opened = false
   private var box = ThoughtBox()
+  private var markdown = MarkdownStream()
 
   init(thinking: Bool, folded: Bool) {
     self.inThinking = thinking
@@ -378,6 +380,7 @@ private struct ReplyStream {
 
   mutating func finish() {
     clear()
+    write(markdown.finish())
     if inThinking {
       closeBox(
         Style.warn("cut off ")
@@ -415,7 +418,7 @@ private struct ReplyStream {
       opened = true
       write("\n" + Style.bright("石付き") + "\n")
     }
-    write(text)
+    write(markdown.push(text))
   }
 
   private mutating func take(upTo limit: Int) -> String {
