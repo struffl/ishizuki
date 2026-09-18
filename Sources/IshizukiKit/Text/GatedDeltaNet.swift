@@ -119,7 +119,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
     return outProj(gated.reshaped([b, s, valueDim]))
   }
 
-  static func deltaRule(
+  public static func deltaRule(
     q: MLXArray, k: MLXArray, v: MLXArray, g: MLXArray, beta: MLXArray,
     state: MLXArray, headRepeat: Int
   ) -> (MLXArray, MLXArray) {
