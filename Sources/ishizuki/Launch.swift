@@ -118,6 +118,9 @@ struct Launch: ParsableCommand {
             + Style.faint(wrote ? "  provider added" : "  already configured")))
     }
 
+    if let notice = SelfUpdate.notice() {
+      note(Style.field("update", Style.warn(notice)))
+    }
     note(Style.field("launch", Style.accent(integration.executable) + Style.faint("  \(baseURL)")))
     note("")
 
