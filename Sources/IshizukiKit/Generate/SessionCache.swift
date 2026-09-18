@@ -82,9 +82,13 @@ public final class SessionCache: @unchecked Sendable {
   public func commit(_ lease: Lease, generated: [Int]) {
     lock.lock()
     defer { lock.unlock() }
-    lease.slot.tokens.append(contentsOf: generated)
-    lease.slot.lastUsed = Date()
-    lease.slot.busy = false
+    let slot = lease.slot
+    slot.tokens.append(contentsOf: generated)
+    if slot.tokens.count > slot.cache.offset {
+      slot.tokens.removeLast(slot.tokens.count - slot.cache.offset)
+    }
+    slot.lastUsed = Date()
+    slot.busy = false
   }
 
   public func release(_ lease: Lease) {

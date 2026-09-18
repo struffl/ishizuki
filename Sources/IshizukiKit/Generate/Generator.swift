@@ -28,6 +28,7 @@ public struct GenerationResult: Sendable {
   public var text: String
   public var stats: GenerationStats
   public var stoppedOnEOS: Bool
+  public var cancelled: Bool = false
 }
 
 public final class Generator: @unchecked Sendable {
@@ -56,6 +57,7 @@ public final class Generator: @unchecked Sendable {
     positions: MLXArray? = nil,
     cachedPrefixLength: Int = 0,
     constraint: OutputConstraint? = nil,
+    isCancelled: (@Sendable () -> Bool)? = nil,
     onProgress: ((GenerationProgress) -> Void)? = nil,
     onToken: ((String) -> Bool)? = nil
   ) -> GenerationResult {
@@ -65,14 +67,27 @@ public final class Generator: @unchecked Sendable {
 
     let promptStart = Date()
     var logits: MLXArray
+    var prefilled = 0
 
     let prefillTotal = max(0, promptTokens.count - cachedPrefixLength)
     onProgress?(.prefill(done: 0, total: prefillTotal))
+
+    func abandoned() -> GenerationResult {
+      GenerationResult(
+        tokens: [], text: "",
+        stats: GenerationStats(
+          promptTokens: prefilled, generatedTokens: 0,
+          promptSeconds: -promptStart.timeIntervalSinceNow, generationSeconds: 0),
+        stoppedOnEOS: false, cancelled: true)
+    }
+
+    if isCancelled?() == true { return abandoned() }
 
     if let promptEmbeddings {
       logits = model.text(
         nil, inputEmbeddings: promptEmbeddings, cache: cache, positions: positions)
       eval(logits)
+      prefilled = prefillTotal
       onProgress?(.prefill(done: prefillTotal, total: prefillTotal))
     } else {
       precondition(!promptTokens.isEmpty, "generate requires a non-empty prompt")
@@ -82,13 +97,15 @@ public final class Generator: @unchecked Sendable {
       var index = cachedPrefixLength
       var last: MLXArray?
       while index < promptTokens.count {
+        if isCancelled?() == true { return abandoned() }
         let end = min(index + prefillChunkSize, promptTokens.count)
         let chunk = MLXArray(promptTokens[index..<end].map { Int32($0) })
           .reshaped([1, end - index])
         last = model.text(chunk, cache: cache)
         eval(last!)
         index = end
-        onProgress?(.prefill(done: index - cachedPrefixLength, total: prefillTotal))
+        prefilled = index - cachedPrefixLength
+        onProgress?(.prefill(done: prefilled, total: prefillTotal))
       }
       logits = last!
     }
@@ -100,11 +117,16 @@ public final class Generator: @unchecked Sendable {
     var generated: [Int] = []
     var text = ""
     var stoppedOnEOS = false
+    var cancelled = false
 
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
 
     for _ in 0..<maxTokens {
+      if isCancelled?() == true {
+        cancelled = true
+        break
+      }
       let token: Int
       if let constraint {
         // A complete document may stop here; an exhausted one must.
@@ -154,6 +176,7 @@ public final class Generator: @unchecked Sendable {
         generatedTokens: generated.count,
         promptSeconds: promptSeconds,
         generationSeconds: generationSeconds),
-      stoppedOnEOS: stoppedOnEOS)
+      stoppedOnEOS: stoppedOnEOS,
+      cancelled: cancelled)
   }
 }

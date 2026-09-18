@@ -15,14 +15,38 @@ public struct HTTPRequest: Sendable {
   }
 }
 
+public final class RequestCancellation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancelled = false
+
+  public init() {}
+
+  public var isCancelled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelled
+  }
+
+  public func cancel() {
+    lock.lock()
+    cancelled = true
+    lock.unlock()
+  }
+}
+
 public final class ResponseWriter: @unchecked Sendable {
   private let connection: NWConnection
+  private let cancellation: RequestCancellation
   private var headersSent = false
   private var streaming = false
+  private var finished = false
 
-  init(connection: NWConnection) {
+  init(connection: NWConnection, cancellation: RequestCancellation) {
     self.connection = connection
+    self.cancellation = cancellation
   }
+
+  public var isCancelled: Bool { cancellation.isCancelled }
 
   public func send(status: Int = 200, json: Any) {
     let body =
@@ -71,6 +95,8 @@ public final class ResponseWriter: @unchecked Sendable {
   }
 
   public func finish() {
+    guard !finished else { return }
+    finished = true
     if streaming {
       connection.send(
         content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { _ in })
@@ -90,7 +116,11 @@ public final class ResponseWriter: @unchecked Sendable {
   }
 
   private func write(_ data: Data) {
-    connection.send(content: data, completion: .contentProcessed { _ in })
+    connection.send(
+      content: data,
+      completion: .contentProcessed { [cancellation] error in
+        if error != nil { cancellation.cancel() }
+      })
   }
 
   private func writeChunk(_ data: Data) {
@@ -131,8 +161,15 @@ public final class HTTPServer: @unchecked Sendable {
   public func start() {
     listener.newConnectionHandler = { [weak self] connection in
       guard let self else { return }
+      let cancellation = RequestCancellation()
+      connection.stateUpdateHandler = { state in
+        switch state {
+        case .failed, .cancelled: cancellation.cancel()
+        default: break
+        }
+      }
       connection.start(queue: self.queue)
-      self.receive(on: connection, buffer: Data())
+      self.receive(on: connection, buffer: Data(), cancellation: cancellation)
     }
     listener.start(queue: queue)
   }
@@ -141,7 +178,9 @@ public final class HTTPServer: @unchecked Sendable {
     listener.cancel()
   }
 
-  private func receive(on connection: NWConnection, buffer: Data) {
+  private func receive(
+    on connection: NWConnection, buffer: Data, cancellation: RequestCancellation
+  ) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) {
       [weak self] data, _, isComplete, error in
       guard let self else { return }
@@ -149,14 +188,28 @@ public final class HTTPServer: @unchecked Sendable {
       if let data { buffer.append(data) }
 
       if let request = Self.parse(buffer) {
-        self.handler(request, ResponseWriter(connection: connection))
+        self.handler(
+          request, ResponseWriter(connection: connection, cancellation: cancellation))
+        self.watch(connection, cancellation)
         return
       }
       if error != nil || isComplete {
+        cancellation.cancel()
         connection.cancel()
         return
       }
-      self.receive(on: connection, buffer: buffer)
+      self.receive(on: connection, buffer: buffer, cancellation: cancellation)
+    }
+  }
+
+  private func watch(_ connection: NWConnection, _ cancellation: RequestCancellation) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) {
+      [weak self] _, _, isComplete, error in
+      if isComplete || error != nil {
+        cancellation.cancel()
+        return
+      }
+      self?.watch(connection, cancellation)
     }
   }
 
