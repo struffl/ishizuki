@@ -55,6 +55,7 @@ public final class Generator: @unchecked Sendable {
     promptEmbeddings: MLXArray? = nil,
     positions: MLXArray? = nil,
     cachedPrefixLength: Int = 0,
+    constraint: OutputConstraint? = nil,
     onProgress: ((GenerationProgress) -> Void)? = nil,
     onToken: ((String) -> Bool)? = nil
   ) -> GenerationResult {
@@ -104,7 +105,19 @@ public final class Generator: @unchecked Sendable {
     onProgress?(.decode(count: 0))
 
     for _ in 0..<maxTokens {
-      let token = sampler(nextLogits, recentTokens: promptTokens + generated)
+      let token: Int
+      if let constraint {
+        // A complete document may stop here; an exhausted one must.
+        guard let picked = sampler(nextLogits, allowed: constraint.allowedTokens(tokenizer: model.tokenizer))
+        else {
+          stoppedOnEOS = constraint.isComplete
+          break
+        }
+        constraint.accept(model.tokenizer.tokenBytes(picked))
+        token = picked
+      } else {
+        token = sampler(nextLogits, recentTokens: promptTokens + generated)
+      }
 
       if model.tokenizer.eosTokenIds.contains(token) {
         stoppedOnEOS = true

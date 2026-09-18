@@ -244,6 +244,34 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
   public func tokenString(_ id: Int) -> String? { reverseVocabulary[id] }
 
+  /// The raw bytes a token contributes to the output, undoing the byte-level BPE mapping.
+  public func tokenBytes(_ id: Int) -> [UInt8] {
+    guard let token = reverseVocabulary[id] else { return [] }
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(token.count)
+    for character in token {
+      if let byte = unicodeToByte[character] {
+        bytes.append(byte)
+      } else {
+        bytes.append(contentsOf: Array(String(character).utf8))
+      }
+    }
+    return bytes
+  }
+
+  /// Ordinary (non-added) token ids bucketed by their first output byte, so a constrained
+  /// decoder can scan only the buckets its grammar currently permits.
+  public private(set) lazy var tokensByFirstByte: [[Int]] = {
+    var buckets = [[Int]](repeating: [], count: 256)
+    for (id, token) in reverseVocabulary {
+      guard addedTokenIds[token] == nil else { continue }
+      let bytes = tokenBytes(id)
+      guard let first = bytes.first else { continue }
+      buckets[Int(first)].append(id)
+    }
+    return buckets
+  }()
+
   public func isAddedToken(_ id: Int) -> Bool {
     guard let token = reverseVocabulary[id] else { return false }
     return addedTokenIds[token] != nil
