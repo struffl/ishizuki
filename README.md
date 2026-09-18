@@ -23,8 +23,6 @@ Requires Apple Silicon and macOS 15+.
 - [Context](#context)
   - [macOS wired ceiling](#macos-wired-ceiling)
 - [Politeness](#politeness)
-- [Memory](#memory)
-- [Verify](#verify)
 - [Sampling](#sampling)
 - [Dependencies](#dependencies)
 - [Layout](#layout)
@@ -176,26 +174,6 @@ ishizuki generate --image photo.jpg --prompt "What is in this picture?"
 ishizuki serve --kv-bits 3.5
 ```
 
-`--model` defaults to `~/Library/Application Support/Ishizuki/models/Ternary-Bonsai-2-27B-mlx-2bit`.
-Drop the MLX pack there, or point `--model` at one anywhere.
-Run `ishizuki <command> --help` for the full option surface.
-
-### Models
-
-The default is the flagship **Bonsai 2 27B** Hadamard pack. The earlier ternary MLX packs
-(plain Qwen3 base, scale-only 2-bit affine weights, no Hadamard rotation) load too. Pass one
-to `--repo` and it downloads into its own directory beside the default, so `--model` follows
-along and later commands find it:
-
-```bash
-ishizuki generate --repo prism-ml/Ternary-Bonsai-8B-mlx-2bit  --prompt "Explain gated delta networks."
-ishizuki serve    --repo prism-ml/Ternary-Bonsai-4B-mlx-2bit
-ishizuki pull     --repo prism-ml/Ternary-Bonsai-1.7B-mlx-2bit
-```
-
-Their trained YaRN context is read straight from the pack, so long prompts work without any flag.
-The 1-bit binary packs are not supported: MLX's affine quantized matmul and the `QMVWide` kernel
-are 2-bit, so a 1-bit pack would need real new kernels rather than a config change.
 
 ## Serve
 
@@ -212,13 +190,6 @@ GET  /v1/models,  GET /health
 export OPENAI_BASE_URL=http://127.0.0.1:8128/v1     # OpenAI clients
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8128     # Claude Code
 ```
-
-`response_format` with a `json_schema` constrains decoding: the schema is expanded to the set of
-documents it admits, held as a byte trie, and each step samples only from the tokens that stay
-inside it, so the reply is schema-valid by construction rather than by retry. The schema's
-language has to be finite — enums, bounded integer ranges, booleans, `additionalProperties:
-false`. Anything unbounded is refused with a 400, as is GBNF `grammar`, so a client that probes
-for a constraint mechanism falls through to the one that works.
 
 ### launchd
 
@@ -283,48 +254,6 @@ decode.
 | `normal` | 138.9 tok/s | 20.1 tok/s |
 | `adaptive` (default) | 130.3 tok/s | 20.0 tok/s |
 | `background` | — | **>90× slower** |
-
-## Memory
-
-Nothing is sized from the machine up front. A cold server holds the weights, one prefix
-cache of 8K tokens, and a 0.5 GB buffer pool. Each tier doubles when the work runs into it,
-and stops at what the wired ceiling can still hold:
-
-| Tier | Starts at | Doubles when | Stops at |
-|---|---|---|---|
-| context reserve | 8K tokens | a prompt asks for more | 262K, or what fits |
-| prefix slots | 1 | a warm prefix is evicted for want of a slot | 8, or what fits |
-| buffer pool | 0.5 GB | MLX saturates the pool twice running | the KV it recycles, 8 GB at most |
-
-Growth is a high-water mark: a tier holds until the model is unloaded, then returns to the
-floor. Context wins over slots — reserving more per conversation sheds slots rather than
-overcommitting the ceiling. Each step is logged, and the dashboard carries the live tier,
-the peak, and what is actually held.
-
-Pin a tier and it stops moving:
-
-```bash
-ishizuki serve \
-  --cache-slots 4 \         # pin prefix caches
-  --cache-limit-gb 2 \      # pin MLX buffer pool
-  --idle-timeout 120 \      # release the pool when idle
-  --evict-timeout 900 \     # unload the model when idle
-  --wire-gb 9 \             # keep resident while busy
-  --lazy-load
-```
-
-Reload after eviction is ~1 s; the weights are memory-mapped.
-
-## Verify
-
-```bash
-just verify              # Hadamard + 2-bit path, full forward, custom kernels
-just test                # sampler unit tests
-ishizuki kv-bench        # KV quantization cost
-ishizuki spec-bench      # speculative speedup + losslessness
-ishizuki batch-check     # batch correctness + scaling
-ishizuki context-bench   # scaling with context length
-```
 
 ## Sampling
 
