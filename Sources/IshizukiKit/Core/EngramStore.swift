@@ -6,26 +6,51 @@
 import Foundation
 import MLX
 
-/// How an n-gram table is cut into files and what one row of it looks like.
+/// How an n-gram table is cut into files, and how an n-gram becomes a row of it.
 ///
-/// The table is far larger than the model it belongs to and a context touches almost none of
-/// it: one row per token. What matters is not how much fits in memory but how quickly a row
-/// arrives, so the file is a flat array of fixed-width rows and the address is arithmetic.
+/// Each head hashes the same n-gram modulo its own prime, so a collision in one head does not
+/// travel to the others and the heads disagree independently. A head's rows are a contiguous
+/// block of the table, and the blocks sit end to end, so the address is arithmetic and no index
+/// has to be consulted or held.
 public struct EngramLayout: Codable, Sendable, Equatable {
   public var ngramSize: Int
-  public var vocabSize: Int
-  /// The table is split across this many files, striped by row so that a context's rows land
-  /// on every file rather than crowding one.
+  public var heads: Int
+  public var headDim: Int
+  /// One prime per head, and where that head's block starts.
+  public var vocabSizes: [Int]
+  public var offsets: [Int]
   public var parts: Int
-  public var embedDim: Int
+  public var rowsPerPart: Int
   public var dtype: String
 
-  public init(ngramSize: Int, vocabSize: Int, parts: Int, embedDim: Int, dtype: String) {
+  public init(
+    ngramSize: Int, heads: Int, headDim: Int, vocabSizes: [Int], offsets: [Int],
+    parts: Int, rowsPerPart: Int, dtype: String
+  ) {
     self.ngramSize = ngramSize
-    self.vocabSize = vocabSize
+    self.heads = heads
+    self.headDim = headDim
+    self.vocabSizes = vocabSizes
+    self.offsets = offsets
     self.parts = parts
-    self.embedDim = embedDim
+    self.rowsPerPart = rowsPerPart
     self.dtype = dtype
+  }
+
+  /// The heads laid end to end, each starting where the last one ended.
+  public static func blocked(
+    ngramSize: Int, headDim: Int, vocabSizes: [Int], parts: Int, dtype: String
+  ) -> EngramLayout {
+    var offsets: [Int] = []
+    var running = 0
+    for size in vocabSizes {
+      offsets.append(running)
+      running += size
+    }
+    return EngramLayout(
+      ngramSize: ngramSize, heads: vocabSizes.count, headDim: headDim, vocabSizes: vocabSizes,
+      offsets: offsets, parts: parts,
+      rowsPerPart: (running + parts - 1) / parts, dtype: dtype)
   }
 
   public var type: DType {
@@ -37,22 +62,27 @@ public struct EngramLayout: Codable, Sendable, Equatable {
     }
   }
 
+  public var totalRows: Int { (offsets.last ?? 0) + (vocabSizes.last ?? 0) }
+  /// What one token's heads come to once they are laid side by side.
+  public var width: Int { heads * headDim }
   public var rowBytes: Int {
-    get throws { embedDim * (try type.size) }
+    get throws { headDim * (try type.size) }
   }
 
   public static func fileName(part: Int) -> String {
     "engrams/part_\(String(format: "%03d", part)).bin"
   }
 
-  /// Which file a row lives in, and where in it. Striping by remainder keeps a batch of rows
-  /// spread over every file, so the reads go out in parallel instead of queueing on one.
   public func place(row: Int) -> (part: Int, index: Int) {
-    (part: row % parts, index: row / parts)
+    (part: row / rowsPerPart, index: row % rowsPerPart)
   }
 
-  public func rowsIn(part: Int) -> Int {
-    (vocabSize - part + parts - 1) / parts
+  /// Where one head keeps the n-gram that hashed to `hash`.
+  public func address(head: Int, hash: Int) -> Int {
+    let size = vocabSizes[head]
+    var folded = hash % size
+    if folded < 0 { folded += size }
+    return offsets[head] + folded
   }
 }
 
@@ -65,22 +95,22 @@ public struct EngramLayout: Codable, Sendable, Equatable {
 /// asked for; this is not a cache at all.
 public final class EngramStore: @unchecked Sendable {
   public let layout: EngramLayout
+  public let capacity: Int
 
   private let descriptors: [Int32]
   /// Two buffers, so a prefetch can land while the rows already fetched are still being read.
   /// A single buffer is what forces a streamed expert to evaluate before it reads again.
   private var buffers: [ResidentBuffer]
   private var front = 0
-  private var capacity: Int
 
   private let queue = DispatchQueue(
     label: "studio.ishizuki.engrams", qos: .userInitiated, attributes: .concurrent)
   private let lock = NSLock()
-  private var pending: (group: DispatchGroup, count: Int, error: Error?)?
+  private var pending: (group: DispatchGroup, rows: Int, tokens: Int?, error: Error?)?
 
   public private(set) var rowsRead = 0
 
-  public init(directory: URL, layout: EngramLayout, capacity: Int = 512) throws {
+  public init(directory: URL, layout: EngramLayout, capacity: Int = 8192) throws {
     self.layout = layout
     self.capacity = capacity
 
@@ -104,7 +134,9 @@ public final class EngramStore: @unchecked Sendable {
 
   /// Starts fetching `rows` into the buffer that is not in use. Returns at once; the rows are
   /// there once `take()` returns.
-  public func prefetch(_ rows: [Int]) throws {
+  public func prefetch(_ rows: [Int], tokens: Int? = nil) throws {
+    let width = try layout.rowBytes
+
     lock.lock()
     guard pending == nil else {
       lock.unlock()
@@ -115,21 +147,21 @@ public final class EngramStore: @unchecked Sendable {
       throw BonsaiError.shapeMismatch(
         "\(rows.count) rows asked for, but this store holds \(capacity)")
     }
-    for row in rows where row < 0 || row >= layout.vocabSize {
+    for row in rows where row < 0 || row >= layout.totalRows {
       lock.unlock()
-      throw BonsaiError.shapeMismatch("n-gram row \(row) is not in a \(layout.vocabSize) table")
+      throw BonsaiError.shapeMismatch(
+        "n-gram row \(row) is not in a \(layout.totalRows) table")
     }
     let target = 1 - front
     let group = DispatchGroup()
-    pending = (group: group, count: rows.count, error: nil)
+    pending = (group: group, rows: rows.count, tokens: tokens, error: nil)
     lock.unlock()
 
-    let width = try layout.rowBytes
     let buffer = buffers[target]
 
     // Each row is its own read at its own offset into a disjoint slice of the buffer, so they
-    // can all be in flight together. A context's rows are scattered over the table, and a disk
-    // answers scattered reads far better in parallel than one after another.
+    // can all be in flight together. A token's heads are scattered the length of the table by
+    // design, and a disk answers scattered reads far better in parallel than one at a time.
     for (slot, row) in rows.enumerated() {
       queue.async(group: group) { [self] in
         let placed = layout.place(row: row)
@@ -146,7 +178,8 @@ public final class EngramStore: @unchecked Sendable {
     }
   }
 
-  /// Waits for the prefetch to land, makes it current, and hands back its rows.
+  /// Waits for the prefetch to land, makes it current, and hands back its rows. Rows fetched
+  /// for whole tokens come back as one row per token, every head laid side by side.
   public func take() throws -> MLXArray {
     lock.lock()
     guard let inFlight = pending else {
@@ -161,17 +194,41 @@ public final class EngramStore: @unchecked Sendable {
     let failure = pending?.error
     pending = nil
     front = 1 - front
-    rowsRead += inFlight.count
+    rowsRead += inFlight.rows
     lock.unlock()
 
     if let failure { throw failure }
-    return buffers[front].array(
-      shape: [inFlight.count, layout.embedDim], dtype: try layout.type)
+    let shape =
+      inFlight.tokens.map { [$0, layout.width] } ?? [inFlight.rows, layout.headDim]
+    return buffers[front].array(shape: shape, dtype: try layout.type)
   }
 
   /// Fetches and waits, for the caller that has nothing to overlap with.
   public func rows(_ rows: [Int]) throws -> MLXArray {
     try prefetch(rows)
+    return try take()
+  }
+
+  /// The addresses one context's n-grams resolve to, every head of a token in a run so the
+  /// fetched rows come back already laid out as `[token, heads * headDim]`.
+  public func addresses(hashes: [[Int]]) throws -> [Int] {
+    var rows: [Int] = []
+    rows.reserveCapacity(hashes.count * layout.heads)
+    for token in hashes {
+      guard token.count == layout.heads else {
+        throw BonsaiError.shapeMismatch(
+          "a token hashed to \(token.count) heads, but the table has \(layout.heads)")
+      }
+      for (head, hash) in token.enumerated() {
+        rows.append(layout.address(head: head, hash: hash))
+      }
+    }
+    return rows
+  }
+
+  /// One embedding per token, fetched and assembled.
+  public func embeddings(hashes: [[Int]]) throws -> MLXArray {
+    try prefetch(try addresses(hashes: hashes), tokens: hashes.count)
     return try take()
   }
 }
