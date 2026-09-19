@@ -31,6 +31,8 @@ struct Serve: ParsableCommand {
   @Option(name: .long, help: "Name reported to clients.")
   var servedName: String = "ternary-bonsai-2-27b"
 
+  @OptionGroup var neural: ANEOption
+
   @Option(name: .long) var temperature: Float = 0.7
   @Option(name: .long) var topP: Float = 1.0
   @Option(name: .long) var topK: Int = 0
@@ -94,6 +96,7 @@ struct Serve: ParsableCommand {
   var disableDashboard = false
 
   func run() throws {
+    try neural.apply()
     let kvConfig = KVCacheConfig(bits: kvBits, residualWindow: kvWindow)
     try kvConfig.validate()
 
@@ -133,8 +136,11 @@ struct Serve: ParsableCommand {
     var header = [
       Style.banner("serving \(servedName) on http://127.0.0.1:\(port)"),
       "",
-      "  " + Style.field("OpenAI", Style.faint("export OPENAI_BASE_URL=http://127.0.0.1:\(port)/v1")),
-      "  " + Style.field("Anthropic", Style.faint("export ANTHROPIC_BASE_URL=http://127.0.0.1:\(port)")),
+      "  "
+        + Style.field("OpenAI", Style.faint("export OPENAI_BASE_URL=http://127.0.0.1:\(port)/v1")),
+      "  "
+        + Style.field(
+          "Anthropic", Style.faint("export ANTHROPIC_BASE_URL=http://127.0.0.1:\(port)")),
     ]
     if !budget.fitsFullContext {
       header.append(
