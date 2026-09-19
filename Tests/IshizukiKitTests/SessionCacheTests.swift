@@ -106,6 +106,46 @@ struct SessionCacheTests {
     #expect(early.reused == 0)
   }
 
+  @Test("a byte ceiling sheds rewind points before it sheds a prefix")
+  func shedsCheckpointsFirst() {
+    let pool = pool(capacity: 4)
+    turn(pool, prompt: [1, 2, 3, 4], reply: [5, 6])
+    let held = pool.cachedBytes
+    let checkpoints = pool.checkpointBytes
+    #expect(checkpoints > 0)
+
+    // A ceiling just under what is held: enough to force shedding, not enough to need the slot.
+    pool.setByteLimit(held - checkpoints)
+    #expect(pool.checkpointBytes == 0)
+    #expect(pool.slotCount == 1)
+    #expect(pool.evictions == 0)
+  }
+
+  @Test("a ceiling the prefixes alone overrun evicts the coldest of them")
+  func evictsColdest() {
+    let pool = pool(capacity: 4)
+    turn(pool, prompt: [1, 2, 3, 4], reply: [5, 6])
+    turn(pool, prompt: [50, 51, 52, 53], reply: [54, 55])
+    #expect(pool.slotCount == 2)
+
+    pool.setByteLimit(1)
+    #expect(pool.slotCount == 0)
+    #expect(pool.evictions == 2)
+    #expect(pool.cachedBytes == 0)
+  }
+
+  @Test("a busy slot is never evicted out from under its request")
+  func busyIsSafe() {
+    let pool = pool(capacity: 4)
+    turn(pool, prompt: [1, 2, 3, 4], reply: [5, 6])
+    let inFlight = lease(pool, [90, 91, 92])
+    run(inFlight, to: 3)
+
+    pool.setByteLimit(1)
+    #expect(pool.slotCount == 1)
+    #expect(inFlight.cache.offset == 3)
+  }
+
   @Test("checkpoints are counted against the cache's own memory")
   func checkpointsCost() {
     let pool = pool()

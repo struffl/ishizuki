@@ -15,6 +15,9 @@ public final class MemoryBudget: @unchecked Sendable {
   public struct Tier: Sendable, Equatable {
     public var contextTokens: Int
     public var slots: Int
+
+    /// What this tier has committed to the KV cache: the ceiling the prefix pool holds to.
+    public func kvBytes(bytesPerToken: Int) -> Int { slots * contextTokens * bytesPerToken }
     public var bufferCache: Int
   }
 
