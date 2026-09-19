@@ -32,7 +32,7 @@ struct KVBench: ParsableCommand {
     let promptTokens = bonsai.tokenizer.encode(rendered)
     print("context: \(promptTokens.count) tokens\n")
 
-    let reference = try run(bonsai, promptTokens, config: KVCacheConfig())
+    let reference = try run(bonsai, promptTokens, config: .full)
     let perToken = Double(reference.bytes) / Double(promptTokens.count)
     print(
       String(

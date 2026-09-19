@@ -24,12 +24,22 @@ public struct KVCacheConfig: Sendable, Equatable {
   public var groupSize: Int
   public var residualWindow: Int
 
-  public init(bits: Float? = nil, groupSize: Int = 64, residualWindow: Int = 128) {
+  /// 3.5 bits is the house default: keys at 3 and values at 4, behind a dense window wide
+  /// enough that recent tokens are never read back through a quantizer. It costs a fifth of the
+  /// memory a 16-bit cache does, which is most of what a long context costs on this hardware.
+  public static let defaultBits: Float = 3.5
+
+  public init(
+    bits: Float? = defaultBits, groupSize: Int = 64, residualWindow: Int = 128
+  ) {
     self.bits = bits
     self.groupSize = groupSize
     self.residualWindow = residualWindow
     (self.keyBits, self.valueBits) = Self.resolve(bits)
   }
+
+  /// An unquantized cache, for measuring against.
+  public static let full = KVCacheConfig(bits: nil)
 
   public static func resolve(_ bits: Float?) -> (key: Int, value: Int) {
     guard let bits else { return (16, 16) }
