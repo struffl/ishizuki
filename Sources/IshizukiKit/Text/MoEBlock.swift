@@ -106,13 +106,18 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
       scores = scores / scores.sum(axis: -1, keepDims: true)
     }
 
+    // Sixteen experts are summed per token, so the weighting and the sum stay in float32 and
+    // narrow once at the end. Folding the weights into the experts' own dtype first loses more
+    // than it saves.
     let routed = expert(x, chosen)
-    var y = (routed * scores.expandedDimensions(axis: -1).asType(routed.dtype)).sum(axis: -2)
+    var y =
+      (routed.asType(.float32) * scores.expandedDimensions(axis: -1))
+      .sum(axis: -2)
 
     if let shared, let sharedGate {
-      y = y + sigmoid(sharedGate(x)) * shared(x)
+      y = y + (sigmoid(sharedGate(x)) * shared(x)).asType(.float32)
     }
-    return y
+    return y.asType(x.dtype)
   }
 
   /// One SwiGLU per selected expert. The two extra axes are what `gatherQuantizedMM` reads the
