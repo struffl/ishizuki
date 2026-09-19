@@ -72,6 +72,10 @@ public final class Attention: @unchecked Sendable {
       .transposed(0, 2, 1, 3)
     values = values.transposed(0, 2, 1, 3)
 
+    // The residual stream is wider than the modules, so the mask arrives in whichever dtype the
+    // trunk built it with.
+    let mask = mask.map { $0.dtype == .bool ? $0 : $0.asType(queries.dtype) }
+
     let offset = cache?.offset ?? 0
     if let positions {
       queries = rope(queries, positions: positions)
