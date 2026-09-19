@@ -78,6 +78,7 @@ public final class APIServer: @unchecked Sendable {
     guard let step else { return }
     budget.apply()
     sessions.setCapacity(step.tier.slots)
+    sessions.setByteLimit(step.tier.kvBytes(bytesPerToken: budget.bytesPerToken))
     log?("budget: \(step.summary)")
   }
 

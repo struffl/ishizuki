@@ -50,6 +50,8 @@ public final class SessionCache: @unchecked Sendable {
   public private(set) var hits = 0
   public private(set) var misses = 0
   public private(set) var branches = 0
+  public private(set) var evictions = 0
+  private var byteLimit = 0
 
   /// `checkpoints` is how many rewind points each slot keeps. On a hybrid model each one holds
   /// every recurrent layer's state, so the default is deliberately small: enough to rewind the
@@ -63,6 +65,47 @@ public final class SessionCache: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return slotCapacity
+  }
+
+  /// The ceiling the pool holds itself to, in bytes; 0 leaves it bounded only by slot count.
+  /// A slot count is a poor proxy on its own — one 128k prefix outweighs twenty short ones —
+  /// so this is what actually keeps the cache inside the budget it was given.
+  public func setByteLimit(_ bytes: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    byteLimit = max(0, bytes)
+    enforceByteLimit()
+  }
+
+  public var byteLimitBytes: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return byteLimit
+  }
+
+  /// Sheds the cheapest thing first: rewind points are an optimization on top of a held prefix,
+  /// so they go before any prefix does. Called with the lock held.
+  private func enforceByteLimit() {
+    guard byteLimit > 0 else { return }
+    func total() -> Int { slots.reduce(0) { $0 + $1.cache.byteCount + $1.checkpointBytes } }
+    guard total() > byteLimit else { return }
+
+    let coldestFirst = slots.filter { !$0.busy }.sorted { $0.lastUsed < $1.lastUsed }
+
+    for slot in coldestFirst where !slot.checkpoints.isEmpty {
+      guard total() > byteLimit else { return }
+      slot.clearCheckpoints()
+    }
+
+    var dropped: Set<ObjectIdentifier> = []
+    for slot in coldestFirst {
+      guard total() > byteLimit else { break }
+      slot.cache.reset()
+      slot.clearCheckpoints()
+      dropped.insert(ObjectIdentifier(slot))
+      evictions += 1
+    }
+    slots.removeAll { dropped.contains(ObjectIdentifier($0)) }
   }
 
   /// Raising it lets the next miss keep its prefix; lowering it drops the coldest idle slots.
@@ -164,6 +207,7 @@ public final class SessionCache: @unchecked Sendable {
     checkpoint(slot)
     slot.lastUsed = Date()
     slot.busy = false
+    enforceByteLimit()
   }
 
   /// A turn boundary is where conversations branch — a retried, edited or forked last message
