@@ -23,6 +23,8 @@ public final class APIServer: @unchecked Sendable {
   public let stats = ServeStats()
 
   private var loaded: BonsaiModel?
+  /// Whether a pack arrives with its vision tower already read, rather than on the first image.
+  private let hot: Bool
   private let generationQueue = DispatchQueue(label: "bonsai.generate")
   private var server: HTTPServer?
   public var log: (@Sendable (String) -> Void)?
@@ -37,8 +39,10 @@ public final class APIServer: @unchecked Sendable {
     budget: MemoryBudget? = nil,
     prefixStore: PrefixStore? = nil,
     catalog: ModelCatalog = ModelCatalog(entries: []),
-    preload: Bool = true
+    preload: Bool = true,
+    hot: Bool = false
   ) throws {
+    self.hot = hot
     self.politeness = politeness
     self.ropeScaling = ropeScaling
     self.catalog = catalog
@@ -149,7 +153,7 @@ public final class APIServer: @unchecked Sendable {
   public func model() throws -> BonsaiModel {
     if let loaded { return loaded }
     let start = Date()
-    let model = try BonsaiModel(directory: directory, ropeScaling: ropeScaling)
+    let model = try BonsaiModel(directory: directory, ropeScaling: ropeScaling, hot: hot)
     loaded = model
     log?(String(format: "loaded model in %.1fs", -start.timeIntervalSinceNow))
     return model
@@ -259,6 +263,11 @@ public final class APIServer: @unchecked Sendable {
     var embeddings: MLXArray?
     var positions: MLXArray?
     if !request.images.isEmpty {
+      if !model.isVisionLoaded {
+        let start = Date()
+        try model.vision()
+        log?(String(format: "loaded vision tower in %.1fs", -start.timeIntervalSinceNow))
+      }
       let multimodal = try model.prepareMultimodal(
         tokens: promptTokens, images: request.images)
       promptTokens = multimodal.tokens

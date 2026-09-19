@@ -8,15 +8,20 @@ public final class BonsaiModel: @unchecked Sendable {
   public let config: BonsaiConfig
   public let store: WeightStore
   public let text: TextModel
-  public let vision: VisionTower?
   public let mtp: MTPHead?
   public let tokenizer: BonsaiTokenizer
   public let directory: URL
 
   public let tensorPrefix: String
 
+  private static let visionPrefix = "vision_tower."
+  private static let visionProbe = visionPrefix + "patch_embed.proj.weight"
+
+  private let visionLock = NSLock()
+  private var tower: VisionTower?
+
   public init(
-    directory: URL, loadVision: Bool = true, ropeScaling: RopeScaling = .none
+    directory: URL, ropeScaling: RopeScaling = .none, hot: Bool = false
   ) throws {
     self.directory = directory
 
@@ -54,18 +59,39 @@ public final class BonsaiModel: @unchecked Sendable {
       self.mtp = nil
     }
 
-    if loadVision, let visionConfig = config.visionConfig,
-      store.has("vision_tower.patch_embed.proj.weight")
-    {
-      self.vision = try VisionTower(config: visionConfig, store: store)
-    } else {
-      self.vision = nil
-    }
-
     self.tokenizer = try BonsaiTokenizer(directory: directory, config: config)
+
+    if hot { try vision() }
   }
 
-  public var hasVision: Bool { vision != nil }
+  /// A pack has a tower when its config declares one and the shards actually carry it. Asking
+  /// reads no tensors, so the question stands on its own before anything has been built.
+  public var hasVision: Bool {
+    config.visionConfig != nil && store.has(Self.visionProbe)
+  }
+
+  public var isVisionLoaded: Bool {
+    visionLock.lock()
+    defer { visionLock.unlock() }
+    return tower != nil
+  }
+
+  /// The tower, built and read off disk the first time an image needs it and held afterwards.
+  /// A text-only session never pays for the couple of gigabytes it weighs; `--hot` is how a
+  /// server asks for that cost at startup instead of on the first picture.
+  @discardableResult
+  public func vision() throws -> VisionTower? {
+    visionLock.lock()
+    defer { visionLock.unlock() }
+    if let tower { return tower }
+    guard let visionConfig = config.visionConfig, store.has(Self.visionProbe) else {
+      return nil
+    }
+    let built = try VisionTower(config: visionConfig, store: store)
+    store.warm(prefix: Self.visionPrefix)
+    tower = built
+    return built
+  }
 
   public var hasMTP: Bool { mtp != nil }
 }

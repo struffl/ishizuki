@@ -14,7 +14,7 @@ extension BonsaiModel {
   public func prepareMultimodal(tokens: [Int], images: [ProcessedImage]) throws
     -> MultimodalPrompt
   {
-    guard let vision else {
+    guard let tower = try vision() else {
       throw BonsaiError.missingComponent("this pack has no vision tower")
     }
     guard let imageToken = tokenizer.imageTokenId else {
@@ -49,7 +49,7 @@ extension BonsaiModel {
       guard
         let start = expanded[cursor...].firstIndex(where: { $0 == imageToken })
       else { break }
-      let features = vision(patches: image.patches, grid: image.grid)
+      let features = tower(patches: image.patches, grid: image.grid)
         .asType(embeddings.dtype)
       embeddings[0..., start..<(start + image.tokenCount), 0...] =
         features.expandedDimensions(axis: 0)

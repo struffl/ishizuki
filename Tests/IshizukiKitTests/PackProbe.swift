@@ -13,7 +13,7 @@ struct PackProbe {
   @Test("probe")
   func probe() throws {
     let path = ProcessInfo.processInfo.environment["ISHIZUKI_PACK"]!
-    let model = try BonsaiModel(directory: URL(filePath: path), loadVision: false)
+    let model = try BonsaiModel(directory: URL(filePath: path))
     let prompt = model.tokenizer.encode("The capital of France is")
     print("prompt tokens: \(prompt)")
 
