@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import ArgumentParser
+import Foundation
 import IshizukiKit
 
 struct ANEOption: ParsableArguments {
@@ -56,14 +57,23 @@ struct ANEOption: ParsableArguments {
     }
   }
 
-  // The offload itself still needs the INT8 slices in the pack and the merge on the Metal side;
-  // until those land, say so rather than accepting the flag and ignoring it.
-  func apply() throws {
+  // The channel split is settled when the slices are cut, so the pack decides it and the flag
+  // only says whether to use them — and refuses a fraction the pack was not cut at.
+  func apply(pack: URL) throws {
     BonsaiRuntime.aneOffload = setting
-    guard setting == nil else {
+    guard let setting else { return }
+
+    guard let bank = ANEBank(pack: pack) else {
       throw ValidationError(
-        "--ane is not wired up yet: this pack carries no INT8 Neural Engine slices. "
-          + "Measure a split with `ishizuki ane-check` in the meantime.")
+        "this pack carries no Neural Engine slices. Cut them with "
+          + "`uv run --with coremltools --with numpy Scripts/ane-export.py`.")
     }
+    if case .fraction(let wanted) = setting, let cut = bank.fraction, abs(cut - wanted) > 0.02 {
+      throw ValidationError(
+        String(
+          format: "this pack's slices are cut at %.2f, not %.2f — re-export to change the split",
+          cut, wanted))
+    }
+    BonsaiRuntime.aneBank = bank
   }
 }

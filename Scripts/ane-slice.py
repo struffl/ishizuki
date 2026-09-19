@@ -101,6 +101,30 @@ def strip_io_casts(model):
     return ct.models.MLModel(spec, weights_dir=model.weights_dir)
 
 
+def build_slice(w, rows, fraction):
+    dout, k = w.shape
+    channels = max(64, int(round(dout * fraction)) // 64 * 64)
+    sliced = w[:channels].astype(np.float16)
+    bias = np.zeros((channels,), dtype=np.float16)
+
+    @mb.program(input_specs=[mb.TensorSpec(shape=(rows, k), dtype=mt.fp16)])
+    def prog(x):
+        return mb.linear(x=x, weight=sliced, bias=bias, name="out")
+
+    model = ct.convert(
+        prog,
+        minimum_deployment_target=ct.target.macOS15,
+        compute_units=ct.ComputeUnit.CPU_AND_NE,
+        compute_precision=ct.precision.FLOAT16,
+    )
+    config = ct.optimize.coreml.OptimizationConfig(
+        global_config=ct.optimize.coreml.OpLinearQuantizerConfig(
+            mode="linear_symmetric", dtype="int8", granularity="per_channel"
+        )
+    )
+    return strip_io_casts(ct.optimize.coreml.linear_quantize_weights(model, config=config)), channels
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pack", default=DEFAULT_PACK)
@@ -115,27 +139,9 @@ def main():
     w = dequantize(t[names[0]], t[names[1]], t[names[2]])
     dout, k = w.shape
 
-    channels = max(64, int(round(dout * args.fraction)) // 64 * 64)
-    sliced = w[:channels]
-    bias = np.zeros((channels,), dtype=np.float16)
     rows = args.rows
-
-    @mb.program(input_specs=[mb.TensorSpec(shape=(rows, k), dtype=mt.fp16)])
-    def prog(x):
-        return mb.linear(x=x, weight=sliced.astype(np.float16), bias=bias, name="out")
-
-    model = ct.convert(
-        prog,
-        minimum_deployment_target=ct.target.macOS15,
-        compute_units=ct.ComputeUnit.CPU_AND_NE,
-        compute_precision=ct.precision.FLOAT16,
-    )
-    config = ct.optimize.coreml.OptimizationConfig(
-        global_config=ct.optimize.coreml.OpLinearQuantizerConfig(
-            mode="linear_symmetric", dtype="int8", granularity="per_channel"
-        )
-    )
-    model = strip_io_casts(ct.optimize.coreml.linear_quantize_weights(model, config=config))
+    model, channels = build_slice(w, rows, args.fraction)
+    sliced = w[:channels]
 
     out = args.out or f"{args.tensor.rsplit('.', 1)[-1]}_{rows}_{channels}.mlpackage"
     model.save(out)

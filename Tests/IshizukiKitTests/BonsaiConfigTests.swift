@@ -119,14 +119,36 @@ struct BonsaiConfigTests {
     #expect(config.textConfig.isFullAttention == [false, true])
   }
 
-  @Test("unsupported bit widths and model types are refused")
-  func rejections() {
-    #expect(throws: BonsaiError.self) {
+  @Test("a width MLX can run is accepted whatever the pack was built at")
+  func widthsWiden() throws {
+    // An affine pack is no longer pinned to the ternary width; 4-bit is a pack, not an error.
+    #expect(throws: Never.self) {
       try load(ternary1_7B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 4"))
         .validate()
     }
+  }
+
+  @Test("unsupported bit widths and model types are refused")
+  func rejections() {
+    #expect(throws: BonsaiError.self) {
+      try load(ternary1_7B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 7"))
+        .validate()
+    }
+    #expect(throws: BonsaiError.self) {
+      try load(
+        ternary1_7B.replacingOccurrences(of: "\"group_size\": 128", with: "\"group_size\": 96")
+      ).validate()
+    }
     #expect(throws: BonsaiError.self) {
       try load(ternary1_7B.replacingOccurrences(of: "\"qwen3\"", with: "\"llama\""))
+        .validate()
+    }
+  }
+
+  @Test("a rotated pack still has to be uniform, because its kernels assume it")
+  func rotatedStaysNarrow() {
+    #expect(throws: BonsaiError.self) {
+      try load(flagshipPack.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 4"))
         .validate()
     }
   }

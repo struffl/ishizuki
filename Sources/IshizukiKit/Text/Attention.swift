@@ -178,17 +178,71 @@ public final class MLP: @unchecked Sendable {
   private let gateProj: PackedLinear
   private let upProj: PackedLinear
   private let downProj: PackedLinear
+  private let split: Split?
+
+  private struct Split {
+    let gate: ANESlice
+    let up: ANESlice
+    let gateTail: PackedLinear
+    let upTail: PackedLinear
+  }
 
   public init(layer: Int, factory: PackedModuleFactory) throws {
     let prefix = "model.layers.\(layer).mlp"
     self.gateProj = try factory.linear(prefix + ".gate_proj")
     self.upProj = try factory.linear(prefix + ".up_proj")
     self.downProj = try factory.linear(prefix + ".down_proj")
+    self.split = MLP.split(layer: layer, gate: gateProj, up: upProj)
+  }
+
+  // gate and up read the same activation, so they share one rotation — but only once the pack
+  // says so, rather than on the assumption that a layer's modules always agree.
+  private static func split(layer: Int, gate: PackedLinear, up: PackedLinear) -> Split? {
+    guard let bank = BonsaiRuntime.aneBank,
+      gate.block == up.block,
+      sharesRotation(gate, up),
+      let gateSlice = bank.slice("\(layer).mlp.gate_proj"),
+      let upSlice = bank.slice("\(layer).mlp.up_proj"),
+      gateSlice.inputDim == gate.inputDim, upSlice.inputDim == up.inputDim,
+      gateSlice.outputDim < gate.outputDim, upSlice.outputDim < up.outputDim,
+      let gateTail = try? gate.channels(from: gateSlice.outputDim),
+      let upTail = try? up.channels(from: upSlice.outputDim)
+    else { return nil }
+    return Split(gate: gateSlice, up: upSlice, gateTail: gateTail, upTail: upTail)
   }
 
   public func callAsFunction(_ x: MLXArray) -> MLXArray {
-    downProj(silu(gateProj(x)) * upProj(x))
+    if let split, x.ndim == 3, x.dim(0) * x.dim(1) == split.gate.rows {
+      return hybrid(x, split)
+    }
+    return downProj(silu(gateProj(x)) * upProj(x))
   }
+
+  private func hybrid(_ x: MLXArray, _ split: Split) -> MLXArray {
+    let shape = x.shape
+    let rotated = gateProj.rotate(x.reshaped([split.gate.rows, shape[2]]))
+    let gatePending = split.gate.dispatch(rotated)
+    let upPending = split.up.dispatch(rotated)
+
+    let gateTail = split.gateTail.applyRotated(rotated)
+    let upTail = split.upTail.applyRotated(rotated)
+    eval(gateTail, upTail)
+
+    guard let gateHead = try? gatePending.wait(), let upHead = try? upPending.wait() else {
+      return downProj(silu(gateProj(x)) * upProj(x))
+    }
+    let gate = concatenated([gateHead, gateTail], axis: -1)
+    let up = concatenated([upHead, upTail], axis: -1)
+    let activated = silu(gate) * up
+    return downProj(activated.reshaped([shape[0], shape[1], activated.dim(-1)]))
+  }
+}
+
+func sharesRotation(_ a: PackedLinear, _ b: PackedLinear) -> Bool {
+  guard a.block == b.block else { return false }
+  guard let left = a.signs, let right = b.signs else { return a.signs == nil && b.signs == nil }
+  guard left.shape == right.shape else { return false }
+  return (left .!= right).sum().item(Int.self) == 0
 }
 
 public func causalMask(length: Int, offset: Int, dtype: DType) -> MLXArray? {

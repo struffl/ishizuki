@@ -97,13 +97,13 @@ struct Generate: ParsableCommand {
 
     BonsaiRuntime.useFusedHadamard = fusedHadamard
     BonsaiRuntime.useQMVWide = qmvWide
-    try neural.apply()
 
     if cacheLimit > 0 {
       Memory.cacheLimit = cacheLimit * 1024 * 1024
     }
 
     let packURL = URL(filePath: resolvedModelPath(model, repo: repo))
+    try neural.apply(pack: packURL)
     if !offline {
       try ModelDownloader.ensure(directory: packURL, repo: repo)
     }

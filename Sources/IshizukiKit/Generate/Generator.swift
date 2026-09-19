@@ -44,7 +44,12 @@ public final class Generator: @unchecked Sendable {
   ) {
     self.model = model
     self.politeness = politeness
-    self.prefillChunkSize = prefillChunkSize ?? Politeness.prefillChunk(for: politeness)
+    // The slices are fixed-shape, so a chunk that is not their size has nothing to hand over.
+    if let bank = BonsaiRuntime.aneBank {
+      self.prefillChunkSize = bank.rows
+    } else {
+      self.prefillChunkSize = prefillChunkSize ?? Politeness.prefillChunk(for: politeness)
+    }
     self.kvConfig = kvConfig
   }
 

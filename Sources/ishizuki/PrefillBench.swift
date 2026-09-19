@@ -19,6 +19,8 @@ struct PrefillBench: ParsableCommand {
   var chunks: String = "512,2048"
   @Option(name: .long) var iterations: Int = 6
 
+  @OptionGroup var neural: ANEOption
+
   enum Bucket {
     case offloadable
     case recurrent
@@ -37,6 +39,7 @@ struct PrefillBench: ParsableCommand {
 
   func run() throws {
     let packURL = URL(filePath: model)
+    try neural.apply(pack: packURL)
     let bonsai = try BonsaiModel(directory: packURL, loadVision: false)
     let text = bonsai.config.textConfig
     let factory = PackedModuleFactory(
@@ -62,6 +65,13 @@ struct PrefillBench: ParsableCommand {
         "Hk \(text.linearNumKeyHeads)  Hv \(text.linearNumValueHeads)  "
           + "Dk \(text.linearKeyHeadDim)  Dv \(text.linearValueHeadDim)"))
     print(Style.field("vocab", "\(text.vocabSize)"))
+    if let bank = BonsaiRuntime.aneBank {
+      print(
+        Style.field(
+          "ane",
+          "\(bank.count) slices at \(bank.rows) rows"
+            + (bank.fraction.map { String(format: ", cut at %.0f%%", $0 * 100) } ?? "")))
+    }
 
     for field in chunks.split(separator: ",") {
       guard let chunk = Int(field.trimmingCharacters(in: .whitespaces)) else { continue }

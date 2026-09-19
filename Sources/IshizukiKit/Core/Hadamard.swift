@@ -93,6 +93,31 @@ public final class PackedLinear: @unchecked Sendable {
       h, weight, scales: scales, biases: biases,
       transpose: true, groupSize: groupSize, bits: bits, mode: .affine)
   }
+
+  // A split projection rotates its input once and hands the same activation to both halves, so
+  // the rotation and the matmul are reachable on their own.
+  public func rotate(_ x: MLXArray) -> MLXArray {
+    guard block > 0, let signs else { return x }
+    if BonsaiRuntime.useFusedHadamard,
+      let fused = FusedHadamard.apply(x, block: block, signs: signs)
+    {
+      return fused
+    }
+    return hadamardRotate(x, block: block, signs: signs, inverse: false)
+  }
+
+  public func applyRotated(_ h: MLXArray) -> MLXArray {
+    quantizedMM(
+      h, weight, scales: scales, biases: biases,
+      transpose: true, groupSize: groupSize, bits: bits, mode: .affine)
+  }
+
+  // Output channels are rows of the packed weight, so the half Metal keeps is a row slice.
+  public func channels(from start: Int) throws -> PackedLinear {
+    try PackedLinear(
+      weight: weight[start...], scales: scales[start...], biases: biases[start...],
+      signs: signs, block: block, groupSize: groupSize, bits: bits)
+  }
 }
 
 public final class PackedEmbedding: @unchecked Sendable {

@@ -43,15 +43,95 @@ public struct BonsaiConfig: Codable, Sendable {
     public var mtp: Bool
   }
 
-  public struct QuantizationConfig: Codable, Sendable {
+  /// One module's quantization, either the pack-wide default or a per-path override.
+  public struct ModuleQuant: Codable, Sendable, Equatable {
     public var bits: Int
     public var groupSize: Int
     public var mode: String
+
+    public init(bits: Int, groupSize: Int, mode: String = "affine") {
+      self.bits = bits
+      self.groupSize = groupSize
+      self.mode = mode
+    }
 
     enum CodingKeys: String, CodingKey {
       case bits
       case groupSize = "group_size"
       case mode
+    }
+  }
+
+  /// MLX writes the sensitivity-guided profiles oMLX calls oQ*e as one flat object: the
+  /// pack-wide width at the top, then a nested object for every module the imatrix pass moved
+  /// off it. Both forms decode here, so a uniform pack is just one with no overrides.
+  public struct QuantizationConfig: Codable, Sendable {
+    public var bits: Int
+    public var groupSize: Int
+    public var mode: String
+    public var overrides: [String: ModuleQuant]
+
+    public init(
+      bits: Int, groupSize: Int, mode: String = "affine",
+      overrides: [String: ModuleQuant] = [:]
+    ) {
+      self.bits = bits
+      self.groupSize = groupSize
+      self.mode = mode
+      self.overrides = overrides
+    }
+
+    public var `default`: ModuleQuant {
+      ModuleQuant(bits: bits, groupSize: groupSize, mode: mode)
+    }
+
+    public func module(_ path: String) -> ModuleQuant {
+      overrides[path] ?? `default`
+    }
+
+    /// Every width the pack actually uses, for validation and for reporting.
+    public var widths: Set<Int> {
+      Set(overrides.values.map(\.bits)).union([bits])
+    }
+
+    private struct Key: CodingKey {
+      var stringValue: String
+      var intValue: Int? { nil }
+      init?(stringValue: String) { self.stringValue = stringValue }
+      init?(intValue: Int) { nil }
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: Key.self)
+      var bits = 2
+      var groupSize = 128
+      var mode = "affine"
+      var overrides: [String: ModuleQuant] = [:]
+
+      for key in container.allKeys {
+        switch key.stringValue {
+        case "bits": bits = try container.decode(Int.self, forKey: key)
+        case "group_size": groupSize = try container.decode(Int.self, forKey: key)
+        case "mode": mode = try container.decode(String.self, forKey: key)
+        default:
+          // Anything else is a module path, or a scalar the runtime has no use for.
+          if let entry = try? container.decode(ModuleQuant.self, forKey: key) {
+            overrides[key.stringValue] = entry
+          }
+        }
+      }
+
+      self.init(bits: bits, groupSize: groupSize, mode: mode, overrides: overrides)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: Key.self)
+      try container.encode(bits, forKey: Key(stringValue: "bits")!)
+      try container.encode(groupSize, forKey: Key(stringValue: "group_size")!)
+      try container.encode(mode, forKey: Key(stringValue: "mode")!)
+      for (path, entry) in overrides {
+        try container.encode(entry, forKey: Key(stringValue: path)!)
+      }
     }
   }
 
@@ -191,7 +271,73 @@ public struct BonsaiConfig: Codable, Sendable {
     return try JSONDecoder().decode(BonsaiConfig.self, from: data)
   }
 
+  /// An upstream MLX checkpoint, whose config nests the text and vision towers rather than
+  /// flattening them the way a Bonsai pack does.
   static func standard(_ o: [String: Any]) throws -> BonsaiConfig {
+    guard let nested = o["text_config"] as? [String: Any] else { return try flat(o) }
+    return try assemble(o, text: nested)
+  }
+
+  private static func assemble(
+    _ o: [String: Any], text nested: [String: Any]
+  ) throws -> BonsaiConfig {
+    var text = nested
+    text["tie_word_embeddings"] =
+      (nested["tie_word_embeddings"] as? Bool) ?? (o["tie_word_embeddings"] as? Bool) ?? false
+
+    // MLX writes the rope family under `type`; the pack schema calls it `rope_type`.
+    if var rope = nested["rope_parameters"] as? [String: Any] {
+      if rope["rope_type"] == nil, let type = rope["type"] as? String {
+        rope["rope_type"] = type
+      }
+      text["rope_parameters"] = rope
+    } else {
+      text["rope_parameters"] = ["rope_theta": nested["rope_theta"] ?? 1_000_000]
+    }
+
+    // A dense model leaves the delta-net geometry out entirely.
+    for key in [
+      "linear_num_value_heads", "linear_num_key_heads", "linear_value_head_dim",
+      "linear_key_head_dim", "linear_conv_kernel_dim",
+    ] where text[key] == nil {
+      text[key] = 0
+    }
+
+    let layers = (nested["num_hidden_layers"] as? NSNumber)?.intValue ?? 0
+    if text["layer_types"] == nil, nested["full_attention_interval"] == nil {
+      text["layer_types"] = Array(repeating: "full_attention", count: layers)
+    }
+
+    let quantization = o["quantization"] as? [String: Any]
+      ?? o["quantization_config"] as? [String: Any]
+      ?? ["bits": 16, "group_size": 64, "mode": "affine"]
+
+    let vision = o["vision_config"] as? [String: Any]
+    let mtpLayers = (nested["mtp_num_hidden_layers"] as? NSNumber)?.intValue ?? 0
+
+    var pack: [String: Any] = [
+      "schema_version": 0,
+      "model_type": o["model_type"] as? String ?? "qwen3_5",
+      "text_config": text,
+      "modules": [],
+      "quantization": quantization,
+      "components": [
+        "text": true, "vision": vision != nil, "mtp": mtpLayers > 0,
+      ],
+    ]
+    if let vision { pack["vision_config"] = vision }
+    for key in [
+      "image_token_id", "video_token_id", "vision_start_token_id", "vision_end_token_id",
+    ] {
+      if let value = o[key] { pack[key] = value }
+    }
+
+    return try JSONDecoder().decode(
+      BonsaiConfig.self, from: try JSONSerialization.data(withJSONObject: pack))
+  }
+
+  /// A plain single-tower checkpoint with its dimensions at the top level.
+  static func flat(_ o: [String: Any]) throws -> BonsaiConfig {
     func int(_ key: String) -> Int? { (o[key] as? NSNumber)?.intValue }
     func double(_ key: String) -> Double? { (o[key] as? NSNumber)?.doubleValue }
     guard let hidden = int("hidden_size"), let layers = int("num_hidden_layers"),
@@ -233,16 +379,13 @@ public struct BonsaiConfig: Codable, Sendable {
     if let eos = int("eos_token_id") { text["eos_token_id"] = eos }
 
     let quantization = o["quantization"] as? [String: Any]
+      ?? ["bits": 2, "group_size": 128, "mode": "affine"]
     let pack: [String: Any] = [
       "schema_version": 0,
       "model_type": modelType,
       "text_config": text,
       "modules": [],
-      "quantization": [
-        "bits": (quantization?["bits"] as? NSNumber)?.intValue ?? 2,
-        "group_size": (quantization?["group_size"] as? NSNumber)?.intValue ?? 128,
-        "mode": "affine",
-      ],
+      "quantization": quantization,
       "components": ["text": true, "vision": false, "mtp": false],
     ]
     return try JSONDecoder().decode(
@@ -251,19 +394,39 @@ public struct BonsaiConfig: Codable, Sendable {
 
   public static let hadamardModelType = "prism_hadamard_qwen35"
   public static let legacyModelTypes: Set<String> = ["qwen3"]
+  public static let affineModelTypes: Set<String> = ["qwen3_5", "qwen3_5_moe"]
+
+  /// Which family of packing a checkpoint uses. The rotated Bonsai packs carry a sign vector
+  /// and a Hadamard block per module; everything else is plain MLX affine quantization, at one
+  /// width or at the mix of widths an imatrix pass chose.
+  public enum Profile: Sendable, Equatable {
+    case rotated
+    case affine
+  }
+
+  public var profile: Profile {
+    modelType == Self.hadamardModelType ? .rotated : .affine
+  }
+
+  /// Widths and group sizes MLX can actually run a quantized matmul at.
+  public static let supportedBits: Set<Int> = [2, 3, 4, 5, 6, 8]
+  public static let supportedGroupSizes: Set<Int> = [32, 64, 128]
 
   public func validate() throws {
-    guard modelType == Self.hadamardModelType || Self.legacyModelTypes.contains(modelType) else {
-      throw BonsaiError.unsupportedModel(
-        "expected model_type '\(Self.hadamardModelType)' or a legacy type in "
-          + "\(Self.legacyModelTypes.sorted()), found '\(modelType)'")
+    switch profile {
+    case .rotated: try validateRotated()
+    case .affine: try validateAffine()
     }
+  }
+
+  private func validateRotated() throws {
     guard quantization.bits == 2, quantization.groupSize == 128,
-      quantization.mode == "affine"
+      quantization.mode == "affine", quantization.overrides.isEmpty
     else {
       throw BonsaiError.unsupportedModel(
-        "expected 2-bit affine group-128 quantization, found \(quantization.bits)-bit "
-          + "\(quantization.mode) group-\(quantization.groupSize)")
+        "expected uniform 2-bit affine group-128 quantization, found \(quantization.bits)-bit "
+          + "\(quantization.mode) group-\(quantization.groupSize) over "
+          + "\(quantization.overrides.count) override(s)")
     }
     for record in modules {
       guard record.dtype == "float16" else {
@@ -273,6 +436,39 @@ public struct BonsaiConfig: Codable, Sendable {
       guard record.block == 0 || [512, 1024, 2048, 4096].contains(record.block) else {
         throw BonsaiError.unsupportedModel(
           "module \(record.path) has unvalidated Hadamard block \(record.block)")
+      }
+    }
+  }
+
+  private func validateAffine() throws {
+    let known =
+      [Self.hadamardModelType] + Self.legacyModelTypes.sorted()
+      + Self.affineModelTypes.sorted()
+    guard known.contains(modelType) else {
+      throw BonsaiError.unsupportedModel(
+        "unrecognised model_type '\(modelType)'; this runtime reads "
+          + known.joined(separator: ", "))
+    }
+    guard modules.isEmpty else {
+      throw BonsaiError.unsupportedModel(
+        "\(modelType) packs carry no Hadamard rotation, but the config lists "
+          + "\(modules.count) packed-module record(s)")
+    }
+    for (path, entry) in [("", quantization.default)] + quantization.overrides.map({ ($0, $1) }) {
+      let label = path.isEmpty ? "the pack default" : path
+      guard entry.mode == "affine" else {
+        throw BonsaiError.unsupportedModel(
+          "\(label) uses \(entry.mode) quantization; this runtime reads affine")
+      }
+      guard Self.supportedBits.contains(entry.bits) else {
+        throw BonsaiError.unsupportedModel(
+          "\(label) is \(entry.bits)-bit; supported widths are "
+            + "\(Self.supportedBits.sorted())")
+      }
+      guard Self.supportedGroupSizes.contains(entry.groupSize) else {
+        throw BonsaiError.unsupportedModel(
+          "\(label) uses group size \(entry.groupSize); supported sizes are "
+            + "\(Self.supportedGroupSizes.sorted())")
       }
     }
   }

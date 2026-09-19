@@ -96,7 +96,6 @@ struct Serve: ParsableCommand {
   var disableDashboard = false
 
   func run() throws {
-    try neural.apply()
     let kvConfig = KVCacheConfig(bits: kvBits, residualWindow: kvWindow)
     try kvConfig.validate()
 
@@ -105,6 +104,7 @@ struct Serve: ParsableCommand {
     Politeness.apply(level)
 
     let modelURL = URL(filePath: resolvedModelPath(model, repo: repo))
+    try neural.apply(pack: modelURL)
     if !offline {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
@@ -226,7 +226,7 @@ struct InstallAgent: ParsableCommand {
 
   @Option(name: .long) var model: String = defaultModelPath
   @Option(name: .shortAndLong) var port: UInt16 = 8128
-  @Option(name: .long) var label: String = "studio.bonsai.server"
+  @Option(name: .long) var label: String = "studio.ishizuki.server"
   @Option(name: .long, help: "Seconds idle before the model is unloaded.")
   var evictTimeout: Double = 900
   @Option(name: .long, help: "KV cache bits, e.g. 3.5.")
