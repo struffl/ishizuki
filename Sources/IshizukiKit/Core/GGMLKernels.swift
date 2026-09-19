@@ -152,6 +152,7 @@ public enum GGMLKernels {
           ("block_bytes", type.typeSize),
           ("block_elems", type.blockSize),
           ("vecs", m),
+          ("grid_bytes", type == .iq2_xxs ? 2048 : (type == .iq2_xs ? 4096 : 0)),
         ],
         grid: (groups * threads, 1, 1),
         threadGroup: (threads, 1, 1),
@@ -194,7 +195,7 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "K", "N",
         ],
         outputNames: ["y"],
-        source: macros + matvecDot8 + matvecProlog
+        source: macros + matvecDot8 + matvecTables + matvecProlog
           + "if (qtype == 10) {" + matvecQ2K
           + "} else if (qtype == 16 || qtype == 17) {" + matvecIQ2
           + "} else {" + decodeChain + "}" + matvecEpilog)
@@ -235,6 +236,25 @@ public enum GGMLKernels {
                                 + (ulong)blk * block_bytes;
           const int base = slot * K + blk * block_elems;
           int o = 0;
+
+      """
+
+    /// The iq grids are a few kilobytes and every weight in the block reads one of them, so the
+    /// threadgroup copies its own before any row starts. `qtype` is a compile-time constant, so
+    /// only the grid this specialization actually uses is copied — or none at all.
+    private static let matvecTables = """
+          threadgroup int8_t tg_grid[grid_bytes > 0 ? grid_bytes : 1];
+          threadgroup uchar tg_signs[128];
+          if (grid_bytes > 0) {
+              device const int8_t *src = (qtype == 16) ? g_iq2xxs : g_iq2xs;
+              for (uint i = thread_position_in_threadgroup.x; i < (uint)grid_bytes; i += 256u) {
+                  tg_grid[i] = src[i];
+              }
+              for (uint i = thread_position_in_threadgroup.x; i < 128u; i += 256u) {
+                  tg_signs[i] = ksigns[i];
+              }
+          }
+          threadgroup_barrier(mem_flags::mem_threadgroup);
 
       """
 
@@ -319,7 +339,7 @@ public enum GGMLKernels {
     /// once to the sum rather than to each weight.
     private static let matvecDot8 = """
           #define GGML_DOT8(db, gptr, sbits, off) { \
-              device const char4 *_g = (device const char4 *)(gptr); \
+              threadgroup const char4 *_g = (threadgroup const char4 *)(gptr); \
               const float4 _g0 = float4(_g[0]); \
               const float4 _g1 = float4(_g[1]); \
               const float4 _s0 = float4(GGML_SIGN(sbits, 0), GGML_SIGN(sbits, 1), \
@@ -347,8 +367,8 @@ public enum GGMLKernels {
                   const uint a2 = GGML_U32(b + 6 + 8 * ib);
                   const float db = dblk * (0.5f + (float)(a2 >> 28)) * 0.25f;
                   for (int l = 0; l < 4; ++l) {
-                      device const int8_t *g = g_iq2xxs + 8 * (int)((a1 >> (8 * l)) & 0xFF);
-                      const uchar sb = ksigns[(a2 >> (7 * l)) & 127];
+                      threadgroup const int8_t *g = tg_grid + 8 * (int)((a1 >> (8 * l)) & 0xFF);
+                      const uchar sb = tg_signs[(a2 >> (7 * l)) & 127];
                       GGML_DOT8(db, g, sb, o);
                       o += 8;
                   }
@@ -362,8 +382,8 @@ public enum GGMLKernels {
                   const float db1 = dblk * (0.5f + (float)(sc >> 4)) * 0.25f;
                   for (int l = 0; l < 4; ++l) {
                       const ushort q = *(device const ushort *)(b + 2 + 2 * (4 * ib + l));
-                      device const int8_t *g = g_iq2xs + 8 * (int)(q & 511);
-                      const uchar sb = ksigns[q >> 9];
+                      threadgroup const int8_t *g = tg_grid + 8 * (int)(q & 511);
+                      const uchar sb = tg_signs[q >> 9];
                       GGML_DOT8((l < 2) ? db0 : db1, g, sb, o);
                       o += 8;
                   }
