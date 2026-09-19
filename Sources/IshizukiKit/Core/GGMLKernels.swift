@@ -84,6 +84,44 @@ public enum GGMLKernels {
     #endif
   }
 
+  /// The rows named by `ids`, decoded into `[ids.count, inputDim]`.
+  ///
+  /// An embedding table at 1.3 billion entries cannot be expanded to be indexed, and it does
+  /// not have to be: a row's blocks are contiguous and self-contained, so only the rows asked
+  /// for are ever touched.
+  public static func gather(
+    ids: MLXArray, blocks: MLXArray, type: GGMLType, inputDim: Int, dtype: DType = .bfloat16
+  ) -> MLXArray? {
+    #if canImport(Metal)
+      guard let gatherKernel, GGMLDequant.supported.contains(type), type.isQuantized else {
+        return nil
+      }
+      guard inputDim % type.blockSize == 0 else { return nil }
+      let count = ids.size
+      guard count > 0 else { return nil }
+      let perRow = inputDim / type.blockSize
+
+      let threads = 256
+      let work = count * perRow
+      let groups = (work + threads - 1) / threads
+      let outputs = gatherKernel(
+        [ids.asType(.int32).reshaped([count]), blocks] + GGMLGrids.buffers + [inputDim, work],
+        template: [
+          ("OT", dtype),
+          ("qtype", Int(type.rawValue)),
+          ("block_bytes", type.typeSize),
+          ("block_elems", type.blockSize),
+        ],
+        grid: (groups * threads, 1, 1),
+        threadGroup: (threads, 1, 1),
+        outputShapes: [[count, inputDim]],
+        outputDTypes: [dtype])
+      return outputs[0]
+    #else
+      return nil
+    #endif
+  }
+
   /// How many rows of `x` one matvec launch will carry. Past this the decode is paid once per
   /// row rather than once per block, and expanding the weight for a real matmul wins.
   public static let matvecBatch = 1...4
@@ -137,6 +175,17 @@ public enum GGMLKernels {
         source: macros + dequantProlog + decodeChain)
     }()
 
+    private static let gatherKernel: MLXFast.MLXFastKernel? = {
+      MLXFast.metalKernel(
+        name: "ggml_gather",
+        inputNames: [
+          "ids", "w", "g_iq2xxs", "g_iq2xs", "g_iq2s", "g_iq1s", "g_iq3xxs", "g_iq3s",
+          "ksigns", "kvalues", "K", "n_work",
+        ],
+        outputNames: ["y"],
+        source: macros + gatherProlog + decodeChain)
+    }()
+
     private static let matvecKernel: MLXFast.MLXFastKernel? = {
       MLXFast.metalKernel(
         name: "ggml_matvec",
@@ -164,6 +213,24 @@ public enum GGMLKernels {
 
           device const uchar *b = blocks + (ulong)bi * block_bytes;
           const int base = bi * block_elems;
+          int o = 0;
+
+      """
+
+    private static let gatherProlog = """
+          #define GGML_EMIT(i, v) y[base + (i)] = (OT)(v)
+
+          const uint gi = thread_position_in_grid.x;
+          if (gi >= (uint)n_work) { return; }
+
+          const int nblk = K / block_elems;
+          const int slot = (int)gi / nblk;
+          const int blk = (int)gi % nblk;
+          const int row = ids[slot];
+
+          device const uchar *b = w + (ulong)row * nblk * block_bytes
+                                + (ulong)blk * block_bytes;
+          const int base = slot * K + blk * block_elems;
           int o = 0;
 
       """

@@ -6,10 +6,15 @@ import MLX
 
 public final class WeightStore: @unchecked Sendable {
   public let arrays: [String: MLXArray]
+  /// Tensors still in GGML blocks. A name appears here or in `arrays`, never both.
+  public let ggmlArrays: [String: GGUFBlocks]
 
-  public init(arrays: [String: MLXArray]) {
+  public init(arrays: [String: MLXArray], ggml: [String: GGUFBlocks] = [:]) {
     self.arrays = arrays
+    self.ggmlArrays = ggml
   }
+
+  public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
 
   /// A pack is either one safetensors file or a set of shards named by an index. Both land in
   /// the same flat name table, so nothing downstream needs to know which it was.
@@ -62,7 +67,7 @@ public final class WeightStore: @unchecked Sendable {
 
   public func optional(_ name: String) -> MLXArray? { arrays[name] }
 
-  public func has(_ name: String) -> Bool { arrays[name] != nil }
+  public func has(_ name: String) -> Bool { arrays[name] != nil || ggmlArrays[name] != nil }
 
   public func names(prefix: String) -> [String] {
     arrays.keys.filter { $0.hasPrefix(prefix) }.sorted()
@@ -132,6 +137,9 @@ public struct PackedModuleFactory {
 
   public func embedding(_ path: String) throws -> PackedEmbedding {
     let key = tensorPrefix + path
+    if let blocks = store.ggml(key + ".weight") {
+      return PackedEmbedding(ggml: blocks)
+    }
     if dense {
       return PackedEmbedding(dense: try store(key + ".weight"))
     }
@@ -161,6 +169,9 @@ public struct PackedModuleFactory {
   /// The same module can arrive packed or dense depending on what the quantizer decided to
   /// leave alone, so the small delta-net projections resolve by what is actually on disk.
   public func projection(_ path: String) throws -> any Projection {
+    if store.ggml(tensorPrefix + path + ".weight") != nil {
+      return try linear(path)
+    }
     if dense || store.has(tensorPrefix + path + ".scales") {
       return try linear(path)
     }
@@ -169,6 +180,9 @@ public struct PackedModuleFactory {
 
   private func packedLinear(_ path: String, block: Int) throws -> PackedLinear {
     let key = tensorPrefix + path
+    if let blocks = store.ggml(key + ".weight") {
+      return PackedLinear(ggml: blocks)
+    }
     if dense {
       let weight = try store(key + ".weight")
       guard let collector else { return PackedLinear(dense: weight) }

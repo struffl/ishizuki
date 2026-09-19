@@ -33,6 +33,9 @@ public final class PackedLinear: @unchecked Sendable {
   /// Set for a projection built by ``init(dense:)``: `weight` is the real fp16 checkpoint
   /// weight, not a quantized one, and `scales`/`biases` are unused placeholders.
   public let isDense: Bool
+  /// Set for a projection read straight out of a GGUF: the weight is still in GGML blocks and
+  /// is decoded inside the kernel rather than before it.
+  public let ggml: GGUFBlocks?
   /// Calibration's hook onto this projection's exact input, called before every forward pass
   /// when this projection is dense. Never set for a quantized projection.
   private let collect: (@Sendable (MLXArray) -> Void)?
@@ -52,6 +55,7 @@ public final class PackedLinear: @unchecked Sendable {
     self.groupSize = groupSize
     self.bits = bits
     self.isDense = false
+    self.ggml = nil
     self.collect = nil
 
     self.outputDim = weight.dim(0)
@@ -89,12 +93,56 @@ public final class PackedLinear: @unchecked Sendable {
     self.groupSize = weight.dim(1)
     self.bits = 16
     self.isDense = true
+    self.ggml = nil
     self.collect = collect
     self.outputDim = weight.dim(0)
     self.inputDim = weight.dim(1)
   }
 
+  /// A projection over a GGUF tensor, still blocked. `weight` holds the raw bytes so that
+  /// anything walking this module's storage still sees one array rather than nothing.
+  public init(ggml blocks: GGUFBlocks) {
+    self.weight = blocks.bytes
+    self.scales = MLXArray.ones([1])
+    self.biases = MLXArray.zeros([1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = blocks.type.blockSize
+    self.bits = 0
+    self.isDense = false
+    self.ggml = blocks
+    self.collect = nil
+    self.outputDim = blocks.outputDim
+    self.inputDim = blocks.inputDim
+  }
+
+  /// Blocks decode inside the matvec while the batch is small enough to pay for the decode
+  /// once per block; past that the weight is expanded once and multiplied the ordinary way,
+  /// which is still never stored.
+  private func ggmlApply(_ h: MLXArray, _ blocks: GGUFBlocks) -> MLXArray {
+    let shape = h.shape
+    let width = shape[shape.count - 1]
+    let rows = h.size / width
+
+    if GGMLKernels.matvecBatch.contains(rows),
+      let y = GGMLKernels.matvec(
+        h.reshaped([rows, width]), blocks: blocks.bytes, type: blocks.type,
+        outputDim: blocks.outputDim)
+    {
+      return y.reshaped(Array(shape.dropLast()) + [outputDim])
+    }
+
+    guard
+      let weight = GGMLKernels.dequantize(
+        blocks: blocks.bytes, type: blocks.type, shape: blocks.shape, dtype: h.dtype)
+    else {
+      return MLXArray.zeros(Array(shape.dropLast()) + [outputDim], dtype: h.dtype)
+    }
+    return matmul(h, weight.T)
+  }
+
   public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    if let ggml { return ggmlApply(x, ggml) }
     var h = x
     if block > 0, let signs {
       if BonsaiRuntime.useFusedHadamard,
@@ -142,6 +190,7 @@ public final class PackedLinear: @unchecked Sendable {
   }
 
   public func applyRotated(_ h: MLXArray) -> MLXArray {
+    if let ggml { return ggmlApply(h, ggml) }
     if isDense {
       return matmul(h, weight.T.asType(h.dtype))
     }
@@ -167,6 +216,9 @@ public final class PackedEmbedding: @unchecked Sendable {
   public let groupSize: Int
   public let bits: Int
   public let dtype: DType
+  /// Set for an embedding read straight out of a GGUF, gathered row by row rather than
+  /// expanded: the table is far too large to hold decoded.
+  public let ggml: GGUFBlocks?
   /// Set for an embedding built by ``init(dense:)``: `weight` holds the real fp16 checkpoint
   /// rows directly, nothing to dequantize.
   public let isDense: Bool
@@ -184,6 +236,7 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.groupSize = groupSize
     self.bits = bits
     self.dtype = dtype
+    self.ggml = nil
     self.isDense = false
     if block > 0 && signs == nil {
       throw BonsaiError.invalidTransform("rotated embedding is missing its sign vector")
@@ -202,13 +255,35 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.groupSize = weight.dim(1)
     self.bits = 16
     self.dtype = dtype
+    self.ggml = nil
     self.isDense = true
+  }
+
+  public init(ggml blocks: GGUFBlocks, dtype: DType = .bfloat16) {
+    self.weight = blocks.bytes
+    self.scales = MLXArray.ones([1])
+    self.biases = MLXArray.zeros([1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = blocks.type.blockSize
+    self.bits = 0
+    self.dtype = dtype
+    self.ggml = blocks
+    self.isDense = false
   }
 
   public func callAsFunction(_ ids: MLXArray) -> MLXArray {
     let shape = ids.shape
     let flat = ids.reshaped([-1])
     var out: MLXArray
+    if let ggml {
+      guard
+        let rows = GGMLKernels.gather(
+          ids: flat, blocks: ggml.bytes, type: ggml.type, inputDim: ggml.inputDim,
+          dtype: dtype)
+      else { return MLXArray.zeros(shape + [ggml.inputDim], dtype: dtype) }
+      return rows.reshaped(shape + [-1])
+    }
     if isDense {
       out = weight[flat]
     } else {
