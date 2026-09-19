@@ -5,7 +5,9 @@ import Foundation
 import MLX
 
 public final class APIServer: @unchecked Sendable {
-  public private(set) var directory: URL
+  /// The pack directory or the `.gguf` this server is serving. Either can be handed to
+  /// `BonsaiModel` and `ChatTemplate`, which is all this needs it for.
+  public private(set) var modelPath: URL
   public private(set) var template: ChatTemplate
   public private(set) var modelName: String
   public var defaultThinking: Bool
@@ -52,8 +54,8 @@ public final class APIServer: @unchecked Sendable {
     self.ropeScaling = ropeScaling
     self.catalog = catalog
     self.catalogRoots = catalogRoots
-    self.directory = directory
-    self.template = try ChatTemplate(directory: directory)
+    self.modelPath = directory
+    self.template = try ChatTemplate(path: directory)
     self.modelName = modelName
     self.defaultThinking = thinking
     self.samplingOptions = samplingOptions
@@ -126,14 +128,14 @@ public final class APIServer: @unchecked Sendable {
           + catalog.entries.map(\.id).joined(separator: ", "))
     }
 
-    let template = try ChatTemplate(directory: entry.directory)
+    let template = try ChatTemplate(path: entry.url)
 
     sessions.persistAll()
     sessions.evict()
     loaded = nil
     Memory.clearCache()
 
-    directory = entry.directory
+    modelPath = entry.url
     modelName = entry.id
     self.template = template
     budget = MemoryBudget(
@@ -167,7 +169,7 @@ public final class APIServer: @unchecked Sendable {
   public func model() throws -> BonsaiModel {
     if let loaded { return loaded }
     let start = Date()
-    let model = try BonsaiModel(directory: directory, ropeScaling: ropeScaling, hot: hot)
+    let model = try BonsaiModel(path: modelPath, ropeScaling: ropeScaling, hot: hot)
     loaded = model
     log?(String(format: "loaded model in %.1fs", -start.timeIntervalSinceNow))
     return model

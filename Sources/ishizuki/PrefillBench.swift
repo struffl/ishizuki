@@ -40,7 +40,7 @@ struct PrefillBench: ParsableCommand {
   func run() throws {
     let packURL = URL(filePath: model)
     try neural.apply(pack: packURL)
-    let bonsai = try BonsaiModel(directory: packURL)
+    let bonsai = try BonsaiModel(path: packURL)
     let text = bonsai.config.textConfig
     let factory = PackedModuleFactory(
       store: bonsai.store, config: bonsai.config, tensorPrefix: bonsai.tensorPrefix)

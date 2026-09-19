@@ -38,6 +38,52 @@ struct GGUFModelTests {
     #expect(finite.isFinite, "logits are \(finite)")
   }
 
+  @Test("finds the tower beside the model when handed only a path")
+  func pairsTheProjector() throws {
+    let root = URL(filePath: NSTemporaryDirectory())
+      .appending(path: "pair-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let url = root.appending(path: "Tiny-IQ4_XS.gguf")
+    try GGUFFixture.TinyModel().write(to: url)
+    #expect(try BonsaiModel(path: url).hasVision == false)
+
+    // The layout every publisher of these files uses, and the one `pull --file` writes.
+    try GGUFFixture.TinyTower().write(to: root.appending(path: "mmproj-Tiny-BF16.gguf"))
+    #expect(try BonsaiModel(path: url).hasVision)
+  }
+
+  @Test("serves a GGUF through the same server a pack goes through")
+  func servesIt() throws {
+    let root = URL(filePath: NSTemporaryDirectory())
+      .appending(path: "serve-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    var fixture = GGUFFixture.TinyModel()
+    fixture.chatTemplate = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
+    let url = root.appending(path: "Tiny-IQ4_XS.gguf")
+    try fixture.write(to: url)
+
+    // The template comes out of the metadata rather than a file beside the weights.
+    let template = try ChatTemplate(path: url)
+    let rendered = try template.render(
+      messages: [ChatMessage(role: "user", content: .text("hello"))],
+      addGenerationPrompt: false)
+    #expect(rendered.contains("user: hello"))
+
+    let catalog = ModelCatalog.discover(in: [root])
+    let entry = try #require(catalog["Tiny-IQ4_XS"])
+    #expect(entry.format == .gguf)
+    // What the server sizes its budget against: the file is its own weights.
+    #expect(MemoryBudget.weightBytes(in: entry.url) == entry.byteCount)
+
+    let server = try APIServer(directory: entry.url, preload: false)
+    #expect(server.modelPath == entry.url)
+    #expect(try server.model().config.textConfig.vocabSize == fixture.vocab)
+  }
+
   @Test("gains a tower when the mmproj is handed over with it")
   func loadsTheTower() throws {
     let url = GGUFFixture.temporaryURL("model")

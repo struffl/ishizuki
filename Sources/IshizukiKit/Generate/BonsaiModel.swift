@@ -31,6 +31,33 @@ public final class BonsaiModel: @unchecked Sendable {
       directory: directory, ropeScaling: ropeScaling, hot: hot)
   }
 
+  /// A pack directory or a `.gguf`, whichever the caller was handed.
+  ///
+  /// A GGUF's tower travels as a separate `mmproj-*.gguf`, so one sitting beside the model is
+  /// taken to belong to it — that is the layout `pull` writes and the one every publisher of
+  /// these files uses.
+  public convenience init(
+    path: URL, ropeScaling: RopeScaling = .none, hot: Bool = false
+  ) throws {
+    guard path.pathExtension.lowercased() == "gguf" else {
+      try self.init(directory: path, ropeScaling: ropeScaling, hot: hot)
+      return
+    }
+    try self.init(
+      gguf: path, mmproj: Self.projector(beside: path), ropeScaling: ropeScaling, hot: hot)
+  }
+
+  static func projector(beside file: URL) -> URL? {
+    let directory = file.deletingLastPathComponent()
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    return
+      names
+      .filter { $0.lowercased().hasPrefix("mmproj") && $0.hasSuffix(".gguf") }
+      .sorted()
+      .first
+      .map { directory.appending(path: $0) }
+  }
+
   /// One file instead of a directory, and a second one for the tower.
   ///
   /// llama.cpp's converter splits a multimodal checkpoint in two, so a picture needs the

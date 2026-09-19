@@ -20,8 +20,8 @@ struct KVBench: ParsableCommand {
 
   func run() throws {
     let packURL = URL(filePath: model)
-    let bonsai = try BonsaiModel(directory: packURL)
-    let template = try ChatTemplate(directory: packURL)
+    let bonsai = try BonsaiModel(path: packURL)
+    let template = try ChatTemplate(path: packURL)
 
     let filler = String(
       repeating: "The quick brown fox jumps over the lazy dog near the riverbank. ",
