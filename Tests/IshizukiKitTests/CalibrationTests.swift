@@ -76,8 +76,10 @@ struct CalibrationTests {
       model.calibrate(tokens)
     }
 
-    let modulesPerLayer = ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
-                            "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]
+    let modulesPerLayer = [
+      "self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
+      "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj",
+    ]
     for layer in 0..<2 {
       for module in modulesPerLayer {
         let path = "model.layers.\(layer).\(module)"
@@ -85,11 +87,14 @@ struct CalibrationTests {
           model.collector.importance(for: path), "no importance collected for \(path)")
         eval(importance)
         #expect(importance.min().item(Float.self) >= 0, "\(path): importance must be non-negative")
-        #expect(importance.max().item(Float.self) > 0, "\(path): importance is degenerately all-zero")
+        #expect(
+          importance.max().item(Float.self) > 0, "\(path): importance is degenerately all-zero")
         // Different input channels should not all carry identical energy — that would mean
         // the collector is summing over the wrong axis rather than per input channel.
         let spread = importance.max().item(Float.self) - importance.min().item(Float.self)
-        #expect(spread > 0, "\(path): every channel has identical importance, which means the wrong axis was reduced")
+        #expect(
+          spread > 0,
+          "\(path): every channel has identical importance, which means the wrong axis was reduced")
       }
     }
 
@@ -113,7 +118,8 @@ struct CalibrationTests {
     #expect(dense.isDense)
     #expect(got.shape == [4, 8, 32])
     let diff = (got.asType(.float32) - expected.asType(.float32))
-    #expect(abs(diff).max().item(Float.self) == 0, "a dense projection must not alter the weight at all")
+    #expect(
+      abs(diff).max().item(Float.self) == 0, "a dense projection must not alter the weight at all")
   }
 
   @Test("the collector's importance is the mean square per input channel, not a proxy for it")

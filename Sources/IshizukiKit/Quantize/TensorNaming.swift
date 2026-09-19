@@ -32,7 +32,7 @@ public enum TensorNaming {
     if name.hasPrefix("lm_head.") || name.hasPrefix("mtp.") {
       return "language_model." + name
     }
-    if name.hasPrefix("model.") , !name.hasPrefix("model.vision_tower.") {
+    if name.hasPrefix("model."), !name.hasPrefix("model.vision_tower.") {
       return "language_model." + name
     }
     return name

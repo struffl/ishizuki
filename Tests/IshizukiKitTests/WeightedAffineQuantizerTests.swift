@@ -30,11 +30,14 @@ struct WeightedAffineQuantizerTests {
   // across ~200 random seeds, every mismatch was a single code in a single group, never a
   // structural difference — so the real invariant to hold is "reads back the same", not
   // "byte-identical".
-  @Test("packing MLX's own scale and bias reproduces its own packed weight", arguments: [2, 3, 4, 5, 6, 8])
+  @Test(
+    "packing MLX's own scale and bias reproduces its own packed weight",
+    arguments: [2, 3, 4, 5, 6, 8])
   func packingMatchesMLXBitForBit(bits: Int) {
     let groupSize = 64
     let w = MLXRandom.normal([128, 256]).asType(.float32)
-    let (refWQ, refScales, refBiases) = quantized(w, groupSize: groupSize, bits: bits, mode: .affine)
+    let (refWQ, refScales, refBiases) = quantized(
+      w, groupSize: groupSize, bits: bits, mode: .affine)
 
     let grouped = w.reshaped([128, 256 / groupSize, groupSize])
     let scales = refScales.reshaped([128, 256 / groupSize, 1])
@@ -44,8 +47,10 @@ struct WeightedAffineQuantizerTests {
     let wq = WeightedAffineQuantizer.pack(codes, groupSize: groupSize, bits: bits)
 
     #expect(wq.shape == refWQ.shape)
-    let mine = dequantized(wq, scales: refScales, biases: refBiases, groupSize: groupSize, bits: bits, mode: .affine)
-    let ref = dequantized(refWQ, scales: refScales, biases: refBiases, groupSize: groupSize, bits: bits, mode: .affine)
+    let mine = dequantized(
+      wq, scales: refScales, biases: refBiases, groupSize: groupSize, bits: bits, mode: .affine)
+    let ref = dequantized(
+      refWQ, scales: refScales, biases: refBiases, groupSize: groupSize, bits: bits, mode: .affine)
     let mismatches = (mine .!= ref).sum().item(Int32.self)
     // A rounding tie can flip a handful of codes; anything more points at a real format bug.
     #expect(
@@ -62,7 +67,8 @@ struct WeightedAffineQuantizerTests {
 
     let (wq, scales, biases) = WeightedAffineQuantizer.quantize(
       w, groupSize: groupSize, bits: bits, importance: importance)
-    let restored = dequantized(wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine)
+    let restored = dequantized(
+      wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine)
 
     let err = relativeError(restored.asType(.float32), w)
     // Loose bound: this is a sanity check that the whole pipeline round-trips through MLX's
@@ -100,12 +106,16 @@ struct WeightedAffineQuantizerTests {
 
     let (wq, scales, biases) = WeightedAffineQuantizer.quantize(
       w, groupSize: groupSize, bits: bits, importance: imp)
-    let weighted = dequantized(wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine)
-      .asType(.float32)
+    let weighted = dequantized(
+      wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine
+    )
+    .asType(.float32)
 
-    let (naiveWQ, naiveScales, naiveBiases) = quantized(w, groupSize: groupSize, bits: bits, mode: .affine)
+    let (naiveWQ, naiveScales, naiveBiases) = quantized(
+      w, groupSize: groupSize, bits: bits, mode: .affine)
     let naive = dequantized(
-      naiveWQ, scales: naiveScales, biases: naiveBiases, groupSize: groupSize, bits: bits, mode: .affine
+      naiveWQ, scales: naiveScales, biases: naiveBiases, groupSize: groupSize, bits: bits,
+      mode: .affine
     ).asType(.float32)
 
     // Compare error on the important channels only (everything but column 0).
@@ -120,5 +130,3 @@ struct WeightedAffineQuantizerTests {
     )
   }
 }
-
-

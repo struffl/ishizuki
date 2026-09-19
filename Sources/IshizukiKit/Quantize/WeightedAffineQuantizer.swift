@@ -60,8 +60,7 @@ public enum WeightedAffineQuantizer {
   /// The naive per-group min/max scale and bias, oriented so the larger-magnitude edge lands
   /// on an exact integer code — mirrors MLX's own affine quantizer exactly, before any
   /// importance-guided clipping is applied.
-  static func minMaxParams(_ grouped: MLXArray, bits: Int) -> (scales: MLXArray, biases: MLXArray)
-  {
+  static func minMaxParams(_ grouped: MLXArray, bits: Int) -> (scales: MLXArray, biases: MLXArray) {
     let nBins = MLXArray(Float((1 << bits) - 1))
     let eps = MLXArray(Float(1e-7))
     let wMax = grouped.max(axis: -1, keepDims: true)

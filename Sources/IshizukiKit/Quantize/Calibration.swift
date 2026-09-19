@@ -38,7 +38,8 @@ public final class ActivationCollector: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     if let existing = entries[path] {
-      entries[path] = Entry(sumSquares: existing.sumSquares + sumSquares, count: existing.count + count)
+      entries[path] = Entry(
+        sumSquares: existing.sumSquares + sumSquares, count: existing.count + count)
     } else {
       entries[path] = Entry(sumSquares: sumSquares, count: count)
     }

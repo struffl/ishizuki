@@ -20,6 +20,10 @@ public final class APIServer: @unchecked Sendable {
 
   /// Every pack this server could serve. A request naming one of these swaps to it.
   public private(set) var catalog: ModelCatalog
+  /// Where `catalog` is rescanned from before anything reads it, so a pack quantized or pulled
+  /// after this server started is still found. Empty means the catalog passed to `init` is all
+  /// there is, which is what a caller that never scanned a filesystem (a test, say) wants.
+  private let catalogRoots: [URL]
   public let stats = ServeStats()
 
   private var loaded: BonsaiModel?
@@ -39,6 +43,7 @@ public final class APIServer: @unchecked Sendable {
     budget: MemoryBudget? = nil,
     prefixStore: PrefixStore? = nil,
     catalog: ModelCatalog = ModelCatalog(entries: []),
+    catalogRoots: [URL] = [],
     preload: Bool = true,
     hot: Bool = false
   ) throws {
@@ -46,6 +51,7 @@ public final class APIServer: @unchecked Sendable {
     self.politeness = politeness
     self.ropeScaling = ropeScaling
     self.catalog = catalog
+    self.catalogRoots = catalogRoots
     self.directory = directory
     self.template = try ChatTemplate(directory: directory)
     self.modelName = modelName
@@ -113,6 +119,7 @@ public final class APIServer: @unchecked Sendable {
   /// longer matched rather than discarded.
   public func activate(_ id: String) throws {
     guard id != modelName else { return }
+    refreshCatalog()
     guard let entry = catalog[id] else {
       throw BonsaiError.missingComponent(
         "no pack named '\(id)'; this server offers "
@@ -143,10 +150,17 @@ public final class APIServer: @unchecked Sendable {
   /// Honours a request that names a pack other than the loaded one. Names that match nothing in
   /// the catalog are ignored, so a client sending its own alias keeps working.
   func activateIfRequested(_ requested: String?) {
-    guard let requested, !requested.isEmpty, requested != modelName,
-      catalog[requested] != nil
-    else { return }
+    guard let requested, !requested.isEmpty, requested != modelName else { return }
+    refreshCatalog()
+    guard catalog[requested] != nil else { return }
     do { try activate(requested) } catch { log?("model: \(error)") }
+  }
+
+  /// Rescans `catalogRoots`, so a pack that appeared on disk after this server started is
+  /// listed and can be switched to without a restart. A no-op when nothing was given to scan.
+  private func refreshCatalog() {
+    guard !catalogRoots.isEmpty else { return }
+    catalog = ModelCatalog.discover(in: catalogRoots)
   }
 
   @discardableResult
@@ -195,6 +209,7 @@ public final class APIServer: @unchecked Sendable {
       writer.send(json: ["status": "ok", "model": modelName])
     case ("GET", "/v1/models"):
       // Every pack on the machine, so a client can offer the choice rather than be told one.
+      refreshCatalog()
       var data: [[String: Any]] = catalog.entries.map { entry in
         [
           "id": entry.id, "object": "model", "owned_by": "prism-ml",
@@ -317,30 +332,30 @@ public final class APIServer: @unchecked Sendable {
 
     let result = try withError { box in
       generator.generate(
-      promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
-      cache: cache, promptEmbeddings: embeddings, positions: positions,
-      cachedPrefixLength: reused,
-      constraint: constraint,
-      isCancelled: { box.firstError != nil || isCancelled?() == true },
-      onProgress: { [stats = self.stats] progress in
-        switch progress {
-        case .prefill(let done, let total):
-          stats.enter(id, phase: .prefill)
-          stats.update(id) { record in
-            record.prefilled = done
-            record.prefillTotal = total
+        promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
+        cache: cache, promptEmbeddings: embeddings, positions: positions,
+        cachedPrefixLength: reused,
+        constraint: constraint,
+        isCancelled: { box.firstError != nil || isCancelled?() == true },
+        onProgress: { [stats = self.stats] progress in
+          switch progress {
+          case .prefill(let done, let total):
+            stats.enter(id, phase: .prefill)
+            stats.update(id) { record in
+              record.prefilled = done
+              record.prefillTotal = total
+            }
+          case .decode(let count):
+            stats.enter(id, phase: .decode)
+            stats.update(id) { record in record.generated = count }
           }
-        case .decode(let count):
-          stats.enter(id, phase: .decode)
-          stats.update(id) { record in record.generated = count }
         }
+      ) { fragment in
+        if let onText, let visible = filter.push(fragment), !visible.isEmpty {
+          onText(visible)
+        }
+        return true
       }
-    ) { fragment in
-      if let onText, let visible = filter.push(fragment), !visible.isEmpty {
-        onText(visible)
-      }
-      return true
-    }
     }
     if let onText, !result.cancelled, let tail = filter.flush(), !tail.isEmpty {
       onText(tail)
@@ -471,7 +486,8 @@ public final class APIServer: @unchecked Sendable {
 
     let incoming = body["messages"] as? [[String: Any]] ?? []
 
-    let systemParts = incoming
+    let systemParts =
+      incoming
       .filter { $0["role"] as? String == "system" }
       .map { stringContent($0["content"]) }
       .filter { !$0.isEmpty }
