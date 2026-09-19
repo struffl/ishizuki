@@ -16,6 +16,7 @@ struct Ishizuki: ParsableCommand {
       BatchCheck.self, KernelCheck.self, ANECheck.self,
       ContextBench.self, KVBench.self, PrefillBench.self, SpecBench.self, Verify.self,
       VerifyLogits.self,
+      VerifyGGUF.self,
     ])
 
   static func main() {
