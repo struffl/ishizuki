@@ -211,6 +211,7 @@ struct Launch: ParsableCommand {
         weights: MemoryBudget.weightBytes(in: modelURL) ?? MemoryBudget.defaultWeights,
         bufferCache: cacheLimitGB.map { Int($0 * 1_073_741_824) }),
       catalog: catalog,
+      catalogRoots: modelSearchRoots,
       preload: true)
     server.log = { _ in }
     try server.listen(port: port)

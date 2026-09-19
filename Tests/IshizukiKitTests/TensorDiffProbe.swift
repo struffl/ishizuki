@@ -62,7 +62,8 @@ struct TensorDiffProbe {
       }
       let d = mine - theirs
       let error =
-        sqrt((d * d).sum()).item(Float.self) / max(sqrt((theirs * theirs).sum()).item(Float.self), 1e-9)
+        sqrt((d * d).sum()).item(Float.self)
+        / max(sqrt((theirs * theirs).sum()).item(Float.self), 1e-9)
       lines.append(String(format: "%-72@ rel %.4f", target as NSString, error))
     }
     FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))

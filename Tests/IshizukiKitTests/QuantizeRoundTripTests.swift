@@ -204,7 +204,8 @@ struct QuantizeRoundTripTests {
     try config.validate()
   }
 
-  @Test("the measured bpw lands under the profile's target, except for the embedding and head floor")
+  @Test(
+    "the measured bpw lands under the profile's target, except for the embedding and head floor")
   func respectsBudget() throws {
     let root = temp()
     defer { try? FileManager.default.removeItem(at: root) }

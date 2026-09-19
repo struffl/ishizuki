@@ -96,13 +96,16 @@ struct QuantizerTests {
     #expect(result.achievedBpw <= 3.6)
   }
 
-  @Test("the embedding and the head are floored even when a crowd of small wins spends the budget first")
+  @Test(
+    "the embedding and the head are floored even when a crowd of small wins spends the budget first"
+  )
   func pinsEmbeddingAndHead() {
     // Huge, so one lift for either would blow the whole budget if the auction ever reached them —
     // and it never does, because a swarm of tiny modules with a slightly better per-byte value
     // wins every round first.
     var modules = [
-      measurement("language_model.model.embed_tokens.weight", elements: 1 << 24, errors: [3: 0.19, 4: 0.09]),
+      measurement(
+        "language_model.model.embed_tokens.weight", elements: 1 << 24, errors: [3: 0.19, 4: 0.09]),
       measurement("language_model.lm_head.weight", elements: 1 << 24, errors: [3: 0.19, 4: 0.09]),
     ]
     for i in 0..<64 {
@@ -133,12 +136,15 @@ struct TensorNamingTests {
     ]
     #expect(TensorNaming.isHuggingFaceLayout(names))
     let mapped = TensorNaming.map(names)
-    #expect(mapped["model.language_model.embed_tokens.weight"] == "language_model.model.embed_tokens.weight")
+    #expect(
+      mapped["model.language_model.embed_tokens.weight"]
+        == "language_model.model.embed_tokens.weight")
     #expect(
       mapped["model.language_model.layers.0.self_attn.q_proj.weight"]
         == "language_model.model.layers.0.self_attn.q_proj.weight")
     #expect(mapped["model.language_model.norm.weight"] == "language_model.model.norm.weight")
-    #expect(mapped["model.visual.blocks.0.attn.qkv.weight"] == "vision_tower.blocks.0.attn.qkv.weight")
+    #expect(
+      mapped["model.visual.blocks.0.attn.qkv.weight"] == "vision_tower.blocks.0.attn.qkv.weight")
     #expect(mapped["lm_head.weight"] == "language_model.lm_head.weight")
     #expect(mapped["mtp.fc.weight"] == "language_model.mtp.fc.weight")
     #expect(

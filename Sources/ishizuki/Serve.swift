@@ -121,16 +121,22 @@ struct Serve: ParsableCommand {
     let level = Politeness.Level(rawValue: politeness) ?? .adaptive
     Politeness.apply(level)
 
-    let modelURL = URL(filePath: resolvedModelPath(model, repo: repo))
+    // A name already in the catalog — from `quantize`, `pull`, or a prior run — is resolved
+    // there first, the same way `launch` picks a pack. Left at its default, --model still goes
+    // through the path below so a first run with nothing downloaded yet still self-heals.
+    let catalog = ModelCatalog.discover(in: modelSearchRoots)
+    let chosen = model == defaultModelPath ? nil : catalog[model]
+
+    let modelURL = chosen?.directory ?? URL(filePath: resolvedModelPath(model, repo: repo))
     try neural.apply(pack: modelURL)
-    if !offline {
+    if chosen == nil, !offline {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
 
     // Naming the active pack as the catalog does is what lets a client switch to it by name.
-    let catalog = ModelCatalog.discover(in: modelSearchRoots)
     let activeName =
       servedName
+      ?? chosen?.id
       ?? catalog.entries.first { $0.directory.standardizedFileURL == modelURL.standardizedFileURL }?
       .id
       ?? modelURL.lastPathComponent
@@ -164,6 +170,7 @@ struct Serve: ParsableCommand {
           minimumTokens: prefixCacheMinimum)
         : nil,
       catalog: catalog,
+      catalogRoots: modelSearchRoots,
       preload: hot || !lazyLoad,
       hot: hot)
 

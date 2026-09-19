@@ -12,7 +12,9 @@ public enum ModelDownloader {
     let sha256: String
   }
 
-  static let essentials = ["config.json", "model.safetensors", "tokenizer.json", "chat_template.jinja"]
+  static let essentials = [
+    "config.json", "model.safetensors", "tokenizer.json", "chat_template.jinja",
+  ]
 
   public static func ensure(
     directory: URL,
@@ -68,7 +70,9 @@ public enum ModelDownloader {
     URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(name)")!
   }
 
-  private static func fetchTree(repo: String, revision: String, token: String?) throws -> [String: Entry] {
+  private static func fetchTree(repo: String, revision: String, token: String?) throws -> [String:
+    Entry]
+  {
     let url = URL(string: "https://huggingface.co/api/models/\(repo)/tree/\(revision)?recursive=1")!
     let data = try get(url, token: token)
     guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
@@ -76,7 +80,9 @@ public enum ModelDownloader {
     }
     var entries: [String: Entry] = [:]
     for item in array {
-      guard (item["type"] as? String) == "file", let path = item["path"] as? String else { continue }
+      guard (item["type"] as? String) == "file", let path = item["path"] as? String else {
+        continue
+      }
       let lfs = item["lfs"] as? [String: Any]
       let size = (lfs?["size"] as? Int) ?? (item["size"] as? Int) ?? 0
       entries[path] = Entry(size: size, sha256: lfs?["oid"] as? String ?? "")
@@ -89,7 +95,9 @@ public enum ModelDownloader {
 
   private static func essentialsPresent(_ directory: URL) -> Bool {
     essentials.allSatisfy { name in
-      let size = (try? FileManager.default.attributesOfItem(atPath: directory.appending(path: name).path)[.size] as? Int) ?? nil
+      let size =
+        (try? FileManager.default.attributesOfItem(atPath: directory.appending(path: name).path)[
+          .size] as? Int) ?? nil
       return (size ?? 0) > 0
     }
   }
@@ -111,7 +119,8 @@ public enum ModelDownloader {
     try FileManager.default.createDirectory(
       at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-    var offset = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? Int) ?? nil ?? 0
+    var offset =
+      (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? Int) ?? nil ?? 0
     if offset > entry.size {
       try? FileManager.default.removeItem(at: part)
       offset = 0
@@ -119,15 +128,18 @@ public enum ModelDownloader {
 
     if offset < entry.size {
       let url = fileURL(repo, revision, name)
-      var attempt = download(url: url, part: part, offset: offset, total: entry.size, token: token, label: name)
+      var attempt = download(
+        url: url, part: part, offset: offset, total: entry.size, token: token, label: name)
       if attempt.status == 416, offset > 0 {
         try? FileManager.default.removeItem(at: part)
-        attempt = download(url: url, part: part, offset: 0, total: entry.size, token: token, label: name)
+        attempt = download(
+          url: url, part: part, offset: 0, total: entry.size, token: token, label: name)
       }
       if let error = attempt.error { throw error }
     }
 
-    let written = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? Int) ?? nil ?? -1
+    let written =
+      (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? Int) ?? nil ?? -1
     guard written == entry.size else {
       throw BonsaiError.missingComponent("\(name): expected \(entry.size) bytes, got \(written)")
     }
@@ -165,7 +177,8 @@ public enum ModelDownloader {
       if let error {
         box.result = .failure(error)
       } else if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-        box.result = .failure(BonsaiError.missingComponent("HTTP \(http.statusCode) for \(url.lastPathComponent)"))
+        box.result = .failure(
+          BonsaiError.missingComponent("HTTP \(http.statusCode) for \(url.lastPathComponent)"))
       } else {
         box.result = .success(data ?? Data())
       }
