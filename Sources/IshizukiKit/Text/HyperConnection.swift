@@ -7,6 +7,21 @@ import Foundation
 import MLX
 import MLXNN
 
+/// RMS over each stream on its own, then the whole width scaled by one weight.
+///
+/// The streams are normalised apart so that one of them running hot cannot quieten the others,
+/// which is the whole point of carrying more than one. The arithmetic is float32: these values
+/// are summed the depth of the model and the widths are small enough that narrowing buys nothing.
+func groupedRMSNorm(
+  _ x: MLXArray, weight: MLXArray, groups: Int, width: Int, eps: Float
+) -> MLXArray {
+  let leading = Array(x.shape.dropLast())
+  let grouped = x.reshaped(leading + [groups, width]).asType(.float32)
+  let scaled = grouped * rsqrt(grouped.square().mean(axis: -1, keepDims: true) + eps)
+  let weighted = scaled.reshaped(leading + [groups * width]) * weight.asType(.float32)
+  return weighted.asType(x.dtype)
+}
+
 /// The residual stream, widened.
 ///
 /// A plain decoder layer reads one stream and adds to it. This reads `count` of them, mixes them
@@ -49,11 +64,7 @@ public struct GatedResidual: @unchecked Sendable {
   /// streams are summed many times over a deep model and the widths here are small enough that
   /// keeping them narrow buys nothing.
   func normalized(_ streams: MLXArray) -> MLXArray {
-    let leading = Array(streams.shape.dropLast())
-    let grouped = streams.reshaped(leading + [count, width]).asType(.float32)
-    let scaled = grouped * rsqrt(grouped.square().mean(axis: -1, keepDims: true) + eps)
-    let weighted = scaled.reshaped(leading + [count * width]) * norm.asType(.float32)
-    return weighted.asType(streams.dtype)
+    groupedRMSNorm(streams, weight: norm, groups: count, width: width, eps: eps)
   }
 
   /// Opens the streams for one block: what it should read, and what it will need to write back.
