@@ -13,7 +13,11 @@ struct Quantize: ParsableCommand {
   @Option(name: .long, help: "Full-precision checkpoint to quantize. Omit to pick from a list.")
   var source: String?
 
-  @Option(name: .long, help: "Where to write the pack.")
+  @Option(
+    name: .long,
+    help:
+      "Where to write the pack. Omit to name it after the source and the profile, beside the models ishizuki pulls."
+  )
   var output: String?
 
   @Option(name: .long, help: "tiny, small, balanced or quality. Omit to choose from a list.")
@@ -41,8 +45,10 @@ struct Quantize: ParsableCommand {
   func run() throws {
     let picked = try resolveSource()
     let sourceURL = picked.directory
-    // A HuggingFace checkout is a revision hash on disk; the repo name is what to call it.
-    let sourceName = picked.name.replacingOccurrences(of: "/", with: "--")
+    // A HuggingFace checkout is a revision hash on disk; the repo name is what to call it, and
+    // without its owner, so a pack sits in the models directory under the same kind of name as
+    // the ones `pull` puts there.
+    let sourceName = (picked.name as NSString).lastPathComponent
     let chosen = try resolveProfile()
     let profile =
       groupSize == chosen.groupSize
