@@ -143,12 +143,14 @@ public final class SpeculativeDecoder: @unchecked Sendable {
     let hiddenDrafter = drafter as? HiddenStateDrafter
     var observed: (hidden: MLXArray, following: [Int])?
 
-    func forward(_ tokens: [Int]) -> MLXArray {
+    // Only a draft block needs logits at every position, to check the proposals against. The
+    // vocabulary projection is the widest matmul in the model, so everything else takes it once.
+    func forward(_ tokens: [Int], allPositions: Bool = false) -> MLXArray {
       let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
       let h = model.text.trunk(inputs: ids, cache: cache)
-      let out = model.text.lmHead(model.text.normed(h))
       if hiddenDrafter != nil { observed = (h, Array(tokens.dropFirst())) }
-      return out
+      let normed = model.text.normed(h)
+      return allPositions ? model.text.lmHead(normed) : model.text.lastLogits(normed)
     }
 
     // The span just run is handed over once its trailing token is known, which keeps the draft
@@ -195,7 +197,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
       let snapshot = cache.snapshot()
 
       let block = [confirmed] + draft
-      let blockLogits = forward(block)
+      let blockLogits = forward(block, allPositions: true)
       eval(blockLogits)
 
       let predictions = blockLogits[0].argMax(axis: -1).asArray(Int32.self)
