@@ -3,6 +3,7 @@
 
 import Foundation
 import MLX
+import MLXRandom
 import Testing
 
 @testable import IshizukiKit
@@ -86,5 +87,66 @@ struct GGMLKernelTests {
     let blocks = MLXArray([UInt8](repeating: 0, count: 64))
     #expect(GGMLKernels.dequantize(blocks: blocks, type: .f32, shape: [16]) == nil)
     #expect(GGMLKernels.dequantize(blocks: blocks, type: .q3_K, shape: [256]) == nil)
+  }
+}
+
+/// The fused matvec against the same decode it is built from, expanded and multiplied the
+/// ordinary way. A kernel that walks blocks or rows wrongly still returns numbers of the right
+/// magnitude, so the comparison is per output element against the term-by-term bound.
+@Suite("GGML matvec")
+struct GGMLMatvecTests {
+  /// Bit 6 is cleared in every byte so that no two of them can line up as an fp16 with a
+  /// saturated exponent. A block scale of infinity would make both sides of the comparison
+  /// NaN and prove nothing; the decode itself is already pinned to ggml over the full byte
+  /// range by the dequantization suite.
+  private func blocks(_ type: GGMLType, rows: Int, k: Int, seed: UInt64) -> [UInt8] {
+    var state = seed
+    let count = rows * (k / type.blockSize) * type.typeSize
+    return (0..<count).map { _ in
+      state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+      return UInt8((state >> 33) & 0xbf)
+    }
+  }
+
+  @Test("the fused matvec matches expanding the weight and multiplying")
+  func matchesExpandedMatmul() throws {
+    let types: [GGMLType] = [
+      .q2_K, .q4_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+    ]
+    let k = 512
+    let rows = 17
+
+    for type in types {
+      let raw = MLXArray(blocks(type, rows: rows, k: k, seed: 0x5EED))
+      let weight = try #require(
+        GGMLKernels.dequantize(blocks: raw, type: type, shape: [rows, k], dtype: .float32))
+
+      for m in GGMLKernels.matvecBatch {
+        let x = MLXRandom.normal([m, k]).asType(.float32)
+        let expected = matmul(x, weight.T)
+        let actual = try #require(
+          GGMLKernels.matvec(x, blocks: raw, type: type, outputDim: rows))
+        eval(expected, actual)
+
+        // Cancellation between large terms makes the result's own magnitude a bad yardstick,
+        // so each element is judged against the sum of the magnitudes that formed it.
+        let bound = matmul(abs(x), abs(weight).T)
+        let error = abs(actual - expected) / maximum(bound, MLXArray(Float(1e-6)))
+        eval(error)
+        let worst = error.max().item(Float.self)
+        #expect(worst < 1e-5, "\(type.name) at batch \(m): worst relative term error \(worst)")
+      }
+    }
+  }
+
+  @Test("a batch the fused path does not cover falls back")
+  func refusesWideBatch() {
+    let type = GGMLType.iq2_xs
+    let raw = MLXArray(blocks(type, rows: 4, k: 256, seed: 1))
+    let wide = MLXRandom.normal([8, 256])
+    #expect(GGMLKernels.matvec(wide, blocks: raw, type: type, outputDim: 4) == nil)
+
+    let ragged = MLXRandom.normal([1, 100])
+    #expect(GGMLKernels.matvec(ragged, blocks: raw, type: type, outputDim: 4) == nil)
   }
 }

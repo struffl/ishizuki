@@ -42,12 +42,13 @@ enum GGMLGrids {
   #endif
 }
 
-/// Expands a tensor's GGML blocks on the GPU.
+/// Runs a tensor's GGML blocks on the GPU, either expanded or folded into a matvec.
 ///
-/// A block is self-contained — its scales live in its own bytes — so one thread owns one
-/// super-block and no thread reads another's state. That makes the dequantizer a plain map,
-/// and it is the same decode the fused matvec will inline rather than a second description
-/// of the format.
+/// A block is self-contained — its scales live in its own bytes — so nothing is shared between
+/// threads and decoding is a plain map. Both kernels are built from the same decode chain,
+/// differing only in what they do with each decoded value: the dequantizer stores it, the
+/// matvec multiplies it into the running dot product and never writes the weight down. A
+/// format read two ways is a format that can be read two different ways, so there is one.
 public enum GGMLKernels {
   /// Blocks as raw bytes to a dense array of `shape`. Nil when Metal is unavailable or the
   /// type has no decoder, so callers fall back to the CPU reference.
@@ -55,7 +56,7 @@ public enum GGMLKernels {
     blocks: MLXArray, type: GGMLType, shape: [Int], dtype: DType = .bfloat16
   ) -> MLXArray? {
     #if canImport(Metal)
-      guard let kernel, GGMLDequant.supported.contains(type), type.isQuantized else {
+      guard let dequantKernel, GGMLDequant.supported.contains(type), type.isQuantized else {
         return nil
       }
       let count = shape.reduce(1, *)
@@ -65,7 +66,7 @@ public enum GGMLKernels {
 
       let threads = 256
       let groups = (blockCount + threads - 1) / threads
-      let outputs = kernel(
+      let outputs = dequantKernel(
         [blocks] + GGMLGrids.buffers + [blockCount],
         template: [
           ("OT", dtype),
@@ -83,8 +84,49 @@ public enum GGMLKernels {
     #endif
   }
 
+  /// How many rows of `x` one matvec launch will carry. Past this the decode is paid once per
+  /// row rather than once per block, and expanding the weight for a real matmul wins.
+  public static let matvecBatch = 1...4
+
+  /// `x [M, K]` against the blocks of `w [N, K]`, without ever materialising `w`.
+  public static func matvec(
+    _ x: MLXArray, blocks: MLXArray, type: GGMLType, outputDim: Int
+  ) -> MLXArray? {
+    #if canImport(Metal)
+      guard let matvecKernel, GGMLDequant.supported.contains(type), type.isQuantized else {
+        return nil
+      }
+      guard x.ndim == 2 else { return nil }
+      let m = x.dim(0)
+      let k = x.dim(1)
+      guard matvecBatch.contains(m), k % type.blockSize == 0, outputDim > 0 else { return nil }
+      let rowBytes = k / type.blockSize * type.typeSize
+      guard blocks.size >= outputDim * rowBytes else { return nil }
+
+      let lanes = 32
+      let threads = 256
+      let groups = (outputDim * lanes + threads - 1) / threads
+      let outputs = matvecKernel(
+        [x, blocks] + GGMLGrids.buffers + [k, outputDim],
+        template: [
+          ("IT", x.dtype),
+          ("qtype", Int(type.rawValue)),
+          ("block_bytes", type.typeSize),
+          ("block_elems", type.blockSize),
+          ("vecs", m),
+        ],
+        grid: (groups * threads, 1, 1),
+        threadGroup: (threads, 1, 1),
+        outputShapes: [[m, outputDim]],
+        outputDTypes: [x.dtype])
+      return outputs[0]
+    #else
+      return nil
+    #endif
+  }
+
   #if canImport(Metal)
-    private static let kernel: MLXFast.MLXFastKernel? = {
+    private static let dequantKernel: MLXFast.MLXFastKernel? = {
       MLXFast.metalKernel(
         name: "ggml_dequantize",
         inputNames: [
@@ -92,14 +134,30 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "n_blocks",
         ],
         outputNames: ["y"],
-        source: source)
+        source: macros + dequantProlog + decodeChain)
     }()
 
-    private static let source = """
+    private static let matvecKernel: MLXFast.MLXFastKernel? = {
+      MLXFast.metalKernel(
+        name: "ggml_matvec",
+        inputNames: [
+          "x", "w", "g_iq2xxs", "g_iq2xs", "g_iq2s", "g_iq1s", "g_iq3xxs", "g_iq3s",
+          "ksigns", "kvalues", "K", "N",
+        ],
+        outputNames: ["y"],
+        source: macros + matvecProlog + decodeChain + matvecEpilog)
+    }()
+
+    private static let macros = """
           #define GGML_HALF(p) ((float)as_type<half>(*(device const ushort *)(p)))
           #define GGML_SIGN(s, j) (((s) & (1 << (j))) ? -1.0f : 1.0f)
-          #define GGML_U32(p) ((uint)(p)[0] | ((uint)(p)[1] << 8) \
+          #define GGML_U32(p) ((uint)(p)[0] | ((uint)(p)[1] << 8) \\
                               | ((uint)(p)[2] << 16) | ((uint)(p)[3] << 24))
+
+      """
+
+    private static let dequantProlog = """
+          #define GGML_EMIT(i, v) y[base + (i)] = (OT)(v)
 
           uint bi = thread_position_in_grid.x;
           if (bi >= (uint)n_blocks) { return; }
@@ -108,6 +166,41 @@ public enum GGMLKernels {
           const int base = bi * block_elems;
           int o = 0;
 
+      """
+
+    private static let matvecProlog = """
+          #define GGML_EMIT(i, v) { const float _v = (float)(v); \\
+              for (int _m = 0; _m < vecs; ++_m) { acc[_m] += _v * (float)xrow[_m * K + (i)]; } }
+
+          const uint gid = thread_position_in_grid.x;
+          const uint row = gid / 32;
+          const uint lane = gid % 32;
+          if (row >= (uint)N) { return; }
+
+          const int nblk = K / block_elems;
+          const ulong row_bytes = (ulong)nblk * block_bytes;
+
+          float acc[vecs];
+          for (int _m = 0; _m < vecs; ++_m) { acc[_m] = 0.0f; }
+
+          for (int blk = (int)lane; blk < nblk; blk += 32) {
+              device const uchar *b = w + (ulong)row * row_bytes + (ulong)blk * block_bytes;
+              device const IT *xrow = x + blk * block_elems;
+              int o = 0;
+
+      """
+
+    private static let matvecEpilog = """
+
+          }
+
+          for (int _m = 0; _m < vecs; ++_m) {
+              const float total = simd_sum(acc[_m]);
+              if (lane == 0) { y[_m * N + row] = (IT)total; }
+          }
+      """
+
+    private static let decodeChain = """
           if (qtype == 10) {
               const float d = GGML_HALF(b + 80);
               const float dmin = GGML_HALF(b + 82);
@@ -122,7 +215,7 @@ public enum GGMLKernels {
                           const float ml = dmin * (float)(sc >> 4);
                           for (int l = 0; l < 16; ++l) {
                               const uchar q = b[q0 + 16 * lane + l];
-                              y[base + o++] = (OT)(dl * (float)((q >> shift) & 3) - ml);
+                              GGML_EMIT(o, dl * (float)((q >> shift) & 3) - ml); o++;
                           }
                       }
                       shift += 2;
@@ -145,8 +238,8 @@ public enum GGMLKernels {
                   const float d2 = d * (float)s2, mm2 = dmin * (float)m2;
                   device const uchar *q = b + 16 + 32 * j;
                   for (int l = 0; l < 32; ++l) {
-                      y[base + o + l]      = (OT)(d1 * (float)(q[l] & 0xF) - mm1);
-                      y[base + o + 32 + l] = (OT)(d2 * (float)(q[l] >> 4) - mm2);
+                      GGML_EMIT(o + l, d1 * (float)(q[l] & 0xF) - mm1);
+                      GGML_EMIT(o + 32 + l, d2 * (float)(q[l] >> 4) - mm2);
                   }
                   o += 64;
               }
@@ -159,8 +252,8 @@ public enum GGMLKernels {
                   const float dl = d * (float)((lo | hi) - 32);
                   device const uchar *q = b + 8 + 16 * ib;
                   for (int j = 0; j < 16; ++j) {
-                      y[base + o + j]      = (OT)(dl * (float)kvalues[q[j] & 0xF]);
-                      y[base + o + 16 + j] = (OT)(dl * (float)kvalues[q[j] >> 4]);
+                      GGML_EMIT(o + j, dl * (float)kvalues[q[j] & 0xF]);
+                      GGML_EMIT(o + 16 + j, dl * (float)kvalues[q[j] >> 4]);
                   }
                   o += 32;
               }
@@ -174,7 +267,7 @@ public enum GGMLKernels {
                       device const int8_t *g = g_iq2xxs + 8 * (int)((a1 >> (8 * l)) & 0xFF);
                       const uchar s = ksigns[(a2 >> (7 * l)) & 127];
                       for (int j = 0; j < 8; ++j) {
-                          y[base + o + j] = (OT)(db * (float)g[j] * GGML_SIGN(s, j));
+                          GGML_EMIT(o + j, db * (float)g[j] * GGML_SIGN(s, j));
                       }
                       o += 8;
                   }
@@ -191,7 +284,7 @@ public enum GGMLKernels {
                       const uchar s = ksigns[q >> 9];
                       const float db = (l < 2) ? db0 : db1;
                       for (int j = 0; j < 8; ++j) {
-                          y[base + o + j] = (OT)(db * (float)g[j] * GGML_SIGN(s, j));
+                          GGML_EMIT(o + j, db * (float)g[j] * GGML_SIGN(s, j));
                       }
                       o += 8;
                   }
@@ -209,7 +302,7 @@ public enum GGMLKernels {
                       const uchar s = b[34 + 4 * ib + l];
                       const float db = (l < 2) ? db0 : db1;
                       for (int j = 0; j < 8; ++j) {
-                          y[base + o + j] = (OT)(db * (float)g[j] * GGML_SIGN(s, j));
+                          GGML_EMIT(o + j, db * (float)g[j] * GGML_SIGN(s, j));
                       }
                       o += 8;
                   }
@@ -224,8 +317,8 @@ public enum GGMLKernels {
                       device const int8_t *g1 = g_iq3xxs + 4 * (int)b[2 + 8 * ib + 2 * l];
                       device const int8_t *g2 = g_iq3xxs + 4 * (int)b[2 + 8 * ib + 2 * l + 1];
                       for (int j = 0; j < 4; ++j) {
-                          y[base + o + j]     = (OT)(db * (float)g1[j] * GGML_SIGN(s, j));
-                          y[base + o + 4 + j] = (OT)(db * (float)g2[j] * GGML_SIGN(s, j + 4));
+                          GGML_EMIT(o + j, db * (float)g1[j] * GGML_SIGN(s, j));
+                          GGML_EMIT(o + 4 + j, db * (float)g2[j] * GGML_SIGN(s, j + 4));
                       }
                       o += 8;
                   }
@@ -246,8 +339,8 @@ public enum GGMLKernels {
                           device const int8_t *g2 = g_iq3s + 4 * ((int)q[2 * l + 1] | ((qh << (7 - 2 * l)) & 256));
                           const uchar s = sg[l];
                           for (int j = 0; j < 4; ++j) {
-                              y[base + o + j]     = (OT)(db * (float)g1[j] * GGML_SIGN(s, j));
-                              y[base + o + 4 + j] = (OT)(db * (float)g2[j] * GGML_SIGN(s, j + 4));
+                              GGML_EMIT(o + j, db * (float)g1[j] * GGML_SIGN(s, j));
+                              GGML_EMIT(o + 4 + j, db * (float)g2[j] * GGML_SIGN(s, j + 4));
                           }
                           o += 8;
                       }
@@ -263,7 +356,7 @@ public enum GGMLKernels {
                       const int idx = (int)b[2 + 4 * ib + l] | (((qh >> (3 * l)) & 7) << 8);
                       device const int8_t *g = g_iq1s + 8 * idx;
                       for (int j = 0; j < 8; ++j) {
-                          y[base + o + j] = (OT)(dl * ((float)g[j] + delta));
+                          GGML_EMIT(o + j, dl * ((float)g[j] + delta));
                       }
                       o += 8;
                   }
@@ -295,7 +388,7 @@ public enum GGMLKernels {
                       device const int8_t *g = g_iq1s + 8 * idx[l];
                       const float dl = (l < 2) ? dl1 : dl2;
                       for (int j = 0; j < 8; ++j) {
-                          y[base + o + j] = (OT)(dl * ((float)g[j] + dt[l]));
+                          GGML_EMIT(o + j, dl * ((float)g[j] + dt[l]));
                       }
                       o += 8;
                   }
