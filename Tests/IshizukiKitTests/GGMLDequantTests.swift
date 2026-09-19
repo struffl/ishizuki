@@ -60,7 +60,7 @@ struct GGMLDequantTests {
   @Test("every block type reproduces ggml's own to_float bit for bit")
   func matchesGGML() throws {
     let cases = try Self.loadReference()
-    #expect(cases.count == 13)
+    #expect(cases.count == 14)
 
     var seen: Set<GGMLType> = []
     for testCase in cases {
