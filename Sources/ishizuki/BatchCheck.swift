@@ -37,7 +37,7 @@ struct BatchCheck: ParsableCommand {
     var singleLogits: [MLXArray] = []
     let singleStart = Date()
     for tokens in encoded {
-      let cache = bonsai.text.makeCache()
+      let cache = bonsai.text.makeCache(kvConfig: .full)
       let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, length])
       let logits = bonsai.text(ids, cache: cache)
       eval(logits)
@@ -46,7 +46,7 @@ struct BatchCheck: ParsableCommand {
     let singleSeconds = -singleStart.timeIntervalSinceNow
 
     let batchStart = Date()
-    let batchCache = bonsai.text.makeCache()
+    let batchCache = bonsai.text.makeCache(kvConfig: .full)
     let batchIds = MLXArray(encoded.flatMap { $0 }.map { Int32($0) })
       .reshaped([count, length])
     let batchLogits = bonsai.text(batchIds, cache: batchCache)
@@ -79,7 +79,7 @@ struct BatchCheck: ParsableCommand {
     }
     let batchDecodeSeconds = -decodeBatchStart.timeIntervalSinceNow
 
-    let singleCache = bonsai.text.makeCache()
+    let singleCache = bonsai.text.makeCache(kvConfig: .full)
     let warm = bonsai.text(
       MLXArray(encoded[0].map { Int32($0) }).reshaped([1, length]), cache: singleCache)
     eval(warm)

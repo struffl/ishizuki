@@ -222,7 +222,7 @@ struct PrefillBench: ParsableCommand {
 
     let tokens = MLXArray(Array(repeating: Int32(1), count: chunk)).reshaped([1, chunk])
     let measured = time(2) {
-      let cache = bonsai.text.makeCache()
+      let cache = bonsai.text.makeCache(kvConfig: .full)
       eval(bonsai.text.hidden(inputs: tokens, cache: cache))
     }
 

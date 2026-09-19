@@ -22,7 +22,7 @@ struct VerifyLogits: ParsableCommand {
     let bonsai = try BonsaiModel(directory: URL(filePath: model), loadVision: false)
     print(String(format: "loaded in %.1fs", -start.timeIntervalSinceNow))
 
-    let cache = bonsai.text.makeCache()
+    let cache = bonsai.text.makeCache(kvConfig: .full)
     let logits = bonsai.text(inputIds, cache: cache)
     eval(logits)
 
