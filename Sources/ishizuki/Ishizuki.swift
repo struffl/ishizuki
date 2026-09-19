@@ -18,6 +18,7 @@ struct Ishizuki: ParsableCommand {
       VerifyLogits.self,
       VerifyGGUF.self,
       GGMLBench.self,
+      RepackExperts.self,
     ])
 
   static func main() {

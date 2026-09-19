@@ -26,12 +26,18 @@ struct StackedExperts: @unchecked Sendable {
   let groupSize: Int
   let bits: Int
 
+  init(weight: MLXArray, scales: MLXArray, biases: MLXArray, groupSize: Int, bits: Int) {
+    self.weight = weight
+    self.scales = scales
+    self.biases = biases
+    self.groupSize = groupSize
+    self.bits = bits
+  }
+
   init(store: WeightStore, prefix: String, quant: BonsaiConfig.ModuleQuant) throws {
-    self.weight = try store(prefix + ".weight")
-    self.scales = try store(prefix + ".scales")
-    self.biases = try store(prefix + ".biases")
-    self.groupSize = quant.groupSize
-    self.bits = quant.bits
+    self.init(
+      weight: try store(prefix + ".weight"), scales: try store(prefix + ".scales"),
+      biases: try store(prefix + ".biases"), groupSize: quant.groupSize, bits: quant.bits)
   }
 
   var expertCount: Int { weight.dim(0) }
@@ -43,15 +49,23 @@ struct StackedExperts: @unchecked Sendable {
   }
 }
 
+/// Where a layer's experts come from: all of them in memory, or a few of them at a time.
+protocol ExpertSource: Sendable {
+  var expertCount: Int { get }
+  /// Runs the chosen experts' SwiGLU over `x`, whose shape is the routed one the block builds.
+  func swiglu(_ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int) throws -> MLXArray
+}
+
 public final class MoEBlock: FeedForward, @unchecked Sendable {
   private let router: PackedLinear
-  private let gateExperts: StackedExperts
-  private let upExperts: StackedExperts
-  private let downExperts: StackedExperts
+  private let experts: any ExpertSource
+  private let groupSize: Int
+  private let bits: Int
   private let shared: MLP?
   private let sharedGate: PackedLinear?
   private let topK: Int
   private let normalizeWeights: Bool
+  private let layer: Int
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int, factory: PackedModuleFactory,
@@ -59,6 +73,7 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
   ) throws {
     let module = (path ?? "model.layers.\(layer)") + ".mlp"
     let prefix = factory.tensorPrefix + module
+    self.layer = layer
 
     guard let experts = config.numExperts, let used = config.numExpertsPerTok, experts > 0 else {
       throw BonsaiError.unsupportedModel("layer \(layer) is sparse but declares no experts")
@@ -73,16 +88,23 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     }
 
     let quant = factory.quant(for: module + ".switch_mlp.gate_proj")
-    self.gateExperts = try StackedExperts(
-      store: store, prefix: prefix + ".switch_mlp.gate_proj", quant: quant)
-    self.upExperts = try StackedExperts(
-      store: store, prefix: prefix + ".switch_mlp.up_proj", quant: quant)
-    self.downExperts = try StackedExperts(
-      store: store, prefix: prefix + ".switch_mlp.down_proj",
-      quant: factory.quant(for: module + ".switch_mlp.down_proj"))
-    guard gateExperts.expertCount == experts else {
+    self.groupSize = quant.groupSize
+    self.bits = quant.bits
+
+    if let streamed = store.experts(layer: layer) {
+      self.experts = StreamedExperts(store: streamed)
+    } else {
+      self.experts = try ResidentExperts(
+        gate: StackedExperts(
+          store: store, prefix: prefix + ".switch_mlp.gate_proj", quant: quant),
+        up: StackedExperts(store: store, prefix: prefix + ".switch_mlp.up_proj", quant: quant),
+        down: StackedExperts(
+          store: store, prefix: prefix + ".switch_mlp.down_proj",
+          quant: factory.quant(for: module + ".switch_mlp.down_proj")))
+    }
+    guard self.experts.expertCount == experts else {
       throw BonsaiError.shapeMismatch(
-        "layer \(layer) stacks \(gateExperts.expertCount) experts, not \(experts)")
+        "layer \(layer) holds \(self.experts.expertCount) experts, not \(experts)")
     }
 
     // A checkpoint may route without one, so the shared branch is taken only when it ships.
@@ -109,7 +131,14 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     // Sixteen experts are summed per token, so the weighting and the sum stay in float32 and
     // narrow once at the end. Folding the weights into the experts' own dtype first loses more
     // than it saves.
-    let routed = expert(x, chosen)
+    // A forward pass cannot throw, and an expert that failed to load has no sane stand-in:
+    // zeros would be a confident wrong answer rather than a stopped one.
+    let routed: MLXArray
+    do {
+      routed = try experts.swiglu(x, chosen: chosen, groupSize: groupSize, bits: bits)
+    } catch {
+      fatalError("layer \(layer) could not read the experts it routed to: \(error)")
+    }
     var y =
       (routed.asType(.float32) * scores.expandedDimensions(axis: -1))
       .sum(axis: -2)
@@ -120,12 +149,88 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     return y.asType(x.dtype)
   }
 
-  /// One SwiGLU per selected expert. The two extra axes are what `gatherQuantizedMM` reads the
-  /// token against each of its experts in turn.
-  private func expert(_ x: MLXArray, _ chosen: MLXArray) -> MLXArray {
+}
+
+/// Every expert in memory, which is what a machine with room for them should do.
+struct ResidentExperts: ExpertSource {
+  let gate: StackedExperts
+  let up: StackedExperts
+  let down: StackedExperts
+
+  var expertCount: Int { gate.expertCount }
+
+  /// The two extra axes are what `gatherQuantizedMM` reads a token against each of its experts.
+  func swiglu(_ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int) -> MLXArray {
     let batched = x.expandedDimensions(axes: [-2, -3])
-    let up = upExperts(batched, chosen)
-    let gate = gateExperts(batched, chosen)
-    return downExperts(silu(gate) * up, chosen).squeezed(axis: -2)
+    return down(silu(gate(batched, chosen)) * up(batched, chosen), chosen).squeezed(axis: -2)
+  }
+}
+
+/// The experts a token asked for, read into slots first.
+///
+/// Routing has to come back to the CPU here — the file cannot be read until the router has
+/// said what to read — so this is the one place a sparse layer stops being a pure graph.
+///
+/// A prefill chunk routes to far more experts than a decode step, and usually to every expert
+/// a layer has, so the tokens are run in groups that fit the slots rather than all at once.
+/// Grouping changes no arithmetic: a token is read against its own experts either way.
+struct StreamedExperts: ExpertSource {
+  let store: ExpertStore
+
+  var expertCount: Int { store.layout.expertCount }
+
+  func swiglu(_ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int) throws -> MLXArray {
+    eval(chosen)
+    let topK = chosen.dim(-1)
+    let width = x.dim(-1)
+    let leading = Array(x.shape.dropLast())
+    let rows = leading.reduce(1, *)
+    let asked = chosen.asArray(Int32.self).map(Int.init)
+
+    let flatX = x.reshaped([rows, width])
+    let flatChosen = chosen.reshaped([rows, topK])
+
+    var pieces: [MLXArray] = []
+    var start = 0
+    while start < rows {
+      var wanted: Set<Int> = []
+      var end = start
+      while end < rows {
+        let next = wanted.union(asked[(end * topK)..<((end + 1) * topK)])
+        if next.count > store.slotCount, end > start { break }
+        wanted = next
+        end += 1
+      }
+      let piece = try run(
+        flatX[start..<end], chosen: flatChosen[start..<end], groupSize: groupSize, bits: bits)
+      // The slots are one buffer read over and over, and a piece is only a view onto it until
+      // it is evaluated. Letting the next group land first would rewrite this group's weights
+      // underneath it.
+      eval(piece)
+      pieces.append(piece)
+      start = end
+    }
+
+    return concatenated(pieces, axis: 0).reshaped(leading + [topK, width])
+  }
+
+  /// One group of tokens, small enough that every expert they route to is in a slot at once.
+  private func run(
+    _ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int
+  ) throws -> MLXArray {
+    let slots = try store.residency(of: chosen.asArray(Int32.self).map(Int.init))
+    let placed = MLXArray(slots.map { Int32($0) }, chosen.shape)
+
+    func project(_ name: String, _ input: MLXArray) throws -> MLXArray {
+      gatherQuantizedMM(
+        input, try store.array(name + ".weight"),
+        scales: try store.array(name + ".scales"),
+        biases: try store.array(name + ".biases"),
+        rhsIndices: placed, transpose: true, groupSize: groupSize, bits: bits)
+    }
+
+    let batched = x.expandedDimensions(axes: [-2, -3])
+    let hidden = silu(try project("gate_proj", batched)) * (try project("up_proj", batched))
+    return try project("down_proj", hidden).squeezed(axis: -2)
   }
 }

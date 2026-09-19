@@ -22,17 +22,43 @@ public final class WeightStore: @unchecked Sendable {
   /// Tensors still in GGML blocks. A name appears here or in `arrays`, never both.
   public let ggmlArrays: [String: GGUFBlocks]
   public let valueHeadLayout: ValueHeadLayout
+  private let expertStores: [Int: ExpertStore]
 
   public init(
     arrays: [String: MLXArray], ggml: [String: GGUFBlocks] = [:],
-    valueHeadLayout: ValueHeadLayout = .grouped
+    valueHeadLayout: ValueHeadLayout = .grouped, experts: [Int: ExpertStore] = [:]
   ) {
     self.arrays = arrays
     self.ggmlArrays = ggml
     self.valueHeadLayout = valueHeadLayout
+    self.expertStores = experts
   }
 
   public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
+
+  /// The routed experts of one layer, when the pack keeps them beside itself rather than in
+  /// the shards. Nil means every expert is already in `arrays`.
+  public func experts(layer: Int) -> ExpertStore? { expertStores[layer] }
+
+  /// Opens the per-layer expert files a repacked sparse model ships, if there are any.
+  public func openingExperts(at directory: URL, slots: Int) throws -> WeightStore {
+    let layoutURL = directory.appending(path: ExpertRepack.layoutFile)
+    guard FileManager.default.fileExists(atPath: layoutURL.path) else { return self }
+    let layout = try JSONDecoder().decode(
+      ExpertLayout.self, from: try Data(contentsOf: layoutURL))
+
+    var stores: [Int: ExpertStore] = [:]
+    let folder = directory.appending(path: "experts")
+    for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+    where name.hasPrefix("layer_") && name.hasSuffix(".bin") {
+      let digits = name.dropFirst("layer_".count).dropLast(".bin".count)
+      guard let layer = Int(digits) else { continue }
+      stores[layer] = try ExpertStore(
+        url: folder.appending(path: name), layout: layout, slots: slots)
+    }
+    return WeightStore(
+      arrays: arrays, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout, experts: stores)
+  }
 
   /// A pack is either one safetensors file or a set of shards named by an index. Both land in
   /// the same flat name table, so nothing downstream needs to know which it was.

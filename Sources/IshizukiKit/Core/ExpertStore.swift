@@ -24,6 +24,18 @@ public struct ExpertLayout: Codable, Sendable, Equatable {
       self.shape = shape
       self.dtype = dtype
     }
+
+    /// The type the bytes are, recovered from the name the plan wrote down. A blob is raw
+    /// bytes, so reading one back at the wrong width is silent and wrong; the layout is the
+    /// only record of which width is right.
+    public var type: DType {
+      get throws {
+        guard let type = DType.allCases.first(where: { "\($0)" == dtype }) else {
+          throw BonsaiError.unsupportedModel("\(dtype) is not a type this runtime reads")
+        }
+        return type
+      }
+    }
   }
 
   public var expertCount: Int
@@ -67,6 +79,10 @@ public final class ExpertStore: @unchecked Sendable {
 
   private let descriptor: Int32
   private let buffer: ResidentBuffer
+  /// Where each part's slots begin in the buffer. The file is expert major — one blob per
+  /// expert — but the slots are part major, so all the slots of one projection are contiguous
+  /// and can be handed to a gathered matmul as a single `[slots, ...]` tensor.
+  private let base: [String: Int]
   private let lock = NSLock()
 
   /// Which expert each slot holds, and how often it has been asked for.
@@ -86,7 +102,14 @@ public final class ExpertStore: @unchecked Sendable {
     self.descriptor = opened
     self.layout = layout
     self.slotCount = min(slots, layout.expertCount)
-    self.buffer = try ResidentBuffer(byteCount: self.slotCount * layout.stride)
+    var base: [String: Int] = [:]
+    var total = 0
+    for name in layout.parts.keys.sorted() {
+      base[name] = total
+      total += self.slotCount * layout.parts[name]!.byteCount
+    }
+    self.base = base
+    self.buffer = try ResidentBuffer(byteCount: total)
     self.occupant = Array(repeating: -1, count: self.slotCount)
     self.uses = Array(repeating: 0, count: self.slotCount)
     self.lastTouched = Array(repeating: 0, count: self.slotCount)
@@ -139,9 +162,14 @@ public final class ExpertStore: @unchecked Sendable {
       }
 
       misses += 1
-      try buffer.read(
-        from: descriptor, offset: expert * layout.stride,
-        into: (slot * layout.stride)..<(slot * layout.stride + layout.stride))
+      // One read per projection: each is contiguous in the expert's blob and contiguous in its
+      // own run of slots, so nothing is copied or shuffled after it lands.
+      for (name, part) in layout.parts {
+        let target = base[name]! + slot * part.byteCount
+        try buffer.read(
+          from: descriptor, offset: expert * layout.stride + part.offset,
+          into: target..<(target + part.byteCount))
+      }
       occupant[slot] = expert
       uses[slot] = 1
       lastTouched[slot] = clock
@@ -151,12 +179,17 @@ public final class ExpertStore: @unchecked Sendable {
     return result
   }
 
-  /// One resident part, as an array over the slot it occupies.
-  public func array(_ name: String, slot: Int, dtype: DType) throws -> MLXArray {
-    guard let part = layout.parts[name] else {
+  /// One projection across every slot, shaped for a gathered matmul. The slot numbers that
+  /// `residency(of:)` returned index into it.
+  ///
+  /// The array is a view onto the slot buffer, not a copy: it holds what the slots hold now,
+  /// and the next `residency(of:)` rewrites it. Anything computed from it has to be evaluated
+  /// before more experts are asked for.
+  public func array(_ name: String) throws -> MLXArray {
+    guard let part = layout.parts[name], let start = base[name] else {
       throw BonsaiError.missingWeight("\(name) is not in this expert layout")
     }
     return buffer.array(
-      byteOffset: slot * layout.stride + part.offset, shape: part.shape, dtype: dtype)
+      byteOffset: start, shape: [slotCount] + part.shape, dtype: try part.type)
   }
 }

@@ -59,11 +59,12 @@ struct ExpertStoreTests {
     #expect(store.hits == 0)
 
     // Each slot holds the expert it was asked for, not its neighbour.
+    let resident = try store.array("gate_proj.weight")
+    eval(resident)
+    #expect(resident.shape == [4, width])
     for (expert, slot) in zip([5, 2, 5, 7], slots) {
-      let array = try store.array("gate_proj.weight", slot: slot, dtype: .float32)
-      eval(array)
-      #expect(array[0].item(Float.self) == Float(expert))
-      #expect(array[width - 1].item(Float.self) == Float(expert))
+      #expect(resident[slot, 0].item(Float.self) == Float(expert))
+      #expect(resident[slot, width - 1].item(Float.self) == Float(expert))
     }
   }
 
@@ -93,11 +94,10 @@ struct ExpertStoreTests {
     _ = try store.residency(of: [0, 1])
     _ = try store.residency(of: [0])
     let slots = try store.residency(of: [0, 3])
-    let kept = try store.array("gate_proj.weight", slot: slots[0], dtype: .float32)
-    let fresh = try store.array("gate_proj.weight", slot: slots[1], dtype: .float32)
-    eval(kept, fresh)
-    #expect(kept[0].item(Float.self) == 0)
-    #expect(fresh[0].item(Float.self) == 3)
+    let resident = try store.array("gate_proj.weight")
+    eval(resident)
+    #expect(resident[slots[0], 0].item(Float.self) == 0)
+    #expect(resident[slots[1], 0].item(Float.self) == 3)
 
     // Asking for more at once than there are slots cannot be served.
     #expect(throws: BonsaiError.self) { _ = try store.residency(of: [4, 5, 6]) }

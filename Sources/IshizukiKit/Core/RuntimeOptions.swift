@@ -14,6 +14,11 @@ public enum BonsaiRuntime {
 
   public nonisolated(unsafe) static var useQMVWide = false
 
+  /// Routed experts held in memory per sparse layer, when the model keeps them on disk. More
+  /// slots means fewer reads and more resident bytes; this is the whole memory dial for a
+  /// streamed model.
+  public nonisolated(unsafe) static var expertSlots = 16
+
   // Share of the wide projections to prefill on the Neural Engine, or nil for none.
   public nonisolated(unsafe) static var aneOffload: ANEOffload?
 
