@@ -81,10 +81,12 @@ public final class MemoryBudget: @unchecked Sendable {
     guard
       let names = try? manager.contentsOfDirectory(atPath: directory.path)
     else { return nil }
+    // HuggingFace's cache stores shards as symlinks into its blob store, and attributesOfItem
+    // reports the link rather than what it points at — which read as a pack of no size at all.
     let total = names.filter { $0.hasSuffix(".safetensors") }.reduce(0) { sum, name in
-      let path = directory.appending(path: name).path
-      let size = (try? manager.attributesOfItem(atPath: path))?[.size] as? NSNumber
-      return sum + (size?.intValue ?? 0)
+      let url = directory.appending(path: name).resolvingSymlinksInPath()
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+      return sum + (size ?? 0)
     }
     return total > 0 ? total : nil
   }
