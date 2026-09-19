@@ -16,26 +16,28 @@ import MLX
 struct VerifyGGUF: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "verify-gguf",
-    abstract: "Compare the logits of a pack and a GGUF of the same checkpoint.")
+    abstract: "Compare this runtime's logits against another runtime's, or against a pack.")
 
   @Option(name: .long, help: "This runtime's pack.") var pack: String?
-  @Option(name: .long, help: "llama.cpp's file for the same checkpoint.") var gguf: String
+  @Option(name: .long, help: "The model to check: a pack directory or a .gguf.")
+  var model: String
   @Option(
     name: .long,
-    help: "llama.cpp's own logits for this file, from Scripts/gen-llama-logits.c.")
+    help: "Another runtime's logits for this model, from Scripts/gen-llama-logits.c or gen-mlx-logits.py.")
   var reference: String?
   @Option(name: .long, help: "Tokens to run through both.") var prompt =
     "The quick brown fox jumps over the lazy dog."
 
   func run() throws {
-    let file = try BonsaiModel(path: URL(filePath: gguf))
+    let file = try BonsaiModel(path: URL(filePath: model))
     if let reference { try compareToReference(file, URL(filePath: reference)) }
     guard let pack else { return }
     try compareToPack(pack, file)
   }
 
-  /// The strongest form of this check: the same file, read by this runtime and by llama.cpp.
-  /// Nothing differs but the code, so a fold applied twice has nowhere to hide.
+  /// The strongest form of this check: the same weights, read by this runtime and by the one
+  /// they were published for. Nothing differs but the code, so a convention read wrongly — a
+  /// fold applied twice, a router normalized at the wrong point — has nowhere to hide.
   private func compareToReference(_ model: BonsaiModel, _ url: URL) throws {
     let data = try Data(contentsOf: url)
     guard data.count > 16, data.prefix(8) == Data("LLAMALG1".utf8) else {
@@ -61,7 +63,7 @@ struct VerifyGGUF: ParsableCommand {
     }
 
     print("")
-    print("against llama.cpp on the same file:")
+    print("against the reference on the same weights:")
     let ours = model.tokenizer.encode(
       prompt, addSpecialTokens: false)
     print("  tokens: \(tokens.count) theirs, \(ours.count) ours\(ours == tokens ? "" : " — DIFFERENT")")
