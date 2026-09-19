@@ -16,14 +16,16 @@ public final class DecoderLayer: @unchecked Sendable {
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int, isFullAttention: Bool,
-    factory: PackedModuleFactory, store: WeightStore, rope: RotaryEmbedding
+    factory: PackedModuleFactory, store: WeightStore, rope: RotaryEmbedding,
+    path: String? = nil
   ) throws {
     self.isLinear = !isFullAttention
     self.eps = config.rmsNormEps
 
     if isFullAttention {
       self.selfAttention = try Attention(
-        config: config, layer: layer, factory: factory, store: store, rope: rope)
+        config: config, layer: layer, factory: factory, store: store, rope: rope,
+        path: path)
       self.linearAttention = nil
     } else {
       self.linearAttention = try GatedDeltaNet(
@@ -31,10 +33,10 @@ public final class DecoderLayer: @unchecked Sendable {
       self.selfAttention = nil
     }
 
-    let prefix = factory.tensorPrefix + "model.layers.\(layer)"
+    let prefix = factory.tensorPrefix + (path ?? "model.layers.\(layer)")
     self.inputLayerNorm = try store(prefix + ".input_layernorm.weight")
     self.postAttentionLayerNorm = try store(prefix + ".post_attention_layernorm.weight")
-    self.mlp = try MLP(layer: layer, factory: factory)
+    self.mlp = try MLP(layer: layer, factory: factory, path: path)
   }
 
   public func callAsFunction(
@@ -66,6 +68,7 @@ public final class TextModel: @unchecked Sendable {
   public let layers: [DecoderLayer]
   private let norm: MLXArray
   public let lmHead: PackedLinear
+  public let rope: RotaryEmbedding
   private let eps: Float
 
   public init(
@@ -83,6 +86,7 @@ public final class TextModel: @unchecked Sendable {
       interleaved: text.ropeParameters.mropeInterleaved ?? false,
       scaling: ropeScaling)
 
+    self.rope = rope
     self.embedTokens = try factory.embedding("model.embed_tokens")
 
     let fullAttention = text.isFullAttention
@@ -108,6 +112,22 @@ public final class TextModel: @unchecked Sendable {
     inputs: MLXArray?, inputEmbeddings: MLXArray? = nil,
     cache: ModelCache? = nil, positions: MLXArray? = nil
   ) -> MLXArray {
+    normed(
+      trunk(
+        inputs: inputs, inputEmbeddings: inputEmbeddings, cache: cache,
+        positions: positions))
+  }
+
+  public func normed(_ h: MLXArray) -> MLXArray {
+    MLXFast.rmsNorm(h, weight: norm.asType(h.dtype), eps: eps)
+  }
+
+  /// The last layer's activation before the final norm. An MTP head fuses this, not the
+  /// normalized hidden the head reads.
+  public func trunk(
+    inputs: MLXArray?, inputEmbeddings: MLXArray? = nil,
+    cache: ModelCache? = nil, positions: MLXArray? = nil
+  ) -> MLXArray {
     var h: MLXArray
     if let inputEmbeddings {
       h = inputEmbeddings
@@ -123,7 +143,7 @@ public final class TextModel: @unchecked Sendable {
     for (index, layer) in layers.enumerated() {
       h = layer(h, mask: mask, cache: cache?.layers[index], positions: positions)
     }
-    return MLXFast.rmsNorm(h, weight: norm.asType(h.dtype), eps: eps)
+    return h
   }
 
   public func callAsFunction(

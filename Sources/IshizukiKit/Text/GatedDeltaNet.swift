@@ -9,8 +9,8 @@ import MLXNN
 public final class GatedDeltaNet: @unchecked Sendable {
   private let inProjQKV: PackedLinear
   private let inProjZ: PackedLinear
-  private let inProjA: MLXArray
-  private let inProjB: MLXArray
+  private let inProjA: any Projection
+  private let inProjB: any Projection
   private let conv1dWeight: MLXArray
   private let aLog: MLXArray
   private let dtBias: MLXArray
@@ -59,8 +59,8 @@ public final class GatedDeltaNet: @unchecked Sendable {
     self.inProjZ = try factory.linear(prefix + ".in_proj_z")
     self.outProj = try factory.linear(prefix + ".out_proj")
 
-    self.inProjA = try store(tensorPrefix + ".in_proj_a.weight")
-    self.inProjB = try store(tensorPrefix + ".in_proj_b.weight")
+    self.inProjA = try factory.projection(prefix + ".in_proj_a")
+    self.inProjB = try factory.projection(prefix + ".in_proj_b")
     self.conv1dWeight = try store(tensorPrefix + ".conv1d.weight")
     self.aLog = try store(tensorPrefix + ".A_log")
     self.dtBias = try store(tensorPrefix + ".dt_bias")
@@ -96,8 +96,8 @@ public final class GatedDeltaNet: @unchecked Sendable {
     }
 
     let qkv = inProjQKV(x)
-    let aRaw = matmul(x, inProjA.T.asType(x.dtype))
-    let bRaw = matmul(x, inProjB.T.asType(x.dtype))
+    let aRaw = inProjA(x)
+    let bRaw = inProjB(x)
 
     let keep = kernelSize - 1
     let convState =

@@ -134,6 +134,15 @@ public struct PackedModuleFactory {
       bits: entry.bits)
   }
 
+  /// The same module can arrive packed or dense depending on what the quantizer decided to
+  /// leave alone, so the small delta-net projections resolve by what is actually on disk.
+  public func projection(_ path: String) throws -> any Projection {
+    if store.has(tensorPrefix + path + ".scales") {
+      return try linear(path)
+    }
+    return try DenseLinear(store: store, prefix: tensorPrefix + path)
+  }
+
   private func packedLinear(_ path: String, block: Int) throws -> PackedLinear {
     let key = tensorPrefix + path
     let entry = quant(for: path)
@@ -148,9 +157,21 @@ public struct PackedModuleFactory {
   }
 }
 
-public final class DenseLinear: @unchecked Sendable {
+/// A linear layer, however its weights happen to be stored.
+public protocol Projection: Sendable {
+  func callAsFunction(_ x: MLXArray) -> MLXArray
+  var inputDim: Int { get }
+  var outputDim: Int { get }
+}
+
+extension PackedLinear: Projection {}
+
+public final class DenseLinear: Projection, @unchecked Sendable {
   public let weight: MLXArray
   public let bias: MLXArray?
+
+  public var outputDim: Int { weight.dim(0) }
+  public var inputDim: Int { weight.dim(1) }
 
   public init(weight: MLXArray, bias: MLXArray?) {
     self.weight = weight
@@ -164,8 +185,8 @@ public final class DenseLinear: @unchecked Sendable {
   }
 
   public func callAsFunction(_ x: MLXArray) -> MLXArray {
-    var y = matmul(x, weight.T)
-    if let bias { y = y + bias }
+    var y = matmul(x, weight.T.asType(x.dtype))
+    if let bias { y = y + bias.asType(x.dtype) }
     return y
   }
 }

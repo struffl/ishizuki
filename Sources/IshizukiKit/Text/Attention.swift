@@ -24,9 +24,10 @@ public final class Attention: @unchecked Sendable {
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int,
-    factory: PackedModuleFactory, store: WeightStore, rope: RotaryEmbedding
+    factory: PackedModuleFactory, store: WeightStore, rope: RotaryEmbedding,
+    path: String? = nil
   ) throws {
-    let prefix = "model.layers.\(layer).self_attn"
+    let prefix = (path ?? "model.layers.\(layer)") + ".self_attn"
     let tensorPrefix = factory.tensorPrefix + prefix
 
     self.numHeads = config.numAttentionHeads
@@ -187,8 +188,8 @@ public final class MLP: @unchecked Sendable {
     let upTail: PackedLinear
   }
 
-  public init(layer: Int, factory: PackedModuleFactory) throws {
-    let prefix = "model.layers.\(layer).mlp"
+  public init(layer: Int, factory: PackedModuleFactory, path: String? = nil) throws {
+    let prefix = (path ?? "model.layers.\(layer)") + ".mlp"
     self.gateProj = try factory.linear(prefix + ".gate_proj")
     self.upProj = try factory.linear(prefix + ".up_proj")
     self.downProj = try factory.linear(prefix + ".down_proj")
