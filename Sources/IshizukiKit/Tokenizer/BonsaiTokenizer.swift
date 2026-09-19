@@ -21,6 +21,25 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
   private var cache: [String: [Int]] = [:]
   private let cacheLock = NSLock()
+  private let normalization: Normalization
+
+  /// Whether the checkpoint asks for its text to be composed before it is split.
+  ///
+  /// Byte-level BPE is defined on raw UTF-8, so this is not free: `é` written as `e` plus a
+  /// combining acute tokenizes differently from the precomposed one. Qwen's `tokenizer.json`
+  /// declares `NFC` and transformers applies it, so this runtime does too — llama.cpp does not
+  /// implement normalizers for BPE at all, which is the one place its ids differ from ours.
+  public enum Normalization: Sendable {
+    case none
+    case nfc
+
+    func apply(_ text: String) -> String {
+      switch self {
+      case .none: text
+      case .nfc: text.precomposedStringWithCanonicalMapping
+      }
+    }
+  }
 
   /// The Qwen byte-level split, which is what a `qwen35` GGUF means by its `gpt2` model and
   /// `qwen35` pre-tokenizer; a checkpoint that names its own overrides it.
@@ -61,6 +80,14 @@ public final class BonsaiTokenizer: @unchecked Sendable {
       merges = raw.filter { $0.count == 2 }.map { ($0[0], $0[1]) }
     }
 
+    var normalization = Normalization.none
+    if let declared = root["normalizer"] as? [String: Any] {
+      let candidates = (declared["normalizers"] as? [[String: Any]]) ?? [declared]
+      if candidates.contains(where: { $0["type"] as? String == "NFC" }) {
+        normalization = .nfc
+      }
+    }
+
     var pattern = Self.defaultSplitPattern
     if let pre = root["pre_tokenizer"] as? [String: Any] {
       let candidates = (pre["pretokenizers"] as? [[String: Any]]) ?? [pre]
@@ -73,7 +100,7 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
     try self.init(
       vocabulary: vocabulary, addedIds: addedIds, merges: merges, pattern: pattern,
-      config: config)
+      config: config, normalization: normalization)
   }
 
   /// A GGUF carries its tokenizer as metadata rather than a file: the vocabulary is an array
@@ -107,14 +134,16 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
     try self.init(
       vocabulary: vocabulary, addedIds: addedIds, merges: merges,
-      pattern: Self.defaultSplitPattern, config: config,
+      pattern: Self.defaultSplitPattern, config: config, normalization: .nfc,
       extraEOS: [file["tokenizer.ggml.eos_token_id"]?.intValue].compactMap { $0 })
   }
 
   private init(
     vocabulary: [String: Int], addedIds: [String: Int], merges: [(String, String)],
-    pattern: String, config: BonsaiConfig?, extraEOS: [Int] = []
+    pattern: String, config: BonsaiConfig?, normalization: Normalization,
+    extraEOS: [Int] = []
   ) throws {
+    self.normalization = normalization
     self.vocabulary = vocabulary
     self.addedTokenIds = addedIds
     self.reverseVocabulary = Dictionary(
@@ -210,7 +239,7 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
   private func encodeOrdinary(_ text: String) -> [Int] {
     guard !text.isEmpty else { return [] }
-    let normalized = text.precomposedStringWithCanonicalMapping
+    let normalized = normalization.apply(text)
     let ns = normalized as NSString
 
     var ids: [Int] = []
