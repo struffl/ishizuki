@@ -33,6 +33,38 @@ struct QuantizedKVTests {
     }
   }
 
+  @Test("a rewind behind the dense window drops back into the quantized store")
+  func rewindPastWindow() {
+    let cache = QuantizedKVCache(config: KVCacheConfig(bits: 3.5, residualWindow: 128))
+    for _ in 0..<16 { step(cache, tokens: 128) }
+    #expect(cache.offset == 2048)
+    // Everything but the tail has been compressed by now, so this target is well behind it.
+    #expect(cache.quantizedTokenCount > 512)
+
+    cache.restore(.kv(offset: 512))
+    #expect(cache.offset == 512)
+    #expect(cache.quantizedTokenCount == 512)
+    #expect(cache.window == nil)
+
+    // The cache has to keep taking tokens afterwards, and keep accounting for them.
+    step(cache, tokens: 64)
+    #expect(cache.offset == 576)
+    #expect(cache.quantizedTokenCount + (cache.window?.keys.dim(2) ?? 0) == 576)
+  }
+
+  @Test("a rewind inside the dense window only trims the window")
+  func rewindInsideWindow() {
+    let cache = QuantizedKVCache(config: KVCacheConfig(bits: 3.5, residualWindow: 128))
+    for _ in 0..<16 { step(cache, tokens: 128) }
+    let quantized = cache.quantizedTokenCount
+    let target = cache.offset - 8
+
+    cache.restore(.kv(offset: target))
+    #expect(cache.offset == target)
+    #expect(cache.quantizedTokenCount == quantized)
+    #expect(cache.quantizedTokenCount + (cache.window?.keys.dim(2) ?? 0) == target)
+  }
+
   @Test("growth across store reallocations keeps the cache consistent")
   func survivesReallocation() {
     let cache = QuantizedKVCache(config: KVCacheConfig(bits: 3.5, residualWindow: 128))

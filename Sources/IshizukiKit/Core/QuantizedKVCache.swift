@@ -94,12 +94,22 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
 
   public func snapshot() -> CacheSnapshot { .kv(offset: offset) }
 
+  /// Rewinding used to be limited to the dense window, and a target behind it was silently
+  /// ignored — which left the caller believing in a rewind that never happened. Both stores are
+  /// append-ordered, so a target behind the window just drops back into the quantized one.
   public func restore(_ snapshot: CacheSnapshot) {
     guard case .kv(let target) = snapshot, target < offset else { return }
-    let keepInWindow = target - quantizedCount
-    guard keepInWindow >= 0, let keys = windowKeys, let values = windowValues else { return }
-    windowKeys = keys[0..., 0..., ..<keepInWindow, 0...]
-    windowValues = values[0..., 0..., ..<keepInWindow, 0...]
+    if target >= quantizedCount {
+      let keepInWindow = target - quantizedCount
+      windowKeys = windowKeys.map { $0[0..., 0..., ..<keepInWindow, 0...] }
+      windowValues = windowValues.map { $0[0..., 0..., ..<keepInWindow, 0...] }
+    } else {
+      // The window holds only tokens after the quantized store, so rewinding behind it leaves
+      // nothing to keep. The store itself is truncated by count; its capacity is reused.
+      quantizedCount = target
+      windowKeys = nil
+      windowValues = nil
+    }
     offset = target
   }
 
