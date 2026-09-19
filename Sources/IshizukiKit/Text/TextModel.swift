@@ -11,13 +11,13 @@ public final class DecoderLayer: @unchecked Sendable {
   private let selfAttention: Attention?
   private let inputLayerNorm: MLXArray
   private let postAttentionLayerNorm: MLXArray
-  private let mlp: MLP
+  private let mlp: any FeedForward
   private let eps: Float
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int, isFullAttention: Bool,
     factory: PackedModuleFactory, store: WeightStore, rope: RotaryEmbedding,
-    path: String? = nil
+    isSparse: Bool = false, path: String? = nil
   ) throws {
     self.isLinear = !isFullAttention
     self.eps = config.rmsNormEps
@@ -36,7 +36,12 @@ public final class DecoderLayer: @unchecked Sendable {
     let prefix = factory.tensorPrefix + (path ?? "model.layers.\(layer)")
     self.inputLayerNorm = try store(prefix + ".input_layernorm.weight")
     self.postAttentionLayerNorm = try store(prefix + ".post_attention_layernorm.weight")
-    self.mlp = try MLP(layer: layer, factory: factory, path: path)
+    if isSparse {
+      self.mlp = try MoEBlock(
+        config: config, layer: layer, factory: factory, store: store, path: path)
+    } else {
+      self.mlp = try MLP(layer: layer, factory: factory, path: path)
+    }
   }
 
   public func callAsFunction(
@@ -90,13 +95,14 @@ public final class TextModel: @unchecked Sendable {
     self.embedTokens = try factory.embedding("model.embed_tokens")
 
     let fullAttention = text.isFullAttention
+    let sparse = text.isSparse
     var built: [DecoderLayer] = []
     built.reserveCapacity(text.numHiddenLayers)
     for layer in 0..<text.numHiddenLayers {
       built.append(
         try DecoderLayer(
           config: text, layer: layer, isFullAttention: fullAttention[layer],
-          factory: factory, store: store, rope: rope))
+          factory: factory, store: store, rope: rope, isSparse: sparse[layer]))
     }
     self.layers = built
 

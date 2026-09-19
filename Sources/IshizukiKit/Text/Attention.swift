@@ -188,8 +188,14 @@ public final class MLP: @unchecked Sendable {
     let upTail: PackedLinear
   }
 
-  public init(layer: Int, factory: PackedModuleFactory, path: String? = nil) throws {
-    let prefix = (path ?? "model.layers.\(layer)") + ".mlp"
+  public convenience init(layer: Int, factory: PackedModuleFactory, path: String? = nil) throws {
+    try self.init(
+      prefix: (path ?? "model.layers.\(layer)") + ".mlp", layer: layer, factory: factory)
+  }
+
+  /// A feed-forward that does not sit at the layer's own `mlp` path — a MoE layer's shared
+  /// expert is one, and it is otherwise the same three projections.
+  public init(prefix: String, layer: Int, factory: PackedModuleFactory) throws {
     self.gateProj = try factory.linear(prefix + ".gate_proj")
     self.upProj = try factory.linear(prefix + ".up_proj")
     self.downProj = try factory.linear(prefix + ".down_proj")
