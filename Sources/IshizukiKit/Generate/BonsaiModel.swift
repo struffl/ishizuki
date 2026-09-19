@@ -20,17 +20,50 @@ public final class BonsaiModel: @unchecked Sendable {
   private let visionLock = NSLock()
   private var tower: VisionTower?
 
-  public init(
+  public convenience init(
     directory: URL, ropeScaling: RopeScaling = .none, hot: Bool = false
   ) throws {
-    self.directory = directory
-
     let config = try BonsaiConfig.load(directory: directory)
     try config.validate()
-    self.config = config
+    try self.init(
+      config: config, store: try WeightStore(directory: directory),
+      tokenizer: try BonsaiTokenizer(directory: directory, config: config),
+      directory: directory, ropeScaling: ropeScaling, hot: hot)
+  }
 
-    let store = try WeightStore(directory: directory)
+  /// One file instead of a directory, and a second one for the tower.
+  ///
+  /// llama.cpp's converter splits a multimodal checkpoint in two, so a picture needs the
+  /// `mmproj-*.gguf` that came out of the same run. Without it the model loads and generates;
+  /// it just has no eyes, which `hasVision` reports as usual.
+  public convenience init(
+    gguf url: URL, mmproj: URL? = nil, ropeScaling: RopeScaling = .none, hot: Bool = false
+  ) throws {
+    let file = try GGUFFile(url: url)
+    let architecture = try GGUFArchitecture(file: file)
+
+    var vision: BonsaiConfig.VisionConfig?
+    var store = try GGUFWeights.load(file: file)
+    if let mmproj {
+      let projector = try GGUFFile(url: mmproj)
+      vision = try GGUFVision(file: projector).config
+      store = try GGUFWeights.loadVision(file: projector, into: store)
+    }
+
+    try self.init(
+      config: architecture.config(vision: vision), store: store,
+      tokenizer: try BonsaiTokenizer(gguf: file), directory: url.deletingLastPathComponent(),
+      ropeScaling: ropeScaling, hot: hot)
+  }
+
+  private init(
+    config: BonsaiConfig, store: WeightStore, tokenizer: BonsaiTokenizer, directory: URL,
+    ropeScaling: RopeScaling, hot: Bool
+  ) throws {
+    self.directory = directory
+    self.config = config
     self.store = store
+    self.tokenizer = tokenizer
 
     let nested = store.has("language_model.model.norm.weight")
     self.tensorPrefix = nested ? "language_model." : ""
@@ -58,8 +91,6 @@ public final class BonsaiModel: @unchecked Sendable {
     } else {
       self.mtp = nil
     }
-
-    self.tokenizer = try BonsaiTokenizer(directory: directory, config: config)
 
     if hot { try vision() }
   }
