@@ -43,6 +43,37 @@ struct ModelCatalogTests {
     }
     """
 
+  @Test("a GGUF is offered on its own, and an mmproj beside it is not a model")
+  func discoversGGUF() throws {
+    let root = URL(filePath: NSTemporaryDirectory()).appending(path: "cat-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = root.appending(path: "ggufs")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    let model = directory.appending(path: "Qwen3.8-27B-IQ3_S.gguf")
+    try GGUFFixture.qwen35(at: model)
+    // Half a model: a tower with no language model, which nothing can load by itself.
+    try GGUFFixture.qwen35(at: directory.appending(path: "mmproj-Qwen3.8-27B-BF16.gguf"))
+    // Not this container at all.
+    try Data("not a gguf".utf8).write(to: directory.appending(path: "notes.gguf"))
+
+    let catalog = ModelCatalog.discover(in: [root])
+    #expect(catalog.entries.count == 1)
+    let entry = try #require(catalog["Qwen3.8-27B-IQ3_S"])
+    #expect(entry.format == .gguf)
+    // FileManager hands back /private/var where NSTemporaryDirectory says /var.
+    #expect(entry.url.resolvingSymlinksInPath().path == model.resolvingSymlinksInPath().path)
+    #expect(
+      entry.directory.resolvingSymlinksInPath().path
+        == directory.resolvingSymlinksInPath().path)
+    #expect(entry.contextTokens == 262_144)
+    #expect(entry.hasVision)
+    #expect(entry.byteCount > 0)
+    // Counting tensors would name it after the norms; counting bytes names it after the
+    // projections, which is what fills the file.
+    #expect(entry.quantization == "IQ3_S")
+  }
+
   @Test("a pack is found, named and described")
   func discovers() throws {
     let root = URL(filePath: NSTemporaryDirectory()).appending(path: "cat-\(UUID().uuidString)")

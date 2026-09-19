@@ -8,74 +8,7 @@ import Testing
 
 @Suite("GGUF")
 struct GGUFTests {
-  private struct Builder {
-    var data = Data()
-    var tensors: [(String, [Int], GGMLType)] = []
-    var metadata: [(String, UInt32, Data)] = []
-
-    mutating func put<T>(_ value: T) {
-      withUnsafeBytes(of: value) { data.append(contentsOf: $0) }
-    }
-
-    static func string(_ value: String) -> Data {
-      var out = Data()
-      let bytes = Array(value.utf8)
-      withUnsafeBytes(of: UInt64(bytes.count)) { out.append(contentsOf: $0) }
-      out.append(contentsOf: bytes)
-      return out
-    }
-
-    static func u32(_ value: UInt32) -> Data {
-      var out = Data()
-      withUnsafeBytes(of: value) { out.append(contentsOf: $0) }
-      return out
-    }
-
-    static func f32(_ value: Float) -> Data { u32(value.bitPattern) }
-
-    static func intArray(_ values: [Int]) -> Data {
-      var out = u32(4)
-      withUnsafeBytes(of: UInt64(values.count)) { out.append(contentsOf: $0) }
-      for value in values { out.append(u32(UInt32(value))) }
-      return out
-    }
-
-    static func stringArray(_ values: [String]) -> Data {
-      var out = u32(8)
-      withUnsafeBytes(of: UInt64(values.count)) { out.append(contentsOf: $0) }
-      for value in values { out.append(string(value)) }
-      return out
-    }
-
-    mutating func write(to url: URL) throws {
-      data = Data()
-      put(GGUFFile.magic)
-      put(UInt32(3))
-      put(UInt64(tensors.count))
-      put(UInt64(metadata.count))
-      for (key, type, payload) in metadata {
-        data.append(Self.string(key))
-        put(type)
-        data.append(payload)
-      }
-
-      var cursor = 0
-      for (name, dims, type) in tensors {
-        data.append(Self.string(name))
-        put(UInt32(dims.count))
-        for dim in dims.reversed() { put(UInt64(dim)) }
-        put(type.rawValue)
-        cursor = (cursor + 31) / 32 * 32
-        put(UInt64(cursor))
-        cursor += type.byteCount(elements: dims.reduce(1, *))
-      }
-
-      let padding = (32 - data.count % 32) % 32
-      data.append(Data(repeating: 0, count: padding))
-      data.append(Data(repeating: 0xab, count: cursor))
-      try data.write(to: url)
-    }
-  }
+  private typealias Builder = GGUFFixture.Builder
 
   private func temporaryURL() -> URL {
     URL(filePath: NSTemporaryDirectory()).appending(path: "gguf-\(UUID().uuidString).gguf")

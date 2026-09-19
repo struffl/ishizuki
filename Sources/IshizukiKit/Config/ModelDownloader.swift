@@ -16,30 +16,49 @@ public enum ModelDownloader {
     "config.json", "model.safetensors", "tokenizer.json", "chat_template.jinja",
   ]
 
+  /// Fetches a repo into `directory`, or repairs what is already there.
+  ///
+  /// `only` names the files to take instead of the whole tree, which is what a GGUF repo needs:
+  /// those hold every quantization of the same model side by side, and taking the tree would
+  /// fetch a dozen copies to use one. A name matches on its full path in the repo or on its
+  /// last component, so `--file Qwen3.8-27B-IQ3_S.gguf` finds it wherever the repo filed it.
   public static func ensure(
     directory: URL,
     repo: String,
     revision: String = "main",
     token explicitToken: String? = nil,
     verify: Bool = false,
+    only: [String] = [],
     log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
   ) throws {
     let token = resolveToken(explicitToken)
 
-    let manifest: [String: Entry]
+    var manifest: [String: Entry]
     do {
       manifest = try fetchTree(repo: repo, revision: revision, token: token)
     } catch {
-      if essentialsPresent(directory) {
+      if essentialsPresent(directory, only: only) {
         log("model: offline, using the existing pack at \(directory.path)")
         return
       }
       throw error
     }
 
+    if !only.isEmpty {
+      manifest = manifest.filter { path, _ in
+        only.contains(path) || only.contains((path as NSString).lastPathComponent)
+      }
+      let found = Set(manifest.keys.map { ($0 as NSString).lastPathComponent })
+      let unknown = only.filter { !found.contains(($0 as NSString).lastPathComponent) }
+      guard unknown.isEmpty else {
+        throw BonsaiError.missingComponent(
+          "\(repo) has no \(unknown.joined(separator: ", ")) at \(revision)")
+      }
+    }
+
     var missing: [(name: String, entry: Entry)] = []
     for (name, entry) in manifest {
-      let dst = directory.appending(path: name)
+      let dst = directory.appending(path: destination(for: name, only: only))
       if intact(dst, size: entry.size, sha256: verify ? entry.sha256 : nil) { continue }
       missing.append((name, entry))
     }
@@ -51,8 +70,8 @@ public enum ModelDownloader {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     for (name, entry) in missing {
       try fetch(
-        name: name, entry: entry, into: directory, repo: repo, revision: revision, token: token,
-        verify: verify)
+        name: name, saveAs: destination(for: name, only: only), entry: entry, into: directory,
+        repo: repo, revision: revision, token: token, verify: verify)
     }
     log("model: ready at \(directory.path)")
   }
@@ -93,8 +112,15 @@ public enum ModelDownloader {
     return entries
   }
 
-  private static func essentialsPresent(_ directory: URL) -> Bool {
-    essentials.allSatisfy { name in
+  /// A named file is taken out of whatever subdirectory the repo filed it under, so a pull of
+  /// one GGUF lands beside the pack directories rather than nested in a stray folder.
+  private static func destination(for path: String, only: [String]) -> String {
+    only.isEmpty ? path : (path as NSString).lastPathComponent
+  }
+
+  private static func essentialsPresent(_ directory: URL, only: [String] = []) -> Bool {
+    let wanted = only.isEmpty ? essentials : only.map { ($0 as NSString).lastPathComponent }
+    return wanted.allSatisfy { name in
       let size =
         (try? FileManager.default.attributesOfItem(atPath: directory.appending(path: name).path)[
           .size] as? Int) ?? nil
@@ -111,11 +137,11 @@ public enum ModelDownloader {
   }
 
   private static func fetch(
-    name: String, entry: Entry, into directory: URL, repo: String, revision: String,
-    token: String?, verify: Bool
+    name: String, saveAs: String, entry: Entry, into directory: URL, repo: String,
+    revision: String, token: String?, verify: Bool
   ) throws {
-    let dst = directory.appending(path: name)
-    let part = directory.appending(path: name + ".part")
+    let dst = directory.appending(path: saveAs)
+    let part = directory.appending(path: saveAs + ".part")
     try FileManager.default.createDirectory(
       at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
 

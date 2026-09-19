@@ -31,6 +31,7 @@ struct ModelsCommand: ParsableCommand {
       entry.quantization,
       MemoryBudget.tokens(entry.contextTokens) + " ctx",
     ]
+    if entry.format == .gguf { parts.append("gguf") }
     if entry.hasVision { parts.append("vision") }
     if entry.hasMTP { parts.append("mtp") }
     return parts.joined(separator: " · ")
