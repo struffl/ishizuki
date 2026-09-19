@@ -370,7 +370,7 @@ final class ServeDashboard: @unchecked Sendable {
   }
 }
 
-private func clip(_ line: String, to width: Int) -> String {
+func clip(_ line: String, to width: Int) -> String {
   var out = ""
   var visible = 0
   var index = line.startIndex
