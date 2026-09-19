@@ -5,9 +5,9 @@ import Foundation
 import MLX
 
 public final class APIServer: @unchecked Sendable {
-  public let directory: URL
-  public let template: ChatTemplate
-  public let modelName: String
+  public private(set) var directory: URL
+  public private(set) var template: ChatTemplate
+  public private(set) var modelName: String
   public var defaultThinking: Bool
   public var samplingOptions: SamplingOptions
   public var kvConfig: KVCacheConfig
@@ -16,7 +16,10 @@ public final class APIServer: @unchecked Sendable {
   public let residency: ResidencyManager
   public let sessions: SessionCache
   public let prefixStore: PrefixStore?
-  public let budget: MemoryBudget
+  public private(set) var budget: MemoryBudget
+
+  /// Every pack this server could serve. A request naming one of these swaps to it.
+  public private(set) var catalog: ModelCatalog
   public let stats = ServeStats()
 
   private var loaded: BonsaiModel?
@@ -33,10 +36,12 @@ public final class APIServer: @unchecked Sendable {
     ropeScaling: RopeScaling = .none,
     budget: MemoryBudget? = nil,
     prefixStore: PrefixStore? = nil,
+    catalog: ModelCatalog = ModelCatalog(entries: []),
     preload: Bool = true
   ) throws {
     self.politeness = politeness
     self.ropeScaling = ropeScaling
+    self.catalog = catalog
     self.directory = directory
     self.template = try ChatTemplate(directory: directory)
     self.modelName = modelName
@@ -91,6 +96,55 @@ public final class APIServer: @unchecked Sendable {
     log?("budget: \(step.summary)")
   }
 
+  /// The pack currently loaded, or the one that would be if a request arrived.
+  public var activeModelID: String { modelName }
+
+  public var isLoaded: Bool { loaded != nil }
+
+  /// Switches the server to another pack from the catalog. The one in memory is dropped first,
+  /// because two 17 GB packs do not sit side by side on this hardware.
+  ///
+  /// Everything derived from the pack goes with it: the chat template, the memory budget sized
+  /// from its weights, and the prefix archives, which are keyed per model and so are simply no
+  /// longer matched rather than discarded.
+  public func activate(_ id: String) throws {
+    guard id != modelName else { return }
+    guard let entry = catalog[id] else {
+      throw BonsaiError.missingComponent(
+        "no pack named '\(id)'; this server offers "
+          + catalog.entries.map(\.id).joined(separator: ", "))
+    }
+
+    let template = try ChatTemplate(directory: entry.directory)
+
+    sessions.persistAll()
+    sessions.evict()
+    loaded = nil
+    Memory.clearCache()
+
+    directory = entry.directory
+    modelName = entry.id
+    self.template = template
+    budget = MemoryBudget(
+      kvBits: kvConfig.bits,
+      maxContextTokens: ropeScaling.effectiveContext,
+      weights: entry.byteCount > 0 ? entry.byteCount : MemoryBudget.defaultWeights)
+    budget.apply()
+    sessions.setCapacity(budget.tier.slots)
+    sessions.setByteLimit(budget.tier.kvBytes(bytesPerToken: budget.bytesPerToken))
+    sessions.setStore(prefixStore, modelID: entry.id)
+    log?("model: switched to \(entry.id)")
+  }
+
+  /// Honours a request that names a pack other than the loaded one. Names that match nothing in
+  /// the catalog are ignored, so a client sending its own alias keeps working.
+  func activateIfRequested(_ requested: String?) {
+    guard let requested, !requested.isEmpty, requested != modelName,
+      catalog[requested] != nil
+    else { return }
+    do { try activate(requested) } catch { log?("model: \(error)") }
+  }
+
   @discardableResult
   public func model() throws -> BonsaiModel {
     if let loaded { return loaded }
@@ -136,11 +190,26 @@ public final class APIServer: @unchecked Sendable {
     case ("GET", "/health"):
       writer.send(json: ["status": "ok", "model": modelName])
     case ("GET", "/v1/models"):
-      writer.send(
-        json: [
-          "object": "list",
-          "data": [["id": modelName, "object": "model", "owned_by": "prism-ml"]],
-        ])
+      // Every pack on the machine, so a client can offer the choice rather than be told one.
+      var data: [[String: Any]] = catalog.entries.map { entry in
+        [
+          "id": entry.id, "object": "model", "owned_by": "prism-ml",
+          "loaded": entry.id == modelName && loaded != nil,
+          "context_window": entry.contextTokens,
+          "quantization": entry.quantization,
+          "size_bytes": entry.byteCount,
+          "vision": entry.hasVision,
+          "mtp": entry.hasMTP,
+        ]
+      }
+      if !data.contains(where: { $0["id"] as? String == modelName }) {
+        data.insert(
+          [
+            "id": modelName, "object": "model", "owned_by": "prism-ml",
+            "loaded": loaded != nil,
+          ], at: 0)
+      }
+      writer.send(json: ["object": "list", "data": data])
     case ("POST", "/v1/chat/completions"):
       handleOpenAI(request, writer, id)
     case ("POST", "/v1/messages"):
@@ -162,6 +231,8 @@ public final class APIServer: @unchecked Sendable {
     var thinking: Bool
     var images: [ProcessedImage]
     var responseSchema: [String: Any]?
+    /// What the client asked to talk to. Honoured when it names a pack in the catalog.
+    var model: String?
   }
 
   private func complete(
@@ -175,6 +246,7 @@ public final class APIServer: @unchecked Sendable {
     residency.beginRequest()
     defer { residency.endRequest() }
 
+    activateIfRequested(request.model)
     let model = try self.model()
     let rendered = try template.render(
       messages: request.messages,
@@ -464,7 +536,8 @@ public final class APIServer: @unchecked Sendable {
       // A constrained document has no room for a reasoning block.
       thinking: schema != nil ? false : (thinkingPreference(body) ?? defaultThinking),
       images: images,
-      responseSchema: schema)
+      responseSchema: schema,
+      model: body["model"] as? String)
   }
 
   private func jsonSchema(from value: Any?) -> [String: Any]? {
@@ -696,7 +769,8 @@ public final class APIServer: @unchecked Sendable {
       stream: body["stream"] as? Bool ?? false,
       thinking: thinking,
       images: images,
-      responseSchema: nil)
+      responseSchema: nil,
+      model: body["model"] as? String)
   }
 
   private func handleCountTokens(_ request: HTTPRequest, _ writer: ResponseWriter) {

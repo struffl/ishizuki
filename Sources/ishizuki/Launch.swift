@@ -31,15 +31,20 @@ struct Launch: ParsableCommand {
   @Argument(parsing: .postTerminator, help: "Arguments forwarded to the tool, after --.")
   var arguments: [String] = []
 
-  @Option(name: .long) var model: String = defaultModelPath
+  @Option(
+    name: .long,
+    help: "Pack to serve. Omit to pick from what is on this machine, when there is a choice.")
+  var model: String?
   @Option(name: .long, help: "HuggingFace repo to fetch the model from if missing.")
   var repo: String = defaultRepo
   @Flag(name: .long, help: "Skip the model download/repair check.") var offline = false
 
   @Option(name: .shortAndLong) var port: UInt16 = 8128
   @Option(name: .long) var host: String = "127.0.0.1"
-  @Option(name: .long, help: "Name reported to the tool.")
-  var servedName: String = "ternary-bonsai-2-27b"
+  @Option(
+    name: .long,
+    help: "Name reported to the tool. Defaults to the pack's own name in the catalog.")
+  var servedName: String?
   @Option(name: .long, help: "API key the tool sends. Any value works; it is not checked.")
   var apiKey: String = "ishizuki"
 
@@ -74,9 +79,12 @@ struct Launch: ParsableCommand {
       print(Style.banner("tools ishizuki can launch"))
       print("")
       for integration in Integration.all {
-        print("  " + Style.accent(integration.name.padding(
-          toLength: 10, withPad: " ", startingAt: 0))
-          + Style.faint(integration.summary))
+        print(
+          "  "
+            + Style.accent(
+              integration.name.padding(
+                toLength: 10, withPad: " ", startingAt: 0))
+            + Style.faint(integration.summary))
       }
       print("")
       print(Style.faint("  ishizuki launch <tool> [-- args...]"))
@@ -93,7 +101,13 @@ struct Launch: ParsableCommand {
         "\(integration.executable) is not on PATH — install it first")
     }
 
-    let plan = try integration.plan(baseURL, servedName, apiKey, contextWindow)
+    // The tool's config carries the model name, so the pack has to be settled before the plan
+    // is written — but --print-config changes nothing and should never stop to ask.
+    let catalog = ModelCatalog.discover(in: modelSearchRoots)
+    let chosen = try choose(from: catalog, mayAsk: !printConfig && !noServe)
+    let activeName = servedName ?? chosen?.id ?? defaultServedName
+
+    let plan = try integration.plan(baseURL, activeName, apiKey, contextWindow)
 
     if printConfig {
       print(Style.banner("\(integration.name) configuration"))
@@ -104,7 +118,7 @@ struct Launch: ParsableCommand {
 
     var server: APIServer?
     if !noServe && !isServing() {
-      server = try startServer()
+      server = try startServer(chosen: chosen, name: activeName)
     } else {
       note(Style.field("server", Style.faint("already listening on \(baseURL)")))
     }
@@ -140,15 +154,46 @@ struct Launch: ParsableCommand {
     throw ExitCode(process.terminationStatus == 0 ? 0 : Int32(process.terminationStatus))
   }
 
-  private func startServer() throws -> APIServer {
+  /// Which pack to serve. An explicit --model wins; one pack needs no asking; several with a
+  /// terminal to ask in gets a selector. Returns nil when the old path applies — nothing
+  /// discovered, so fall back to the default pack and fetch it if it is missing.
+  private func choose(
+    from catalog: ModelCatalog, mayAsk: Bool
+  ) throws -> ModelCatalog.Entry? {
+    if let model {
+      // A catalog name is as good as a path here, so either spelling works.
+      return catalog[model]
+    }
+    if catalog.entries.count == 1 { return catalog.entries[0] }
+    guard catalog.entries.count > 1 else { return nil }
+    guard mayAsk else { return catalog.entries.first }
+
+    let rows = catalog.entries.map {
+      Picker.Row(title: $0.id, detail: ModelsCommand.describe($0))
+    }
+    switch Picker.run(title: "which model should \(tool) talk to?", rows: rows) {
+    case .chose(let index): return catalog.entries[index]
+    case .delete, .cancelled: throw ExitCode.failure
+    }
+  }
+
+  private func startServer(
+    chosen: ModelCatalog.Entry?, name activeName: String
+  ) throws -> APIServer {
     let kvConfig = KVCacheConfig(bits: kvBits, residualWindow: 128)
     try kvConfig.validate()
     let level = Politeness.Level(rawValue: politeness) ?? .adaptive
     Politeness.apply(level)
 
-    let modelURL = URL(filePath: resolvedModelPath(model, repo: repo))
-    if !offline {
-      try ModelDownloader.ensure(directory: modelURL, repo: repo)
+    let catalog = ModelCatalog.discover(in: modelSearchRoots)
+    let modelURL: URL
+    if let chosen {
+      modelURL = chosen.directory
+    } else {
+      modelURL = URL(filePath: resolvedModelPath(model ?? defaultModelPath, repo: repo))
+      if !offline {
+        try ModelDownloader.ensure(directory: modelURL, repo: repo)
+      }
     }
 
     note(Style.banner("starting ishizuki for \(tool)"))
@@ -156,7 +201,7 @@ struct Launch: ParsableCommand {
     let start = Date()
     let server = try APIServer(
       directory: modelURL,
-      modelName: servedName,
+      modelName: activeName,
       kvConfig: kvConfig,
       residency: ResidencyManager.Options(idleSeconds: 0, evictSeconds: evictTimeout),
       politeness: level,
@@ -165,6 +210,7 @@ struct Launch: ParsableCommand {
         maxContextTokens: contextWindow,
         weights: MemoryBudget.weightBytes(in: modelURL) ?? MemoryBudget.defaultWeights,
         bufferCache: cacheLimitGB.map { Int($0 * 1_073_741_824) }),
+      catalog: catalog,
       preload: true)
     server.log = { _ in }
     try server.listen(port: port)

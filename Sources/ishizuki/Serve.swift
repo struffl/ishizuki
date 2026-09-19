@@ -28,8 +28,10 @@ struct Serve: ParsableCommand {
   var repo: String = defaultRepo
   @Flag(name: .long, help: "Skip the model download/repair check.") var offline = false
   @Option(name: .shortAndLong) var port: UInt16 = 8128
-  @Option(name: .long, help: "Name reported to clients.")
-  var servedName: String = "ternary-bonsai-2-27b"
+  @Option(
+    name: .long,
+    help: "Name reported to clients. Defaults to the pack's own name in the catalog.")
+  var servedName: String?
 
   @OptionGroup var neural: ANEOption
 
@@ -121,6 +123,14 @@ struct Serve: ParsableCommand {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
     }
 
+    // Naming the active pack as the catalog does is what lets a client switch to it by name.
+    let catalog = ModelCatalog.discover(in: modelSearchRoots)
+    let activeName =
+      servedName
+      ?? catalog.entries.first { $0.directory.standardizedFileURL == modelURL.standardizedFileURL }?
+      .id
+      ?? modelURL.lastPathComponent
+
     let budget = MemoryBudget(
       kvBits: kvConfig.bits,
       maxContextTokens: Int(262_144 * max(contextScale, 1)),
@@ -134,7 +144,7 @@ struct Serve: ParsableCommand {
 
     let server = try APIServer(
       directory: modelURL,
-      modelName: servedName,
+      modelName: activeName,
       samplingOptions: SamplingOptions(
         temperature: temperature, topP: topP, topK: topK, minP: minP),
       kvConfig: kvConfig,
@@ -149,10 +159,11 @@ struct Serve: ParsableCommand {
           byteLimit: Int(prefixCacheGB * 1_073_741_824),
           minimumTokens: prefixCacheMinimum)
         : nil,
+      catalog: catalog,
       preload: hot || !lazyLoad)
 
     var header = [
-      Style.banner("serving \(servedName) on http://127.0.0.1:\(port)"),
+      Style.banner("serving \(activeName) on http://127.0.0.1:\(port)"),
       "",
       "  "
         + Style.field("OpenAI", Style.faint("export OPENAI_BASE_URL=http://127.0.0.1:\(port)/v1")),
