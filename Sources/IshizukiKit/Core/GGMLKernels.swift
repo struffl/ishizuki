@@ -194,7 +194,8 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "K", "N",
         ],
         outputNames: ["y"],
-        source: macros + matvecProlog + decodeChain + matvecEpilog)
+        source: macros + matvecProlog + "if (qtype == 10) {" + matvecQ2K
+          + "} else {" + decodeChain + "}" + matvecEpilog)
     }()
 
     private static let macros = """
@@ -255,6 +256,60 @@ public enum GGMLKernels {
               device const IT *xrow = x + blk * block_elems;
               int o = 0;
 
+      """
+
+    /// Q2_K, with the dot product written out instead of decoded element by element.
+    ///
+    /// The generic chain emits one weight at a time and pays a scalar load of `x` for each. Here
+    /// the sixteen weights of a group are multiplied against four vector loads, and the group's
+    /// scale and minimum come out of the sum rather than being applied per element: the block
+    /// contributes `dl * dot(q, x) - ml * sum(x)`.
+    /// Q2_K, with the dot product written out instead of decoded element by element.
+    ///
+    /// The generic chain emits one weight at a time and pays a scalar load of `x` for each. Here
+    /// a group's sixteen weights and sixteen activations are read as four vectors apiece, and
+    /// the group's scale and minimum come out of the sum rather than being applied per element:
+    /// the group contributes `dl * dot(q, x) - ml * sum(x)`.
+    private static let matvecQ2K = """
+          {
+              const float dblk = GGML_HALF(b + 80);
+              const float dmin = GGML_HALF(b + 82);
+              int sidx = 0;
+              int o = 0;
+              for (int nn = 0; nn < 256; nn += 128) {
+                  const int qbase = 16 + nn / 4;
+                  int shift = 0;
+                  for (int j = 0; j < 4; ++j) {
+                      for (int hi = 0; hi < 2; ++hi) {
+                          const uchar sc = b[sidx++];
+                          const float dl = dblk * (float)(sc & 0xF);
+                          const float ml = dmin * (float)(sc >> 4);
+                          device const uchar4 *qp =
+                              (device const uchar4 *)(b + qbase + 16 * hi);
+                          for (int _m = 0; _m < vecs; ++_m) {
+                              device const vec<IT, 4> *xv =
+                                  (device const vec<IT, 4> *)(xrow + _m * K + o);
+                              float4 ssum = 0.0f;
+                              float4 tsum = 0.0f;
+                              #pragma clang loop unroll(full)
+                              for (int l = 0; l < 4; ++l) {
+                                  const float4 xf = float4(xv[l]);
+                                  const uchar4 qv = qp[l];
+                                  const float4 qf = float4(
+                                      (float)((qv.x >> shift) & 3), (float)((qv.y >> shift) & 3),
+                                      (float)((qv.z >> shift) & 3), (float)((qv.w >> shift) & 3));
+                                  ssum += xf * qf;
+                                  tsum += xf;
+                              }
+                              acc[_m] += dl * (ssum.x + ssum.y + ssum.z + ssum.w)
+                                       - ml * (tsum.x + tsum.y + tsum.z + tsum.w);
+                          }
+                          o += 16;
+                      }
+                      shift += 2;
+                  }
+              }
+          }
       """
 
     private static let matvecEpilog = """
