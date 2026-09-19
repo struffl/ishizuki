@@ -95,6 +95,18 @@ struct Serve: ParsableCommand {
   @Flag(name: .long, help: "Log plain lines instead of the live dashboard.")
   var disableDashboard = false
 
+  @Option(
+    name: .long,
+    help:
+      "Disk budget for prefixes kept between runs, in GB. 0 turns the disk cache off."
+  )
+  var prefixCacheGB: Double = 8
+
+  @Option(
+    name: .long,
+    help: "Shortest prefix worth archiving to disk, in tokens.")
+  var prefixCacheMinimum: Int = 2048
+
   func run() throws {
     let kvConfig = KVCacheConfig(bits: kvBits, residualWindow: kvWindow)
     try kvConfig.validate()
@@ -131,6 +143,12 @@ struct Serve: ParsableCommand {
       ropeScaling: contextScale > 1
         ? RopeScaling(method: .yarn, factor: contextScale) : .none,
       budget: budget,
+      prefixStore: prefixCacheGB > 0
+        ? PrefixStore(
+          directory: prefixCacheDirectory,
+          byteLimit: Int(prefixCacheGB * 1_073_741_824),
+          minimumTokens: prefixCacheMinimum)
+        : nil,
       preload: hot || !lazyLoad)
 
     var header = [

@@ -287,6 +287,24 @@ final class ServeDashboard: @unchecked Sendable {
               " · \(MemoryBudget.tokens(tier.contextTokens)) reserved"
                 + " · \(MemoryBudget.tokens(budget.maxContextTokens)) ceiling"
                 + " · \(compact(server.sessions.cachedBytes)) kv held")))
+
+    let sessions = server.sessions
+    let lookups = sessions.hits + sessions.misses
+    if lookups > 0 {
+      var detail =
+        "\(sessions.hits) of \(lookups) reused"
+        + Style.faint(" · \(sessions.slotCount) slot\(sessions.slotCount == 1 ? "" : "s")")
+      if sessions.branches > 0 {
+        detail += Style.faint(" · \(sessions.branches) branched")
+      }
+      if sessions.diskHits > 0 {
+        detail += Style.faint(" · \(sessions.diskHits) from disk")
+      }
+      if let store = server.prefixStore {
+        detail += Style.faint(" · \(compact(store.totalBytes)) archived")
+      }
+      lines.append("  " + Style.field("prefix", Style.accent(detail)))
+    }
     return lines
   }
 

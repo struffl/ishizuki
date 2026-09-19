@@ -88,6 +88,10 @@ func resolvedModelPath(_ model: String, repo: String) -> String {
   return modelsDirectory.appending(path: (repo as NSString).lastPathComponent).path
 }
 
-private let applicationSupportDirectory =
+/// Where cached prefixes are archived between runs.
+let prefixCacheDirectory =
+  applicationSupportDirectory.appending(path: "Ishizuki/cache/prefixes")
+
+let applicationSupportDirectory =
   FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
   ?? URL(filePath: NSHomeDirectory()).appending(path: "Library/Application Support")
