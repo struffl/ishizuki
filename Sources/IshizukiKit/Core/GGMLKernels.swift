@@ -194,7 +194,9 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "K", "N",
         ],
         outputNames: ["y"],
-        source: macros + matvecProlog + "if (qtype == 10) {" + matvecQ2K
+        source: macros + matvecDot8 + matvecProlog
+          + "if (qtype == 10) {" + matvecQ2K
+          + "} else if (qtype == 16 || qtype == 17) {" + matvecIQ2
           + "} else {" + decodeChain + "}" + matvecEpilog)
     }()
 
@@ -307,6 +309,63 @@ public enum GGMLKernels {
                           o += 16;
                       }
                       shift += 2;
+                  }
+              }
+          }
+      """
+
+    /// The shape every `iq2` group has: eight contiguous weights that are one grid entry, one
+    /// sign byte and one scale. Written as two vector loads a side, the group's scale applied
+    /// once to the sum rather than to each weight.
+    private static let matvecDot8 = """
+          #define GGML_DOT8(db, gptr, sbits, off) { \
+              device const char4 *_g = (device const char4 *)(gptr); \
+              const float4 _g0 = float4(_g[0]); \
+              const float4 _g1 = float4(_g[1]); \
+              const float4 _s0 = float4(GGML_SIGN(sbits, 0), GGML_SIGN(sbits, 1), \
+                                        GGML_SIGN(sbits, 2), GGML_SIGN(sbits, 3)); \
+              const float4 _s1 = float4(GGML_SIGN(sbits, 4), GGML_SIGN(sbits, 5), \
+                                        GGML_SIGN(sbits, 6), GGML_SIGN(sbits, 7)); \
+              const float4 _w0 = _g0 * _s0; \
+              const float4 _w1 = _g1 * _s1; \
+              for (int _m = 0; _m < vecs; ++_m) { \
+                  device const vec<IT, 4> *_xv = \
+                      (device const vec<IT, 4> *)(xrow + _m * K + (off)); \
+                  const float4 _p = float4(_xv[0]) * _w0 + float4(_xv[1]) * _w1; \
+                  acc[_m] += (db) * (_p.x + _p.y + _p.z + _p.w); \
+              } \
+          }
+
+      """
+
+    private static let matvecIQ2 = """
+          if (qtype == 16) {
+              const float dblk = GGML_HALF(b + 0);
+              int o = 0;
+              for (int ib = 0; ib < 8; ++ib) {
+                  const uint a1 = GGML_U32(b + 2 + 8 * ib);
+                  const uint a2 = GGML_U32(b + 6 + 8 * ib);
+                  const float db = dblk * (0.5f + (float)(a2 >> 28)) * 0.25f;
+                  for (int l = 0; l < 4; ++l) {
+                      device const int8_t *g = g_iq2xxs + 8 * (int)((a1 >> (8 * l)) & 0xFF);
+                      const uchar sb = ksigns[(a2 >> (7 * l)) & 127];
+                      GGML_DOT8(db, g, sb, o);
+                      o += 8;
+                  }
+              }
+          } else {
+              const float dblk = GGML_HALF(b + 0);
+              int o = 0;
+              for (int ib = 0; ib < 8; ++ib) {
+                  const uchar sc = b[66 + ib];
+                  const float db0 = dblk * (0.5f + (float)(sc & 0xF)) * 0.25f;
+                  const float db1 = dblk * (0.5f + (float)(sc >> 4)) * 0.25f;
+                  for (int l = 0; l < 4; ++l) {
+                      const ushort q = *(device const ushort *)(b + 2 + 2 * (4 * ib + l));
+                      device const int8_t *g = g_iq2xs + 8 * (int)(q & 511);
+                      const uchar sb = ksigns[q >> 9];
+                      GGML_DOT8((l < 2) ? db0 : db1, g, sb, o);
+                      o += 8;
                   }
               }
           }
