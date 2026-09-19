@@ -298,4 +298,28 @@ struct GGUFTests {
       _ = try GGUFArchitecture(file: GGUFFile(url: url))
     }
   }
+  @Test("builds the tokenizer out of GGUF metadata")
+  func tokenizerFromMetadata() throws {
+    let url = temporaryURL()
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let tokens = ["h", "i", "\u{0120}", "t", "e", "r", "hi", "<|im_end|>"]
+    var builder = Builder()
+    builder.metadata = [
+      ("general.architecture", 8, Builder.string("qwen35")),
+      ("tokenizer.ggml.tokens", 9, Builder.stringArray(tokens)),
+      ("tokenizer.ggml.token_type", 9, Builder.intArray([1, 1, 1, 1, 1, 1, 1, 3])),
+      ("tokenizer.ggml.merges", 9, Builder.stringArray(["h i"])),
+      ("tokenizer.ggml.eos_token_id", 4, Builder.u32(7)),
+    ]
+    try builder.write(to: url)
+
+    let tokenizer = try BonsaiTokenizer(gguf: GGUFFile(url: url))
+    #expect(tokenizer.eosTokenIds.contains(7))
+
+    let ids = tokenizer.encode("hi there<|im_end|>")
+    #expect(ids == [6, 2, 3, 0, 4, 5, 4, 7])
+    #expect(tokenizer.decode(ids) == "hi there<|im_end|>")
+    #expect(tokenizer.decode(ids, skipSpecialTokens: true) == "hi there")
+  }
 }
