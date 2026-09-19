@@ -310,7 +310,8 @@ public struct BonsaiConfig: Codable, Sendable {
       text["layer_types"] = Array(repeating: "full_attention", count: layers)
     }
 
-    let quantization = o["quantization"] as? [String: Any]
+    let quantization =
+      o["quantization"] as? [String: Any]
       ?? o["quantization_config"] as? [String: Any]
       ?? ["bits": 16, "group_size": 64, "mode": "affine"]
 
@@ -380,7 +381,8 @@ public struct BonsaiConfig: Codable, Sendable {
     if let bos = int("bos_token_id") { text["bos_token_id"] = bos }
     if let eos = int("eos_token_id") { text["eos_token_id"] = eos }
 
-    let quantization = o["quantization"] as? [String: Any]
+    let quantization =
+      o["quantization"] as? [String: Any]
       ?? ["bits": 2, "group_size": 128, "mode": "affine"]
     let pack: [String: Any] = [
       "schema_version": 0,
