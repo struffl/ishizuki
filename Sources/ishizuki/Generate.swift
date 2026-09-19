@@ -108,7 +108,7 @@ struct Generate: ParsableCommand {
       try ModelDownloader.ensure(directory: packURL, repo: repo)
     }
     let loadStart = Date()
-    let bonsai = try BonsaiModel(directory: packURL, ropeScaling: scaling)
+    let bonsai = try BonsaiModel(path: packURL, ropeScaling: scaling)
     if scaling.isActive {
       note(
         Style.field(
@@ -127,7 +127,7 @@ struct Generate: ParsableCommand {
     if raw {
       text = prompt
     } else {
-      let template = try ChatTemplate(directory: packURL)
+      let template = try ChatTemplate(path: packURL)
       var messages: [ChatMessage] = []
       if let system { messages.append(.system(system)) }
       messages.append(

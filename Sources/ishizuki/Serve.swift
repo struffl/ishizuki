@@ -127,7 +127,7 @@ struct Serve: ParsableCommand {
     let catalog = ModelCatalog.discover(in: modelSearchRoots)
     let chosen = model == defaultModelPath ? nil : catalog[model]
 
-    let modelURL = chosen?.directory ?? URL(filePath: resolvedModelPath(model, repo: repo))
+    let modelURL = chosen?.url ?? URL(filePath: resolvedModelPath(model, repo: repo))
     try neural.apply(pack: modelURL)
     if chosen == nil, !offline {
       try ModelDownloader.ensure(directory: modelURL, repo: repo)
@@ -137,7 +137,7 @@ struct Serve: ParsableCommand {
     let activeName =
       servedName
       ?? chosen?.id
-      ?? catalog.entries.first { $0.directory.standardizedFileURL == modelURL.standardizedFileURL }?
+      ?? catalog.entries.first { $0.url.standardizedFileURL == modelURL.standardizedFileURL }?
       .id
       ?? modelURL.lastPathComponent
 

@@ -67,6 +67,25 @@ public final class ChatTemplate: @unchecked Sendable {
     self.template = try Template(source)
   }
 
+  public init(source: String) throws {
+    self.source = source
+    self.template = try Template(source)
+  }
+
+  /// A pack keeps its template in a file beside the weights; a GGUF keeps it in the metadata.
+  /// Callers hold one path either way, so the shape of what it points at is decided here.
+  public convenience init(path: URL) throws {
+    guard path.pathExtension.lowercased() == "gguf" else {
+      try self.init(directory: path)
+      return
+    }
+    guard let source = try GGUFFile(url: path)["tokenizer.chat_template"]?.stringValue else {
+      throw BonsaiError.missingComponent(
+        "no tokenizer.chat_template in \(path.lastPathComponent)")
+    }
+    try self.init(source: source)
+  }
+
   public func render(
     messages: [ChatMessage],
     addGenerationPrompt: Bool = true,

@@ -19,7 +19,7 @@ struct VerifyLogits: ParsableCommand {
     let inputIds = goldenArrays["input_ids"]!
 
     let start = Date()
-    let bonsai = try BonsaiModel(directory: URL(filePath: model))
+    let bonsai = try BonsaiModel(path: URL(filePath: model))
     print(String(format: "loaded in %.1fs", -start.timeIntervalSinceNow))
 
     let cache = bonsai.text.makeCache(kvConfig: .full)

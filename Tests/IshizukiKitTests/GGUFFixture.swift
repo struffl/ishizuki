@@ -150,6 +150,7 @@ enum GGUFFixture {
     var keyHeadDim = 64
     var valueHeads = 4
     var kernel = 4
+    var chatTemplate: String?
 
     var valueHeadDim: Int { innerSize / valueHeads }
     var innerSize: Int { 256 }
@@ -205,6 +206,9 @@ enum GGUFFixture {
         ("tokenizer.ggml.tokens", 9, Builder.stringArray((0..<vocab).map { "t\($0)" })),
         ("tokenizer.ggml.eos_token_id", 4, Writer.u32(UInt32(vocab - 1))),
       ]
+      if let chatTemplate {
+        writer.metadata.append(("tokenizer.chat_template", 8, Writer.string(chatTemplate)))
+      }
 
       var seed: UInt64 = 0
       var tensors: [(name: String, dims: [Int], type: GGMLType, payload: Data)] = []

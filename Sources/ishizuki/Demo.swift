@@ -80,8 +80,8 @@ struct Demo: ParsableCommand {
     if !offline { try ModelDownloader.ensure(directory: packURL, repo: repo) }
 
     let loadStart = Date()
-    let bonsai = try BonsaiModel(directory: packURL)
-    let template = try ChatTemplate(directory: packURL)
+    let bonsai = try BonsaiModel(path: packURL)
+    let template = try ChatTemplate(path: packURL)
     let generator = Generator(model: bonsai, prefillChunkSize: Politeness.prefillChunk(for: level))
     generator.politeness = level
     let sessions = SessionCache(capacity: 1)

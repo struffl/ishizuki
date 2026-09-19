@@ -16,7 +16,7 @@ struct BatchCheck: ParsableCommand {
   @Option(name: .long) var decodeSteps: Int = 16
 
   func run() throws {
-    let bonsai = try BonsaiModel(directory: URL(filePath: model))
+    let bonsai = try BonsaiModel(path: URL(filePath: model))
 
     let prompts = [
       "The capital city of France is called",

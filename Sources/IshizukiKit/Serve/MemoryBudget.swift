@@ -76,8 +76,15 @@ public final class MemoryBudget: @unchecked Sendable {
   }
 
   /// Size of the weight files in a model pack, which land in GPU memory as they are mapped.
+  /// A GGUF is handed over as the file itself rather than a directory, and is its own weights.
   public static func weightBytes(in directory: URL) -> Int? {
     let manager = FileManager.default
+    if directory.pathExtension.lowercased() == "gguf" {
+      let size =
+        (try? directory.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]))?
+        .fileSize
+      return (size ?? 0) > 0 ? size : nil
+    }
     guard
       let names = try? manager.contentsOfDirectory(atPath: directory.path)
     else { return nil }

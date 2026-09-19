@@ -188,7 +188,7 @@ struct Launch: ParsableCommand {
     let catalog = ModelCatalog.discover(in: modelSearchRoots)
     let modelURL: URL
     if let chosen {
-      modelURL = chosen.directory
+      modelURL = chosen.url
     } else {
       modelURL = URL(filePath: resolvedModelPath(model ?? defaultModelPath, repo: repo))
       if !offline {

@@ -24,7 +24,7 @@ struct ContextBench: ParsableCommand {
     let kvConfig = KVCacheConfig(bits: kvBits >= 16 ? nil : kvBits)
     try kvConfig.validate()
 
-    let bonsai = try BonsaiModel(directory: URL(filePath: model))
+    let bonsai = try BonsaiModel(path: URL(filePath: model))
     let unit = bonsai.tokenizer.encode(
       "The distributed ledger records each transaction in a totally ordered log. ")
     print(
