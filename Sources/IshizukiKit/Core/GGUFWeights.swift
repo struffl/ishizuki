@@ -47,9 +47,12 @@ public enum GGUFWeights {
   public static func load(file: GGUFFile, dtype: DType = .bfloat16) throws -> WeightStore {
     var dense: [String: MLXArray] = [:]
     var packed: [String: GGUFBlocks] = [:]
+    // A file without the architecture metadata has no draft head either, so every block is a
+    // language-model block.
+    let textLayers = (try? GGUFArchitecture(file: file))?.textLayers
 
     for tensor in file.tensors {
-      guard let name = GGUFTensorNaming.canonical(tensor.name) else {
+      guard let name = GGUFTensorNaming.canonical(tensor.name, textLayers: textLayers) else {
         throw BonsaiError.unsupportedModel(
           "\(tensor.name) has no module in this runtime")
       }

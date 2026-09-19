@@ -18,16 +18,66 @@ struct VerifyGGUF: ParsableCommand {
     commandName: "verify-gguf",
     abstract: "Compare the logits of a pack and a GGUF of the same checkpoint.")
 
-  @Option(name: .long, help: "This runtime's pack.") var pack: String
+  @Option(name: .long, help: "This runtime's pack.") var pack: String?
   @Option(name: .long, help: "llama.cpp's file for the same checkpoint.") var gguf: String
+  @Option(
+    name: .long,
+    help: "llama.cpp's own logits for this file, from Scripts/gen-llama-logits.c.")
+  var reference: String?
   @Option(name: .long, help: "Tokens to run through both.") var prompt =
     "The quick brown fox jumps over the lazy dog."
 
   func run() throws {
-    let packed = try BonsaiModel(path: URL(filePath: pack))
-    print("pack: \(packed.config.textConfig.numHiddenLayers) layers, loaded")
     let file = try BonsaiModel(path: URL(filePath: gguf))
-    print("gguf: \(file.config.textConfig.numHiddenLayers) layers, loaded")
+    if let reference { try compareToReference(file, URL(filePath: reference)) }
+    guard let pack else { return }
+    try compareToPack(pack, file)
+  }
+
+  /// The strongest form of this check: the same file, read by this runtime and by llama.cpp.
+  /// Nothing differs but the code, so a fold applied twice has nowhere to hide.
+  private func compareToReference(_ model: BonsaiModel, _ url: URL) throws {
+    let data = try Data(contentsOf: url)
+    guard data.count > 16, data.prefix(8) == Data("LLAMALG1".utf8) else {
+      throw BonsaiError.missingComponent("\(url.lastPathComponent) is not a reference dump")
+    }
+    let counts = data.withUnsafeBytes { raw -> (Int, Int) in
+      (
+        Int(raw.loadUnaligned(fromByteOffset: 8, as: UInt32.self)),
+        Int(raw.loadUnaligned(fromByteOffset: 12, as: UInt32.self))
+      )
+    }
+    let (tokenCount, vocab) = counts
+    let tokens = (0..<tokenCount).map { i in
+      data.withUnsafeBytes {
+        Int($0.loadUnaligned(fromByteOffset: 16 + 4 * i, as: Int32.self))
+      }
+    }
+    let base = 16 + 4 * tokenCount
+    let wanted = (0..<vocab).map { i in
+      data.withUnsafeBytes {
+        $0.loadUnaligned(fromByteOffset: base + 4 * i, as: Float.self)
+      }
+    }
+
+    print("")
+    print("against llama.cpp on the same file:")
+    let ours = model.tokenizer.encode(
+      prompt, addSpecialTokens: false)
+    print("  tokens: \(tokens.count) theirs, \(ours.count) ours\(ours == tokens ? "" : " — DIFFERENT")")
+
+    let input = MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
+    let got = model.text(input, cache: nil).asType(.float32)[0, tokens.count - 1]
+    let want = MLXArray(wanted)
+    eval(got, want)
+    report(got, want)
+  }
+
+  private func compareToPack(_ pack: String, _ file: BonsaiModel) throws {
+    let packed = try BonsaiModel(path: URL(filePath: pack))
+    print("")
+    print("against a pack of the same checkpoint:")
+    print("  pack: \(packed.config.textConfig.numHiddenLayers) layers")
 
     guard packed.config.textConfig.vocabSize == file.config.textConfig.vocabSize else {
       throw BonsaiError.shapeMismatch(
@@ -50,8 +100,10 @@ struct VerifyGGUF: ParsableCommand {
     eval(a, b)
 
     let last = ids.count - 1
-    let one = a[0, last]
-    let two = b[0, last]
+    report(a[0, last], b[0, last])
+  }
+
+  private func report(_ one: MLXArray, _ two: MLXArray) {
     let spread = maximum(abs(one).max(), abs(two).max()).item(Float.self)
     let delta = abs(one - two).max().item(Float.self)
 
@@ -61,19 +113,18 @@ struct VerifyGGUF: ParsableCommand {
     let deviation = (one.variance().sqrt() * two.variance().sqrt()).item(Float.self)
     let correlation = covariance / max(deviation, 1e-9)
 
-    print("")
-    print(String(format: "max|Δ| at the last position : %.4f over a range of %.1f", delta, spread))
-    print(String(format: "correlation                 : %.6f", correlation))
-    print("argmax pack=\(one.argMax().item(Int.self)) gguf=\(two.argMax().item(Int.self))")
+    print(String(format: "  max|Δ| : %.4f over a range of %.1f", delta, spread))
+    print(String(format: "  correlation : %.6f", correlation))
+    print("  argmax ours=\(one.argMax().item(Int.self)) theirs=\(two.argMax().item(Int.self))")
 
     // A fold applied twice does not shift a logit slightly; it changes what the model is.
     // Quantization noise between two different block formats is the only expected difference.
     if correlation > 0.999 {
-      print("\nthese are the same model")
+      print("  the same model")
     } else if correlation > 0.9 {
-      print("\nclose, but not the same: suspect one layer rather than a convention")
+      print("  close: a different checkpoint or quantization, not a different convention")
     } else {
-      print("\nthese are not the same model — check the folds in GGUFWeights")
+      print("  not the same model — check the folds in GGUFWeights")
     }
   }
 }

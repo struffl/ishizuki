@@ -18,7 +18,7 @@ public enum GGMLDequant {
   /// Every type this runtime can read. A GGUF naming anything else is refused at load.
   public static let supported: Set<GGMLType> = [
     .f32, .f16, .bf16,
-    .q2_K, .q4_K,
+    .q2_K, .q4_K, .q6_K,
     .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
   ]
 
@@ -50,6 +50,7 @@ public enum GGMLDequant {
         }
       case .q2_K: blockwise(bytes, y, blocks, type, q2K)
       case .q4_K: blockwise(bytes, y, blocks, type, q4K)
+      case .q6_K: blockwise(bytes, y, blocks, type, q6K)
       case .iq1_s: blockwise(bytes, y, blocks, type, iq1S)
       case .iq1_m: blockwise(bytes, y, blocks, type, iq1M)
       case .iq2_xxs: blockwise(bytes, y, blocks, type, iq2XXS)
@@ -91,6 +92,10 @@ public enum GGMLDequant {
 
   private static func u8(_ p: UnsafeRawPointer, _ offset: Int) -> UInt8 {
     p.loadUnaligned(fromByteOffset: offset, as: UInt8.self)
+  }
+
+  private static func i8(_ p: UnsafeRawPointer, _ offset: Int) -> Int8 {
+    p.loadUnaligned(fromByteOffset: offset, as: Int8.self)
   }
 
   private static func u16(_ p: UnsafeRawPointer, _ offset: Int) -> UInt16 {
@@ -141,6 +146,41 @@ public enum GGMLDequant {
         }
         shift += 2
       }
+    }
+  }
+
+  /// ql holds the low four bits of every weight, qh the high two, and the sign comes from
+  /// subtracting 32 — six bits per weight, in two tables rather than one.
+  private static func q6K(
+    _ p: UnsafeRawPointer, _ y: UnsafeMutableBufferPointer<Float>, _ start: Int
+  ) {
+    let d = half(u16(p, 208))
+    var out = start
+    var low = 0
+    var high = 128
+    var scale = 192
+
+    for _ in stride(from: 0, to: superBlock, by: 128) {
+      for l in 0..<32 {
+        let bits = u8(p, high + l)
+        let q1 = Int(u8(p, low + l) & 0xf) | (Int((bits >> 0) & 3) << 4)
+        let q2 = Int(u8(p, low + 32 + l) & 0xf) | (Int((bits >> 2) & 3) << 4)
+        let q3 = Int(u8(p, low + l) >> 4) | (Int((bits >> 4) & 3) << 4)
+        let q4 = Int(u8(p, low + 32 + l) >> 4) | (Int((bits >> 6) & 3) << 4)
+
+        let group = l / 16
+        func scaled(_ index: Int, _ q: Int) -> Float {
+          d * Float(i8(p, scale + group + index)) * Float(q - 32)
+        }
+        y[out + l] = scaled(0, q1)
+        y[out + 32 + l] = scaled(2, q2)
+        y[out + 64 + l] = scaled(4, q3)
+        y[out + 96 + l] = scaled(6, q4)
+      }
+      out += 128
+      low += 64
+      high += 32
+      scale += 8
     }
   }
 

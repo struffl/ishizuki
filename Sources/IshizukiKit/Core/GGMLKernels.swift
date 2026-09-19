@@ -310,6 +310,26 @@ public enum GGMLKernels {
                   }
                   o += 64;
               }
+          } else if (qtype == 14) {
+              const float d = GGML_HALF(b + 208);
+              for (int n = 0; n < 2; ++n) {
+                  device const uchar *ql = b + 64 * n;
+                  device const uchar *qh = b + 128 + 32 * n;
+                  device const char *sc = (device const char *)(b + 192 + 8 * n);
+                  for (int l = 0; l < 32; ++l) {
+                      const uchar h = qh[l];
+                      const int g = l / 16;
+                      const int q1 = (ql[l] & 0xF) | (((h >> 0) & 3) << 4);
+                      const int q2 = (ql[32 + l] & 0xF) | (((h >> 2) & 3) << 4);
+                      const int q3 = (ql[l] >> 4) | (((h >> 4) & 3) << 4);
+                      const int q4 = (ql[32 + l] >> 4) | (((h >> 6) & 3) << 4);
+                      GGML_EMIT(o + l, d * (float)sc[g + 0] * (float)(q1 - 32));
+                      GGML_EMIT(o + 32 + l, d * (float)sc[g + 2] * (float)(q2 - 32));
+                      GGML_EMIT(o + 64 + l, d * (float)sc[g + 4] * (float)(q3 - 32));
+                      GGML_EMIT(o + 96 + l, d * (float)sc[g + 6] * (float)(q4 - 32));
+                  }
+                  o += 128;
+              }
           } else if (qtype == 23) {
               const float d = GGML_HALF(b + 0);
               const ushort sh = *(device const ushort *)(b + 2);

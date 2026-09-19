@@ -16,6 +16,8 @@ public struct GGUFArchitecture: Sendable {
   public let textConfig: BonsaiConfig.TextConfig
   public let chatTemplate: String?
   public let hasMTP: Bool
+  /// Where the language model's blocks stop. Anything past this is the draft head.
+  public let textLayers: Int
 
   public static let supportedArchitectures: Set<String> = ["qwen35"]
 
@@ -35,7 +37,10 @@ public struct GGUFArchitecture: Sendable {
     }
     func optionalInt(_ suffix: String) -> Int? { file.architectureValue(suffix)?.intValue }
 
-    let layers = try int("block_count")
+    // block_count counts the draft head's block too, and every geometry below is the language
+    // model's alone.
+    let draftLayers = optionalInt("nextn_predict_layers") ?? 0
+    let layers = try int("block_count") - draftLayers
     let hidden = try int("embedding_length")
     let heads = try int("attention.head_count")
     let headDim = optionalInt("attention.key_length") ?? hidden / max(heads, 1)
@@ -95,6 +100,7 @@ public struct GGUFArchitecture: Sendable {
       "linear_conv_kernel_dim": try int("ssm.conv_kernel"),
       "rope_parameters": rope,
     ]
+    if draftLayers > 0 { text["mtp_num_hidden_layers"] = draftLayers }
     if let bos = file["tokenizer.ggml.bos_token_id"]?.intValue { text["bos_token_id"] = bos }
     if let eos = file["tokenizer.ggml.eos_token_id"]?.intValue { text["eos_token_id"] = eos }
 
@@ -102,7 +108,8 @@ public struct GGUFArchitecture: Sendable {
       BonsaiConfig.TextConfig.self,
       from: try JSONSerialization.data(withJSONObject: text))
     self.chatTemplate = file["tokenizer.chat_template"]?.stringValue
-    self.hasMTP = file.tensors.contains { $0.name.hasPrefix("mtp") || $0.name.contains(".mtp") }
+    self.textLayers = layers
+    self.hasMTP = draftLayers > 0 && file.tensors.contains { $0.name.contains(".nextn.") }
 
     try validate(against: file)
   }
@@ -184,7 +191,11 @@ public enum GGUFTensorNaming {
 
   /// Nil for a tensor this runtime has no module for, so an unknown extra in a file is
   /// reported rather than silently dropped.
-  public static func canonical(_ name: String) -> String? {
+  ///
+  /// `textLayers` is where the language model stops and the draft head begins. llama.cpp files
+  /// the MTP block as one more ordinary block — `blk.64` after 64 layers — and hangs the head's
+  /// own four tensors off it under `nextn`, so nothing but the count says which it is.
+  public static func canonical(_ name: String, textLayers: Int? = nil) -> String? {
     switch name {
     case "token_embd.weight": return prefix + "embed_tokens.weight"
     case "output_norm.weight": return prefix + "norm.weight"
@@ -194,8 +205,33 @@ public enum GGUFTensorNaming {
 
     let parts = name.split(separator: ".", maxSplits: 2).map(String.init)
     guard parts.count == 3, parts[0] == "blk", let layer = Int(parts[1]) else { return nil }
+
+    if let textLayers, layer >= textLayers {
+      let draft = layer - textLayers
+      if let head = headSuffix(parts[2]) {
+        // The head's own tensors are not per-draft-layer; the runtime keeps one set.
+        return draft == 0 ? "language_model.mtp.\(head)" : nil
+      }
+      guard let suffix = blockSuffix(parts[2]) else { return nil }
+      return "language_model.mtp.layers.\(draft).\(suffix)"
+    }
+
     guard let suffix = blockSuffix(parts[2]) else { return nil }
     return "\(prefix)layers.\(layer).\(suffix)"
+  }
+
+  private static func headSuffix(_ tail: String) -> String? {
+    switch tail {
+    // `fc` projects the embedding and the hidden state together, which is why eh_proj is twice
+    // the model's width on its input side.
+    case "nextn.eh_proj.weight": "fc.weight"
+    case "nextn.enorm.weight": "pre_fc_norm_embedding.weight"
+    case "nextn.hnorm.weight": "pre_fc_norm_hidden.weight"
+    case "nextn.shared_head_norm.weight": "norm.weight"
+    // Written only by checkpoints that untie them; this one shares the model's own.
+    case "nextn.embed_tokens.weight", "nextn.shared_head_head.weight": nil
+    default: nil
+    }
   }
 
   private static func blockSuffix(_ tail: String) -> String? {
