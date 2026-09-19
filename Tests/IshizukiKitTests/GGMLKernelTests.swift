@@ -1,0 +1,90 @@
+// SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import Foundation
+import MLX
+import Testing
+
+@testable import IshizukiKit
+
+/// The GPU decode against the CPU one, which is itself held to ggml's output. A kernel that
+/// misreads a block's scales still produces plausible numbers, so the check is per element
+/// rather than on a norm.
+@Suite("GGML kernels")
+struct GGMLKernelTests {
+  private struct Reference {
+    let type: GGMLType
+    let bytes: [UInt8]
+    let count: Int
+  }
+
+  private static func load() throws -> [Reference] {
+    let url = try #require(
+      Bundle.module.url(
+        forResource: "ggml-reference", withExtension: "bin", subdirectory: "Fixtures")
+        ?? Bundle.module.url(forResource: "ggml-reference", withExtension: "bin"))
+    let data = try Data(contentsOf: url)
+    var cursor = 8
+    func u32() -> Int {
+      let value = data.withUnsafeBytes {
+        UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt32.self))
+      }
+      cursor += 4
+      return Int(value)
+    }
+    let count = u32()
+    var out: [Reference] = []
+    for _ in 0..<count {
+      let raw = UInt32(u32())
+      _ = u32()
+      let byteCount = u32()
+      let floatCount = u32()
+      let type = try #require(GGMLType(rawValue: raw))
+      let bytes = [UInt8](data.subdata(in: cursor..<(cursor + byteCount)))
+      cursor += byteCount + 4 * floatCount
+      out.append(Reference(type: type, bytes: bytes, count: floatCount))
+    }
+    return out
+  }
+
+  @Test("the Metal decode agrees with the reference decode on every block type")
+  func matchesReference() throws {
+    for reference in try Self.load() where reference.type.isQuantized {
+      let blocks = MLXArray(reference.bytes)
+      guard
+        let gpu = GGMLKernels.dequantize(
+          blocks: blocks, type: reference.type, shape: [reference.count], dtype: .float32)
+      else {
+        Issue.record("\(reference.type.name) produced no kernel")
+        continue
+      }
+      eval(gpu)
+      let actual = gpu.asArray(Float.self)
+      let expected = try GGMLDequant.dequantize(
+        Data(reference.bytes), type: reference.type, count: reference.count)
+
+      var worst: Float = 0
+      var worstIndex = -1
+      for i in 0..<reference.count {
+        let scale = max(abs(expected[i]), 1e-6)
+        let error = abs(actual[i] - expected[i]) / scale
+        if error > worst {
+          worst = error
+          worstIndex = i
+        }
+      }
+      let index = max(worstIndex, 0)
+      let detail =
+        "\(reference.type.name): element \(worstIndex) off by \(worst) relative "
+        + "(\(actual[index]) vs \(expected[index]))"
+      #expect(worst < 1e-5, "\(detail)")
+    }
+  }
+
+  @Test("a scalar type has no block kernel and falls back")
+  func scalarTypesFallBack() {
+    let blocks = MLXArray([UInt8](repeating: 0, count: 64))
+    #expect(GGMLKernels.dequantize(blocks: blocks, type: .f32, shape: [16]) == nil)
+    #expect(GGMLKernels.dequantize(blocks: blocks, type: .q3_K, shape: [256]) == nil)
+  }
+}
