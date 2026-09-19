@@ -50,7 +50,8 @@ let package = Package(
     ),
     .testTarget(
       name: "IshizukiKitTests",
-      dependencies: ["IshizukiKit"]
+      dependencies: ["IshizukiKit"],
+      resources: [.copy("Fixtures")]
     ),
   ]
 )

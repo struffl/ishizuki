@@ -11,12 +11,46 @@ public final class WeightStore: @unchecked Sendable {
     self.arrays = arrays
   }
 
+  /// A pack is either one safetensors file or a set of shards named by an index. Both land in
+  /// the same flat name table, so nothing downstream needs to know which it was.
   public convenience init(directory: URL, file: String = "model.safetensors") throws {
-    let url = directory.appending(path: file)
-    guard FileManager.default.fileExists(atPath: url.path) else {
-      throw BonsaiError.missingWeight("no \(file) in \(directory.path)")
+    let fm = FileManager.default
+    let single = directory.appending(path: file)
+    if fm.fileExists(atPath: single.path) {
+      self.init(arrays: try loadArrays(url: single))
+      return
     }
-    self.init(arrays: try loadArrays(url: url))
+
+    let index = directory.appending(path: file + ".index.json")
+    guard fm.fileExists(atPath: index.path) else {
+      throw BonsaiError.missingWeight(
+        "no \(file) and no \(file).index.json in \(directory.path)")
+    }
+
+    let object = try JSONSerialization.jsonObject(with: try Data(contentsOf: index))
+    guard let map = (object as? [String: Any])?["weight_map"] as? [String: String] else {
+      throw BonsaiError.missingWeight("\(file).index.json has no weight_map")
+    }
+
+    var arrays: [String: MLXArray] = [:]
+    arrays.reserveCapacity(map.count)
+    for shard in Set(map.values).sorted() {
+      let url = directory.appending(path: shard)
+      guard fm.fileExists(atPath: url.path) else {
+        throw BonsaiError.missingWeight("\(file).index.json names \(shard), which is not here")
+      }
+      for (name, array) in try loadArrays(url: url) {
+        arrays[name] = array
+      }
+    }
+
+    let missing = map.keys.filter { arrays[$0] == nil }
+    guard missing.isEmpty else {
+      throw BonsaiError.missingWeight(
+        "\(missing.count) tensor(s) named by the index are absent from the shards, "
+          + "starting with \(missing.sorted()[0])")
+    }
+    self.init(arrays: arrays)
   }
 
   public func callAsFunction(_ name: String) throws -> MLXArray {
@@ -39,16 +73,23 @@ public struct PackedModuleFactory {
   public let store: WeightStore
   public let records: [String: BonsaiConfig.PackedModuleRecord]
   public let tensorPrefix: String
-  public let groupSize: Int
-  public let bits: Int
+  public let quantization: BonsaiConfig.QuantizationConfig
 
   public init(store: WeightStore, config: BonsaiConfig, tensorPrefix: String) {
     self.store = store
     self.records = Dictionary(
       uniqueKeysWithValues: config.modules.map { ($0.path, $0) })
     self.tensorPrefix = tensorPrefix
-    self.groupSize = config.quantization.groupSize
-    self.bits = config.quantization.bits
+    self.quantization = config.quantization
+  }
+
+  public var groupSize: Int { quantization.groupSize }
+  public var bits: Int { quantization.bits }
+
+  /// An imatrix pass records its overrides against the tensor name, so the lookup key is the
+  /// prefixed one, not the bare module path the model builds with.
+  public func quant(for path: String) -> BonsaiConfig.ModuleQuant {
+    quantization.module(tensorPrefix + path)
   }
 
   public func linear(_ path: String) throws -> PackedLinear {
@@ -82,26 +123,28 @@ public struct PackedModuleFactory {
       block = 0
     }
     let key = tensorPrefix + path
+    let entry = quant(for: path)
     return try PackedEmbedding(
       weight: store(key + ".weight"),
       scales: store(key + ".scales"),
       biases: store(key + ".biases"),
       signs: store.optional(key + ".signs"),
       block: block,
-      groupSize: groupSize,
-      bits: bits)
+      groupSize: entry.groupSize,
+      bits: entry.bits)
   }
 
   private func packedLinear(_ path: String, block: Int) throws -> PackedLinear {
     let key = tensorPrefix + path
+    let entry = quant(for: path)
     return try PackedLinear(
       weight: store(key + ".weight"),
       scales: store(key + ".scales"),
       biases: store(key + ".biases"),
       signs: store.optional(key + ".signs"),
       block: block,
-      groupSize: groupSize,
-      bits: bits)
+      groupSize: entry.groupSize,
+      bits: entry.bits)
   }
 }
 

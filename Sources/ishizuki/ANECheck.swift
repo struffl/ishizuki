@@ -202,6 +202,58 @@ struct ANECheck: ParsableCommand {
 
     // Both legs run concurrently, so the split is best where they finish together. Extrapolating
     // each leg to the whole projection gives that point directly.
+    let bank = try ANESlice(
+      url: URL(filePath: slice), queue: DispatchQueue(label: "ane-check", qos: .userInitiated))
+    var merged: MLXArray?
+    let roundTrip = time {
+      let pending = bank.dispatch(rotated)
+      let tail = quantizedMM(
+        rotated, rest.weight, scales: rest.scales, biases: rest.biases,
+        transpose: true, groupSize: rest.groupSize, bits: rest.bits, mode: .affine)
+      eval(tail)
+      guard let head = try? pending.wait() else { return }
+      let whole = concatenated([head, tail], axis: -1)
+      eval(whole)
+      merged = whole
+    }
+
+    let headHalf = merged != nil ? bank.dispatch(rotated) : bank.dispatch(rotated)
+    let headArray = (try? headHalf.wait()) ?? MLXArray.zeros([rows, split], dtype: .float16)
+    let tailArray = quantizedMM(
+      rotated, rest.weight, scales: rest.scales, biases: rest.biases,
+      transpose: true, groupSize: rest.groupSize, bits: rest.bits, mode: .affine)
+    eval(headArray, tailArray)
+
+    let copyIn = time {
+      let host = rotated.asType(.float16).asArray(Float16.self)
+      _ = host.count
+    }
+    let concatOnly = time { eval(concatenated([headArray, tailArray], axis: -1)) }
+    print("")
+    print(
+      Style.faint(
+        String(
+          format: "  [phases] host copy of input %.2f ms   concat of halves %.2f ms",
+          copyIn * 1000, concatOnly * 1000)))
+
+    let wholeReference = quantizedMM(
+      rotated, full.weight, scales: full.scales, biases: full.biases,
+      transpose: true, groupSize: full.groupSize, bits: full.bits, mode: .affine)
+    eval(wholeReference)
+    let mergedCosine =
+      merged.map { got -> Float in
+        let a = got.asType(.float32)
+        let b = wholeReference.asType(.float32)
+        return (a * b).sum().item(Float.self)
+          / (sqrt((a * a).sum().item(Float.self)) * sqrt((b * b).sum().item(Float.self)))
+      } ?? 0
+
+    print("")
+    let endToEnd = String(
+      format: "  round trip incl. copies + merge %6.2f ms   %.2fx   cosine %.6f",
+      roundTrip * 1000, baseline / roundTrip, mergedCosine)
+    print(baseline / roundTrip > 1 ? Style.good(endToEnd) : Style.bad(endToEnd))
+
     let aneWhole = neural / fraction
     let optimal = baseline / (baseline + aneWhole)
     print("")

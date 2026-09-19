@@ -310,9 +310,10 @@ final class ServeDashboard: @unchecked Sendable {
   }
 
   private func paint(_ lines: [String]) {
+    let width = terminalWidth()
     var output = ""
     if painted > 0 { output += "\u{1B}[\(painted)A" }
-    for line in lines { output += "\u{1B}[2K" + line + "\n" }
+    for line in lines { output += "\u{1B}[2K" + clip(line, to: width) + "\n" }
     if painted > lines.count {
       let extra = painted - lines.count
       output += String(repeating: "\u{1B}[2K\n", count: extra)
@@ -333,6 +334,31 @@ final class ServeDashboard: @unchecked Sendable {
     }
     return 100
   }
+}
+
+private func clip(_ line: String, to width: Int) -> String {
+  var out = ""
+  var visible = 0
+  var index = line.startIndex
+  while index < line.endIndex {
+    let character = line[index]
+    if character == "\u{1B}" {
+      var end = line.index(after: index)
+      while end < line.endIndex, !("@"..."~").contains(line[end]) {
+        end = line.index(after: end)
+      }
+      if end < line.endIndex { end = line.index(after: end) }
+      out += line[index..<end]
+      index = end
+      continue
+    }
+    if visible < width {
+      out.append(character)
+      visible += 1
+    }
+    index = line.index(after: index)
+  }
+  return out
 }
 
 private func pad(_ text: String, _ width: Int, right: Bool = true) -> String {

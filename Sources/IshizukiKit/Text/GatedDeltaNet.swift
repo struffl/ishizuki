@@ -29,6 +29,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
   private let headRepeat: Int
 
   private let unitKeyNorm: MLXArray
+  private let zSplit: (slice: ANESlice, tail: PackedLinear)?
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int,
@@ -66,14 +67,35 @@ public final class GatedDeltaNet: @unchecked Sendable {
     self.normWeight = try store(tensorPrefix + ".norm.weight")
 
     self.unitKeyNorm = MLXArray.ones([keyHeadDim], dtype: .float32)
+
+    // Only the token-local z is offloaded. qkv feeds the delta rule's state, where an approximate
+    // value would not stay local but compound along the prompt, so it keeps the 2-bit path.
+    if let bank = BonsaiRuntime.aneBank,
+      let slice = bank.slice("\(layer).linear_attn.in_proj_z"),
+      slice.inputDim == inProjZ.inputDim, slice.outputDim < inProjZ.outputDim,
+      let tail = try? inProjZ.channels(from: slice.outputDim)
+    {
+      self.zSplit = (slice, tail)
+    } else {
+      self.zSplit = nil
+    }
   }
 
   public func callAsFunction(_ x: MLXArray, cache: GatedDeltaNetCache?) -> MLXArray {
     let b = x.dim(0)
     let s = x.dim(1)
 
+    // Handed over before the recurrent work starts, so the Neural Engine runs underneath the
+    // convolution and the delta rule rather than after them.
+    var zPending: ANESlice.Pending?
+    var zTail: MLXArray?
+    if let zSplit, b * s == zSplit.slice.rows {
+      let rotated = inProjZ.rotate(x.reshaped([b * s, x.dim(2)]))
+      zPending = zSplit.slice.dispatch(rotated)
+      zTail = zSplit.tail.applyRotated(rotated)
+    }
+
     let qkv = inProjQKV(x)
-    let z = inProjZ(x).reshaped([b, s, numValueHeads, valueHeadDim])
     let aRaw = matmul(x, inProjA.T.asType(x.dtype))
     let bRaw = matmul(x, inProjB.T.asType(x.dtype))
 
@@ -113,8 +135,15 @@ public final class GatedDeltaNet: @unchecked Sendable {
     cache?.recurrentState = newState
     cache?.advance(s)
 
+    var z: MLXArray?
+    if let zPending, let zTail, let head = try? zPending.wait() {
+      z = concatenated([head, zTail], axis: -1)
+        .reshaped([b, s, numValueHeads, valueHeadDim])
+    }
+    let zValue = z ?? inProjZ(x).reshaped([b, s, numValueHeads, valueHeadDim])
+
     let normalized = MLXFast.rmsNorm(y, weight: normWeight.asType(y.dtype), eps: normEps)
-    let gated = (silu(z.asType(.float32)) * normalized.asType(.float32)).asType(x.dtype)
+    let gated = (silu(zValue.asType(.float32)) * normalized.asType(.float32)).asType(x.dtype)
 
     return outProj(gated.reshaped([b, s, valueDim]))
   }
