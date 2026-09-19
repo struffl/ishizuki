@@ -30,6 +30,12 @@ public final class PackedLinear: @unchecked Sendable {
   public let block: Int
   public let groupSize: Int
   public let bits: Int
+  /// Set for a projection built by ``init(dense:)``: `weight` is the real fp16 checkpoint
+  /// weight, not a quantized one, and `scales`/`biases` are unused placeholders.
+  public let isDense: Bool
+  /// Calibration's hook onto this projection's exact input, called before every forward pass
+  /// when this projection is dense. Never set for a quantized projection.
+  private let collect: (@Sendable (MLXArray) -> Void)?
 
   public let inputDim: Int
   public let outputDim: Int
@@ -45,6 +51,8 @@ public final class PackedLinear: @unchecked Sendable {
     self.block = block
     self.groupSize = groupSize
     self.bits = bits
+    self.isDense = false
+    self.collect = nil
 
     self.outputDim = weight.dim(0)
     // MLX packs quantized weights densely across 32-bit words, so a width that does not divide
@@ -67,6 +75,25 @@ public final class PackedLinear: @unchecked Sendable {
     }
   }
 
+  /// A projection over the real, unquantized checkpoint weight — what calibration runs
+  /// against, since it needs the exact forward the about-to-be-quantized model produces, not
+  /// an approximation of it. Every other consumer of `PackedLinear` (Attention, MLP,
+  /// GatedDeltaNet) is unmodified: this is the same type, just backed by real weights instead
+  /// of packed ones, so the calibration forward pass is the production forward pass.
+  public init(dense weight: MLXArray, collect: (@Sendable (MLXArray) -> Void)? = nil) {
+    self.weight = weight
+    self.scales = MLXArray.ones([weight.dim(0), 1])
+    self.biases = MLXArray.zeros([weight.dim(0), 1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = weight.dim(1)
+    self.bits = 16
+    self.isDense = true
+    self.collect = collect
+    self.outputDim = weight.dim(0)
+    self.inputDim = weight.dim(1)
+  }
+
   public func callAsFunction(_ x: MLXArray) -> MLXArray {
     var h = x
     if block > 0, let signs {
@@ -77,6 +104,11 @@ public final class PackedLinear: @unchecked Sendable {
       } else {
         h = hadamardRotate(h, block: block, signs: signs, inverse: false)
       }
+    }
+
+    if isDense {
+      collect?(h)
+      return matmul(h, weight.T.asType(h.dtype))
     }
 
     if BonsaiRuntime.useQMVWide {
@@ -110,7 +142,10 @@ public final class PackedLinear: @unchecked Sendable {
   }
 
   public func applyRotated(_ h: MLXArray) -> MLXArray {
-    quantizedMM(
+    if isDense {
+      return matmul(h, weight.T.asType(h.dtype))
+    }
+    return quantizedMM(
       h, weight, scales: scales, biases: biases,
       transpose: true, groupSize: groupSize, bits: bits, mode: .affine)
   }
@@ -132,6 +167,9 @@ public final class PackedEmbedding: @unchecked Sendable {
   public let groupSize: Int
   public let bits: Int
   public let dtype: DType
+  /// Set for an embedding built by ``init(dense:)``: `weight` holds the real fp16 checkpoint
+  /// rows directly, nothing to dequantize.
+  public let isDense: Bool
 
   public init(
     weight: MLXArray, scales: MLXArray, biases: MLXArray,
@@ -146,17 +184,38 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.groupSize = groupSize
     self.bits = bits
     self.dtype = dtype
+    self.isDense = false
     if block > 0 && signs == nil {
       throw BonsaiError.invalidTransform("rotated embedding is missing its sign vector")
     }
   }
 
+  /// The real, unquantized embedding table — what calibration reads from, since the token
+  /// embeddings feed everything downstream and have no meaningful per-channel importance of
+  /// their own to weight (a row is gathered by token id, not consumed as an input channel).
+  public init(dense weight: MLXArray, dtype: DType = .float16) {
+    self.weight = weight
+    self.scales = MLXArray.ones([weight.dim(0), 1])
+    self.biases = MLXArray.zeros([weight.dim(0), 1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = weight.dim(1)
+    self.bits = 16
+    self.dtype = dtype
+    self.isDense = true
+  }
+
   public func callAsFunction(_ ids: MLXArray) -> MLXArray {
     let shape = ids.shape
     let flat = ids.reshaped([-1])
-    var out = dequantized(
-      weight[flat], scales: scales[flat], biases: biases[flat],
-      groupSize: groupSize, bits: bits, mode: .affine)
+    var out: MLXArray
+    if isDense {
+      out = weight[flat]
+    } else {
+      out = dequantized(
+        weight[flat], scales: scales[flat], biases: biases[flat],
+        groupSize: groupSize, bits: bits, mode: .affine)
+    }
     out = out.reshaped(shape + [-1]).asType(dtype)
     if block > 0, let signs {
       out = hadamardRotate(out, block: block, signs: signs, inverse: true)

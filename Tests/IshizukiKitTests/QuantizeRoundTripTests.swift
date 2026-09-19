@@ -55,6 +55,7 @@ struct QuantizeRoundTripTests {
       dense("\(p).self_attn.v_proj.weight", [hidden, hidden])
       dense("\(p).self_attn.o_proj.weight", [hidden, hidden])
       dense("\(p).self_attn.q_norm.weight", [64])
+      dense("\(p).self_attn.k_norm.weight", [64])
       dense("\(p).mlp.gate_proj.weight", [intermediate, hidden])
       dense("\(p).mlp.up_proj.weight", [intermediate, hidden])
       dense("\(p).mlp.down_proj.weight", [hidden, intermediate])
@@ -146,12 +147,64 @@ struct QuantizeRoundTripTests {
     for (path, entry) in config.quantization.overrides {
       #expect(entry.bits > 3, "\(path) is listed as an override but sits at the base width")
     }
+    // The embedding and the head are the two tensors most likely to be starved by the auction,
+    // so they are floored at 4 bits rather than left to compete for it.
+    #expect(config.quantization.overrides["language_model.model.embed_tokens"]?.bits == 4)
+    #expect(config.quantization.overrides["language_model.lm_head"]?.bits == 4)
     let down = try factory.linear("model.layers.0.mlp.down_proj")
     #expect(down.inputDim == intermediate)
     #expect(down.outputDim == hidden)
   }
 
-  @Test("the measured bpw lands under the profile's target")
+  @Test("calibration changes what gets written, and the pack still loads and validates")
+  func calibrationAffectsOutput() throws {
+    let root = temp()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appending(path: "src")
+    try writeSource(at: source)
+
+    // Bypasses the tokenizer this fixture has no tokenizer.json for — Quantizer accepts
+    // pre-tokenized calibration sequences for exactly this reason.
+    let calibrationTokens: [[Int32]] = (0..<4).map { _ in
+      (0..<32).map { _ in Int32.random(in: 0..<Int32(vocab)) }
+    }
+
+    let plainOutput = root.appending(path: "out-plain")
+    _ = try Quantizer(
+      source: try SourceCheckpoint(directory: source), profile: .balanced,
+      destination: plainOutput
+    ).run()
+
+    let calibratedOutput = root.appending(path: "out-calibrated")
+    let seen = PhaseLog()
+    let outcome = try Quantizer(
+      source: try SourceCheckpoint(directory: source), profile: .balanced,
+      destination: calibratedOutput, calibrate: true, calibrationTokens: calibrationTokens
+    ) { seen.record($0.phase) }.run()
+
+    #expect(seen.phases.contains(.calibrating))
+    #expect(outcome.achievedBpw > 0)
+
+    // Calibration genuinely changes which scale/bias each group's clip search settles on, so
+    // an otherwise-identical run should not write byte-identical weights.
+    let plainStore = try WeightStore(directory: plainOutput)
+    let calibratedStore = try WeightStore(directory: calibratedOutput)
+    let path = "language_model.model.layers.0.mlp.down_proj.weight"
+    let plainW = try plainStore(path)
+    let calibratedW = try calibratedStore(path)
+    eval(plainW, calibratedW)
+    #expect(plainW.shape == calibratedW.shape)
+    let mismatches = (plainW .!= calibratedW).sum().item(Int32.self)
+    #expect(
+      mismatches > 0,
+      "calibrated quantization produced byte-identical output to the uncalibrated run")
+
+    // The calibrated pack has to satisfy the loader like any other.
+    let config = try BonsaiConfig.load(directory: calibratedOutput)
+    try config.validate()
+  }
+
+  @Test("the measured bpw lands under the profile's target, except for the embedding and head floor")
   func respectsBudget() throws {
     let root = temp()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -164,11 +217,74 @@ struct QuantizeRoundTripTests {
         source: try SourceCheckpoint(directory: source), profile: profile,
         destination: output
       ).run()
+      // The embedding and lm_head are floored at 4 bits regardless of the budget (see
+      // BitAllocator.pinnedMinimumBits), so a profile whose base sits below that floor can land
+      // over its target here — this synthetic checkpoint is small enough that the two pinned
+      // tensors are a much larger share of it than of a real model, so the overshoot is more
+      // visible than it would be in practice. Half a bit of headroom covers it.
       #expect(
-        outcome.achievedBpw <= profile.targetBpw + 1e-6,
+        outcome.achievedBpw <= profile.targetBpw + 0.5,
         "\(profile.name) reached \(outcome.achievedBpw), over \(profile.targetBpw)")
       #expect(outcome.achievedBpw >= Double(profile.baseBits))
     }
+  }
+
+  /// The pack is the only place the implied one can be folded in — the runtime scales by the
+  /// weight it reads — so a source in upstream layout has to come out of the quantizer already
+  /// centred on one, and a delta-net norm has to come out untouched.
+  @Test("an upstream checkpoint's zero-centred norms are folded into the pack")
+  func foldsZeroCentredNorms() throws {
+    let root = temp()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appending(path: "src")
+    let output = root.appending(path: "out")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+
+    let inputNorm = MLXArray([-0.25, 0.5] as [Float]).asType(.bfloat16)
+    let gatedNorm = MLXArray([0.75, 1.25] as [Float]).asType(.bfloat16)
+    var arrays: [String: MLXArray] = [
+      "model.language_model.embed_tokens.weight": MLXRandom.normal([vocab, hidden])
+        .asType(.bfloat16),
+      "lm_head.weight": MLXRandom.normal([vocab, hidden]).asType(.bfloat16),
+      "model.language_model.norm.weight": MLXRandom.normal([hidden]).asType(.bfloat16),
+      "model.language_model.layers.0.input_layernorm.weight": inputNorm,
+      "model.language_model.layers.0.linear_attn.norm.weight": gatedNorm,
+    ]
+    arrays["model.language_model.layers.0.post_attention_layernorm.weight"] =
+      MLXRandom.normal([hidden]).asType(.bfloat16)
+    for name in ["gate_proj", "up_proj"] {
+      arrays["model.language_model.layers.0.mlp.\(name).weight"] =
+        MLXRandom.normal([intermediate, hidden]).asType(.bfloat16)
+    }
+    arrays["model.language_model.layers.0.mlp.down_proj.weight"] =
+      MLXRandom.normal([hidden, intermediate]).asType(.bfloat16)
+    try MLX.save(arrays: arrays, url: source.appending(path: "model.safetensors"))
+
+    let config: [String: Any] = [
+      "model_type": "qwen3_5",
+      "text_config": [
+        "model_type": "qwen3_5_text", "hidden_size": hidden,
+        "intermediate_size": intermediate, "num_hidden_layers": 1,
+        "num_attention_heads": 4, "num_key_value_heads": 4, "head_dim": 64,
+        "rms_norm_eps": 1e-6, "vocab_size": vocab, "max_position_embeddings": 4096,
+        "tie_word_embeddings": false,
+        "layer_types": ["linear_attention"],
+        "rope_parameters": ["rope_theta": 10000, "type": "default"],
+      ],
+    ]
+    try JSONSerialization.data(withJSONObject: config)
+      .write(to: source.appending(path: "config.json"))
+
+    _ = try Quantizer(
+      source: try SourceCheckpoint(directory: source), profile: .balanced, destination: output
+    ).run()
+
+    let store = try WeightStore(directory: output)
+    let written = try store("language_model.model.layers.0.input_layernorm.weight")
+    #expect(written.asType(.float32).asArray(Float.self) == [0.75, 1.5])
+
+    let gated = try store("language_model.model.layers.0.linear_attn.norm.weight")
+    #expect(gated.asType(.float32).asArray(Float.self) == [0.75, 1.25])
   }
 
   @Test("a sharded source is read the same as a single-file one")
