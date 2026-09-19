@@ -45,19 +45,63 @@ public final class NgramDrafter: Drafter {
   public func reset() {}
 }
 
-public final class MTPDrafter: Drafter {
-  public init(model: BonsaiModel) throws {
-    guard model.hasMTP else {
+/// A drafter that reads the backbone's own activation rather than the token history. The
+/// decoder hands it every forward pass it makes, and takes its proposal from that instead of
+/// from the context.
+public protocol HiddenStateDrafter: Drafter {
+  /// `hidden` is the pre-norm activation of the span just run; `nextTokens` is what each of
+  /// those positions is followed by, so the draft head advances in lockstep with the backbone.
+  func observe(hidden: MLXArray, nextTokens: [Int])
+}
+
+/// Drafting with the multi-token-prediction head a pack ships beside the backbone.
+///
+/// The head runs over the same span the backbone just did, one position offset, so its cache
+/// tracks the backbone's without any separate bookkeeping. It proposes one token per round —
+/// the head predicts t+2 from t, and chaining it further would need the draft's own hidden
+/// state fed back, which is left alone rather than guessed at.
+public final class MTPDrafter: HiddenStateDrafter {
+  private let model: BonsaiModel
+  private let head: MTPHead
+  private let cache: ModelCache
+  private var pending: [Int] = []
+
+  public var depth: Int { 1 }
+
+  public init(model: BonsaiModel, kvConfig: KVCacheConfig = KVCacheConfig()) throws {
+    guard let head = model.mtp else {
       throw BonsaiError.missingComponent(
         "this pack ships no MTP head (components.mtp = false, mtp_num_hidden_layers = 0, "
           + "no mtp.* tensors). Use NgramDrafter, or supply a separate draft model.")
     }
-    throw BonsaiError.missingComponent("MTP head loading is not implemented")
+    self.model = model
+    self.head = head
+    self.cache = head.makeCache(kvConfig: kvConfig)
   }
 
-  public func propose(context: [Int], count: Int) -> [Int] { [] }
+  public func observe(hidden: MLXArray, nextTokens: [Int]) {
+    guard hidden.dim(1) == nextTokens.count, !nextTokens.isEmpty else {
+      pending = []
+      return
+    }
+    let ids = MLXArray(nextTokens.map { Int32($0) }).reshaped([1, nextTokens.count])
+    let drafted = head(
+      hidden: hidden, embeddings: model.text.embedTokens(ids), cache: cache)
+    let logits = model.text.lastLogits(drafted)
+    pending = [logits[0, -1].argMax().item(Int.self)]
+  }
+
+  public func propose(context: [Int], count: Int) -> [Int] {
+    guard count > 0 else { return [] }
+    return Array(pending.prefix(count))
+  }
+
   public func commit(tokens: [Int]) {}
-  public func reset() {}
+
+  public func reset() {
+    cache.reset()
+    pending = []
+  }
 }
 
 public struct SpeculativeStats: Sendable {
@@ -94,10 +138,29 @@ public final class SpeculativeDecoder: @unchecked Sendable {
     var detokenizer = StreamingDetokenizer(tokenizer: model.tokenizer)
     var stats = SpeculativeStats()
 
+    // A head-based drafter needs the activation behind each forward, not just its tokens, so
+    // every pass keeps its hidden states until the token that follows them is known.
+    let hiddenDrafter = drafter as? HiddenStateDrafter
+    var observed: (hidden: MLXArray, following: [Int])?
+
+    func forward(_ tokens: [Int]) -> MLXArray {
+      let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
+      let h = model.text.trunk(inputs: ids, cache: cache)
+      let out = model.text.lmHead(model.text.normed(h))
+      if hiddenDrafter != nil { observed = (h, Array(tokens.dropFirst())) }
+      return out
+    }
+
+    // The span just run is handed over once its trailing token is known, which keeps the draft
+    // head's cache advancing over exactly the positions the backbone kept.
+    func handOver(confirmed: Int) {
+      guard let hiddenDrafter, let observed else { return }
+      hiddenDrafter.observe(
+        hidden: observed.hidden, nextTokens: observed.following + [confirmed])
+    }
+
     let promptStart = Date()
-    let promptIds = MLXArray(promptTokens.map { Int32($0) })
-      .reshaped([1, promptTokens.count])
-    var logits = model.text.lastLogits(inputs: promptIds, cache: cache)
+    var logits = forward(promptTokens)
     eval(logits)
     let promptSeconds = -promptStart.timeIntervalSinceNow
 
@@ -109,6 +172,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
 
     outer: while generated.count < maxTokens {
       let confirmed = logits[0, -1].argMax().item(Int.self)
+      handOver(confirmed: confirmed)
 
       var emitted = [confirmed]
       let draft = drafter.propose(
@@ -122,8 +186,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
         {
           break outer
         }
-        let input = MLXArray([Int32(confirmed)]).reshaped([1, 1])
-        logits = model.text(input, cache: cache)
+        logits = forward([confirmed])
         eval(logits)
         continue
       }
@@ -132,8 +195,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
       let snapshot = cache.snapshot()
 
       let block = [confirmed] + draft
-      let blockIds = MLXArray(block.map { Int32($0) }).reshaped([1, block.count])
-      let blockLogits = model.text(blockIds, cache: cache)
+      let blockLogits = forward(block)
       eval(blockLogits)
 
       let predictions = blockLogits[0].argMax(axis: -1).asArray(Int32.self)
@@ -151,9 +213,9 @@ public final class SpeculativeDecoder: @unchecked Sendable {
       } else {
         stats.rollbacks += 1
         cache.restore(snapshot)
-        let replay = [confirmed] + Array(draft.prefix(acceptedCount))
-        let replayIds = MLXArray(replay.map { Int32($0) }).reshaped([1, replay.count])
-        logits = model.text(replayIds, cache: cache)
+        // Only the accepted prefix is replayed, so what the draft head is handed next round is
+        // the span the backbone actually kept.
+        logits = forward([confirmed] + Array(draft.prefix(acceptedCount)))
         eval(logits)
       }
 

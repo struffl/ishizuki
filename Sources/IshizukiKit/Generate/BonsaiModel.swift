@@ -9,6 +9,7 @@ public final class BonsaiModel: @unchecked Sendable {
   public let store: WeightStore
   public let text: TextModel
   public let vision: VisionTower?
+  public let mtp: MTPHead?
   public let tokenizer: BonsaiTokenizer
   public let directory: URL
 
@@ -44,6 +45,15 @@ public final class BonsaiModel: @unchecked Sendable {
     self.text = try TextModel(
       config: config, factory: factory, store: store, ropeScaling: scaling)
 
+    // The head is optional twice over: the config has to declare it and the pack has to ship
+    // the tensors. A pack that declares it and omits them still loads, without drafting.
+    if config.components?.mtp == true, !store.names(prefix: tensorPrefix + "mtp").isEmpty {
+      self.mtp = try MTPHead(
+        config: config.textConfig, factory: factory, store: store, rope: text.rope)
+    } else {
+      self.mtp = nil
+    }
+
     if loadVision, let visionConfig = config.visionConfig,
       store.has("vision_tower.patch_embed.proj.weight")
     {
@@ -57,7 +67,5 @@ public final class BonsaiModel: @unchecked Sendable {
 
   public var hasVision: Bool { vision != nil }
 
-  public var hasMTP: Bool {
-    config.components?.mtp == true && !store.names(prefix: "mtp").isEmpty
-  }
+  public var hasMTP: Bool { mtp != nil }
 }

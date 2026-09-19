@@ -129,9 +129,17 @@ public final class ModelCache: @unchecked Sendable {
 
   public let kvConfig: KVCacheConfig
 
-  public init(config: BonsaiConfig.TextConfig, kvConfig: KVCacheConfig = KVCacheConfig()) {
+  public convenience init(
+    config: BonsaiConfig.TextConfig, kvConfig: KVCacheConfig = KVCacheConfig()
+  ) {
+    self.init(fullAttention: config.isFullAttention, kvConfig: kvConfig)
+  }
+
+  /// A draft head runs its own short stack, so the schedule is taken as given rather than read
+  /// off the backbone's config.
+  public init(fullAttention: [Bool], kvConfig: KVCacheConfig = KVCacheConfig()) {
     self.kvConfig = kvConfig
-    self.layers = config.isFullAttention.map { isFull in
+    self.layers = fullAttention.map { isFull in
       guard isFull else { return GatedDeltaNetCache() as LayerCache }
       return kvConfig.isQuantized
         ? QuantizedKVCache(config: kvConfig) as LayerCache

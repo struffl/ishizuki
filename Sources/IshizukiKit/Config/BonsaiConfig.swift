@@ -187,6 +187,7 @@ public struct BonsaiConfig: Codable, Sendable {
     public var ropeParameters: RopeParameters
     public var partialRotaryFactor: Float?
     public var outputGateType: String?
+    public var mtpNumHiddenLayers: Int?
     public var bosTokenId: Int?
     public var eosTokenId: Int?
 
@@ -213,6 +214,7 @@ public struct BonsaiConfig: Codable, Sendable {
       case ropeParameters = "rope_parameters"
       case partialRotaryFactor = "partial_rotary_factor"
       case outputGateType = "output_gate_type"
+      case mtpNumHiddenLayers = "mtp_num_hidden_layers"
       case bosTokenId = "bos_token_id"
       case eosTokenId = "eos_token_id"
     }
