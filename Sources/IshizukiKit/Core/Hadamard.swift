@@ -47,7 +47,10 @@ public final class PackedLinear: @unchecked Sendable {
     self.bits = bits
 
     self.outputDim = weight.dim(0)
-    self.inputDim = weight.dim(1) * (32 / bits)
+    // MLX packs quantized weights densely across 32-bit words, so a width that does not divide
+    // 32 — 3, 5 and 6 bits all appear in imatrix packs — has no whole number of values per
+    // word. The group structure does carry it exactly: one scale per group of inputs.
+    self.inputDim = scales.dim(1) * groupSize
 
     if block > 0 {
       guard let signs else {

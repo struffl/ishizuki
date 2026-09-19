@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
+import MLX
+import MLXRandom
 import Testing
 
 @testable import IshizukiKit
@@ -74,6 +76,40 @@ struct AffineConfigTests {
     #expect(config.components?.vision == true)
     #expect(config.components?.mtp == true)
     #expect(config.profile == .affine)
+  }
+
+  @Test("a width that does not divide 32 still reports its true input size")
+  func inputWidth() throws {
+    // Shapes taken from the oQ4e pack: down_proj is 5-bit over a 17408-wide input, which packs
+    // into 2720 words. Counting values per word would make that 16320.
+    let quant = MLXArray.zeros([5120, 2720], dtype: .uint32)
+    let scales = MLXArray.zeros([5120, 272], dtype: .float16)
+    let linear = try PackedLinear(
+      weight: quant, scales: scales, biases: scales, signs: nil, block: 0,
+      groupSize: 64, bits: 5)
+    #expect(linear.inputDim == 17408)
+    #expect(linear.outputDim == 5120)
+  }
+
+  @Test("the widths an imatrix pack mixes all run")
+  func widthsExecute() {
+    // oQ3e and oQ3.5e sit on a 3-bit base with 4- and 5-bit boosts, so all three have to
+    // survive a quantized matmul, not merely be accepted by the config.
+    let rows = 256
+    let width = 512
+    let x = MLXRandom.normal([1, width]).asType(.float16)
+    let w = MLXRandom.normal([rows, width]).asType(.float16)
+    let reference = matmul(x, w.T).asType(.float32)
+
+    for bits in [3, 4, 5] {
+      let (wq, scales, biases) = quantized(w, groupSize: 64, bits: bits, mode: .affine)
+      let y = quantizedMM(
+        x, wq, scales: scales, biases: biases, transpose: true, groupSize: 64,
+        bits: bits, mode: .affine
+      ).asType(.float32)
+      let error = (abs(y - reference).mean() / abs(reference).mean()).item(Float.self)
+      #expect(error < 0.35, "\(bits)-bit relative error \(error)")
+    }
   }
 
   @Test("a mixed-width affine pack validates")
