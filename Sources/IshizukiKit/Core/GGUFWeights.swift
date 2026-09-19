@@ -32,6 +32,14 @@ public struct GGUFBlocks: @unchecked Sendable {
 /// unquantized, which is what makes this split clean — everything the forward pass wants as a
 /// plain array already is one, and everything else is a projection that can go through a
 /// kernel.
+///
+/// Two of llama.cpp's conversion-time folds have to be undone here, because the runtime shares
+/// one forward pass with the checkpoints it quantizes itself. The norms are the fold that does
+/// *not* need undoing: llama.cpp writes `1 + w` for every `*norm.weight` but the delta-net's
+/// own, which is exactly the convention `TensorNaming` produces, so they are read as they lie.
+/// `A_log` is the one that does: llama.cpp stores `-exp(A_log)` ready to multiply, and
+/// `GatedDeltaNet` takes the exponential itself, so the log is taken back here rather than
+/// branching the gate.
 public enum GGUFWeights {
   /// Tensors small enough, or awkward enough, to keep dense. A depthwise convolution is
   /// transposed here for the same reason a safetensors pack is: PyTorch stores it
@@ -63,6 +71,9 @@ public enum GGUFWeights {
         tensor.type == .f32 ? .float32 : dtype)
       if name.hasSuffix(".conv1d.weight") {
         array = array.reshaped([tensor.shape[0], tensor.shape[1], 1])
+      }
+      if name.hasSuffix(".A_log") {
+        array = MLX.log(-array.asType(.float32))
       }
       dense[name] = array
     }

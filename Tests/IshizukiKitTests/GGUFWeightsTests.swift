@@ -131,6 +131,43 @@ struct GGUFWeightsTests {
     #expect(conv.shape == [hidden, 4, 1])
   }
 
+  /// The two conversion-time folds, pinned in opposite directions. A norm that came back near
+  /// zero, or a gate decay that came back exponentiated twice, would both load and run.
+  @Test("llama.cpp's norm fold is kept and its A_log fold is undone")
+  func conventions() throws {
+    let url = URL(filePath: NSTemporaryDirectory())
+      .appending(path: "gguf-folds-\(UUID().uuidString).gguf")
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let logs: [Float] = [0.0, 0.5, 1.5, 3.0]
+    var writer = Writer()
+    writer.metadata = [("general.architecture", 8, Writer.string("qwen35"))]
+    writer.tensors = [
+      // As llama.cpp writes them: the norm already scaled by one, the decay already negated
+      // and exponentiated.
+      (
+        "blk.0.attn_norm.weight", [4], .f32,
+        floats([1.0, 1.25, 0.75, 1.5])
+      ),
+      (
+        "blk.0.ssm_a", [4], .f32,
+        floats(logs.map { -Foundation.exp($0) })
+      ),
+    ]
+    try writer.write(to: url)
+
+    let store = try GGUFWeights.load(file: try GGUFFile(url: url))
+    let prefix = GGUFTensorNaming.prefix
+
+    let norm = try store(prefix + "layers.0.input_layernorm.weight")
+    #expect(abs(norm[1].item(Float.self) - 1.25) < 1e-6)
+
+    let aLog = try store(prefix + "layers.0.linear_attn.A_log")
+    for (i, expected) in logs.enumerated() {
+      #expect(abs(aLog[i].item(Float.self) - expected) < 1e-5, "A_log[\(i)]")
+    }
+  }
+
   @Test("a projection and an embedding read straight off the blocks")
   func modulesRunOffBlocks() throws {
     let url = URL(filePath: NSTemporaryDirectory())
