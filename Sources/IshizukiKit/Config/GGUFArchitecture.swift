@@ -154,6 +154,31 @@ public struct GGUFArchitecture: Sendable {
 }
 
 /// Translates llama.cpp's flat tensor names into the paths the runtime's modules read.
+extension GGUFArchitecture {
+  /// The config the rest of the runtime expects, assembled from what the file declares.
+  ///
+  /// `quantization` is the one field that cannot be filled honestly: a pack quantizes every
+  /// module the same way and writes the scheme down, while a GGUF carries a block type per
+  /// tensor and no scheme at all. It is left at a width no pack could have so that anything
+  /// reading it for a GGUF fails loudly instead of believing a plausible number — which is also
+  /// why `validate()`, a check on a pack's scheme, is not run against this.
+  public func config(vision: BonsaiConfig.VisionConfig? = nil) -> BonsaiConfig {
+    BonsaiConfig(
+      schemaVersion: 0,
+      modelType: textConfig.modelType,
+      baseModelType: nil,
+      textConfig: textConfig,
+      visionConfig: vision,
+      modules: [],
+      quantization: BonsaiConfig.QuantizationConfig(bits: 0, groupSize: 0, mode: "ggml"),
+      components: BonsaiConfig.Components(
+        text: true, vision: vision != nil, mtp: hasMTP),
+      tensorNamespace: nil,
+      gdnActivationLayout: nil,
+      requiresRuntime: nil)
+  }
+}
+
 public enum GGUFTensorNaming {
   public static let prefix = "language_model.model."
 
