@@ -78,6 +78,6 @@ public enum GGUFWeights {
       dense[name] = array
     }
 
-    return WeightStore(arrays: dense, ggml: packed)
+    return WeightStore(arrays: dense, ggml: packed, valueHeadLayout: .tiled)
   }
 }

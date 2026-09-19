@@ -27,6 +27,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
   private let kernelSize: Int
   private let normEps: Float
   private let headRepeat: Int
+  private let valueHeadLayout: ValueHeadLayout
 
   private let unitKeyNorm: MLXArray
   private let zSplit: (slice: ANESlice, tail: PackedLinear)?
@@ -54,6 +55,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
           + "linear_num_key_heads (\(numKeyHeads))")
     }
     self.headRepeat = numValueHeads / numKeyHeads
+    self.valueHeadLayout = store.valueHeadLayout
 
     self.inProjQKV = try factory.linear(prefix + ".in_proj_qkv")
     self.inProjZ = try factory.linear(prefix + ".in_proj_z")
@@ -130,7 +132,8 @@ public final class GatedDeltaNet: @unchecked Sendable {
         [b, numValueHeads, valueHeadDim, keyHeadDim], dtype: .float32)
 
     let (y, newState) = GatedDeltaNet.deltaRule(
-      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat)
+      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat,
+      layout: valueHeadLayout)
 
     cache?.recurrentState = newState
     cache?.advance(s)
@@ -150,7 +153,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
 
   public static func deltaRule(
     q: MLXArray, k: MLXArray, v: MLXArray, g: MLXArray, beta: MLXArray,
-    state: MLXArray, headRepeat: Int
+    state: MLXArray, headRepeat: Int, layout: ValueHeadLayout = .grouped
   ) -> (MLXArray, MLXArray) {
     #if !targetEnvironment(simulator)
       if Device.defaultDevice().deviceType == .gpu, let kernel = metalKernel {
@@ -160,6 +163,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
             ("InT", q.dtype), ("StT", state.dtype),
             ("Dk", k.dim(3)), ("Dv", v.dim(3)),
             ("Hk", k.dim(2)), ("Hv", v.dim(2)),
+            ("Tiled", layout == .tiled),
           ],
           grid: (32, v.dim(3), q.dim(0) * v.dim(2)),
           threadGroup: (32, 4, 1),
@@ -169,16 +173,17 @@ public final class GatedDeltaNet: @unchecked Sendable {
       }
     #endif
     return opsDeltaRule(
-      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat)
+      q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat,
+      layout: layout)
   }
 
   static func opsDeltaRule(
     q: MLXArray, k: MLXArray, v: MLXArray, g: MLXArray, beta: MLXArray,
-    state initialState: MLXArray, headRepeat: Int
+    state initialState: MLXArray, headRepeat: Int, layout: ValueHeadLayout = .grouped
   ) -> (MLXArray, MLXArray) {
     let steps = q.dim(1)
-    let qr = headRepeat > 1 ? repeated(q, count: headRepeat, axis: 2) : q
-    let kr = headRepeat > 1 ? repeated(k, count: headRepeat, axis: 2) : k
+    let qr = Self.broadcastHeads(q, repeat: headRepeat, layout: layout)
+    let kr = Self.broadcastHeads(k, repeat: headRepeat, layout: layout)
 
     var state = initialState
     var outputs: [MLXArray] = []
@@ -201,13 +206,27 @@ public final class GatedDeltaNet: @unchecked Sendable {
     return (stacked(outputs, axis: 1), state)
   }
 
+  /// Spreads one key head over the value heads it serves: each key head repeated in place for
+  /// the grouped order, the whole row of them repeated for the tiled one.
+  static func broadcastHeads(
+    _ x: MLXArray, repeat count: Int, layout: ValueHeadLayout
+  ) -> MLXArray {
+    guard count > 1 else { return x }
+    switch layout {
+    case .grouped:
+      return repeated(x, count: count, axis: 2)
+    case .tiled:
+      return concatenated(Array(repeating: x, count: count), axis: 2)
+    }
+  }
+
   private static let metalKernel: MLXFast.MLXFastKernel? = {
     #if canImport(Metal)
       let source = """
             auto n = thread_position_in_grid.z;
             auto b_idx = n / Hv;
             auto hv_idx = n % Hv;
-            auto hk_idx = hv_idx / (Hv / Hk);
+            auto hk_idx = Tiled ? (hv_idx % Hk) : (hv_idx / (Hv / Hk));
             constexpr int n_per_t = Dk / 32;
 
             auto q_ = q + b_idx * T * Hk * Dk + hk_idx * Dk;

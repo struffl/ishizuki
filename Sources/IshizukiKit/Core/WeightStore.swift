@@ -4,14 +4,32 @@
 import Foundation
 import MLX
 
+/// Which order a linear-attention layer's value heads sit in when there are more of them than
+/// key heads.
+///
+/// A checkpoint stores them grouped by key head — `[K0V0, K0V1, K1V0, K1V1, ...]` — so key head
+/// `i` serves value heads `i * r ..< (i + 1) * r`. llama.cpp's converter retiles them to
+/// `[K0V0, K1V0, K0V1, K1V1, ...]`, where key head `i` serves every value head congruent to `i`,
+/// because that turns its broadcast into a plain repeat. Neither order is more correct; the
+/// weights carry no mark of which one they are in, so the store that produced them says.
+public enum ValueHeadLayout: Sendable {
+  case grouped
+  case tiled
+}
+
 public final class WeightStore: @unchecked Sendable {
   public let arrays: [String: MLXArray]
   /// Tensors still in GGML blocks. A name appears here or in `arrays`, never both.
   public let ggmlArrays: [String: GGUFBlocks]
+  public let valueHeadLayout: ValueHeadLayout
 
-  public init(arrays: [String: MLXArray], ggml: [String: GGUFBlocks] = [:]) {
+  public init(
+    arrays: [String: MLXArray], ggml: [String: GGUFBlocks] = [:],
+    valueHeadLayout: ValueHeadLayout = .grouped
+  ) {
     self.arrays = arrays
     self.ggmlArrays = ggml
+    self.valueHeadLayout = valueHeadLayout
   }
 
   public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
