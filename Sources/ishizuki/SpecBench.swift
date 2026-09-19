@@ -17,6 +17,11 @@ struct SpecBench: ParsableCommand {
 
   @Option(
     name: .long,
+    help: "Where drafts come from: ngram, or mtp for the head the pack ships.")
+  var drafter: String = "ngram"
+
+  @Option(
+    name: .long,
     help: "Prompt to use. Defaults to a repetitive one, where n-gram drafting should win.")
   var prompt: String?
 
@@ -52,14 +57,27 @@ struct SpecBench: ParsableCommand {
         baseline.stats.generationTokensPerSecond, baseline.stats.generatedTokens,
         baseline.stats.generationSeconds))
 
+    let drafting: Drafter
+    let label: String
+    switch drafter {
+    case "ngram":
+      drafting = NgramDrafter()
+      label = "n-gram"
+    case "mtp":
+      drafting = try MTPDrafter(model: bonsai)
+      label = "mtp"
+    default:
+      throw ValidationError("unknown drafter '\(drafter)'; expected ngram or mtp")
+    }
+
     let decoder = SpeculativeDecoder(
-      model: bonsai, drafter: NgramDrafter(), draftLength: draftLength)
+      model: bonsai, drafter: drafting, draftLength: draftLength)
     let (speculative, stats) = decoder.generate(
       promptTokens: promptTokens, maxTokens: maxTokens)
     print(
       String(
-        format: "speculative (n=%d) : %6.2f tok/s  (%d tokens in %.2fs)",
-        draftLength, speculative.stats.generationTokensPerSecond,
+        format: "speculative (%@) : %6.2f tok/s  (%d tokens in %.2fs)",
+        label, speculative.stats.generationTokensPerSecond,
         speculative.stats.generatedTokens, speculative.stats.generationSeconds))
 
     print("")
