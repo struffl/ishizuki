@@ -290,21 +290,37 @@ final class ServeDashboard: @unchecked Sendable {
 
     let sessions = server.sessions
     let lookups = sessions.hits + sessions.misses
-    if lookups > 0 {
-      var detail =
-        "\(sessions.hits) of \(lookups) reused"
-        + Style.faint(" · \(sessions.slotCount) slot\(sessions.slotCount == 1 ? "" : "s")")
-      if sessions.branches > 0 {
-        detail += Style.faint(" · \(sessions.branches) branched")
-      }
-      if sessions.diskHits > 0 {
-        detail += Style.faint(" · \(sessions.diskHits) from disk")
-      }
+    if lookups > 0 || server.prefixStore != nil {
+      // What the prefix cache is holding, against what it is allowed to hold, in each tier it
+      // uses. A hit rate with no denominator says nothing about whether it has room to work.
+      var occupancy: [String] = []
+      let ramLimit = sessions.byteLimitBytes
+      occupancy.append(
+        ramLimit > 0
+          ? "\(compact(sessions.cachedBytes)) / \(compact(ramLimit)) ram"
+          : "\(compact(sessions.cachedBytes)) ram")
       if let store = server.prefixStore {
-        detail += Style.faint(" · \(compact(store.totalBytes)) archived")
+        occupancy.append(
+          "\(compact(store.totalBytes)) / \(compact(store.byteLimit)) disk")
       }
-      lines.append("  " + Style.field("prefix", Style.accent(detail)))
+
+      var headline = Style.accent(occupancy.joined(separator: Style.faint(" · ")))
+      if lookups > 0 {
+        headline =
+          Style.accent(percent(Double(sessions.hits) / Double(lookups)) + " hit")
+          + Style.faint(" · ") + headline
+      }
+      lines.append("  " + Style.field("prefix", headline))
+
+      var detail: [String] = []
+      if lookups > 0 { detail.append("\(sessions.hits) of \(lookups) reused") }
+      if sessions.branches > 0 { detail.append("\(sessions.branches) branched") }
+      if sessions.diskHits > 0 { detail.append("\(sessions.diskHits) from disk") }
+      if sessions.evictions > 0 { detail.append("\(sessions.evictions) evicted") }
+      detail.append("\(sessions.slotCount) slot\(sessions.slotCount == 1 ? "" : "s")")
+      lines.append("  " + Style.field("", Style.faint(detail.joined(separator: " · "))))
     }
+
     return lines
   }
 

@@ -225,6 +225,14 @@ public final class PrefixStore: @unchecked Sendable {
     }
   }
 
+  /// Drops one archive by id.
+  @discardableResult
+  public func remove(_ id: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return (try? fm.removeItem(at: url(id, "safetensors"))) != nil
+  }
+
   public func removeAll() {
     lock.lock()
     defer { lock.unlock() }
