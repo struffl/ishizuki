@@ -26,7 +26,11 @@ public final class BonsaiModel: @unchecked Sendable {
     let config = try BonsaiConfig.load(directory: directory)
     try config.validate()
     try self.init(
-      config: config, store: try WeightStore(directory: directory),
+      config: config,
+      // A repacked sparse model keeps its routed experts beside the shards; opening them here
+      // is what makes the layers stream rather than load.
+      store: try WeightStore(directory: directory)
+        .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots),
       tokenizer: try BonsaiTokenizer(directory: directory, config: config),
       directory: directory, ropeScaling: ropeScaling, hot: hot)
   }
