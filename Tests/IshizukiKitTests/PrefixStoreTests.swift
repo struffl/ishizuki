@@ -22,7 +22,7 @@ struct PrefixStoreTests {
   /// reorders tokens cannot pass by accident.
   private func fill(_ cache: ModelCache, tokens: Int) {
     let heads = 2
-    let dim = 16
+    let dim = 64
     for layer in cache.layers {
       switch layer {
       case let attention as AttentionKVCache:
@@ -45,7 +45,7 @@ struct PrefixStoreTests {
     var trace: [Float] = []
     for layer in cache.layers {
       guard let attention = layer as? AttentionKVCache else { continue }
-      let k = MLXArray.zeros([1, 2, 1, 16], dtype: .float16)
+      let k = MLXArray.zeros([1, 2, 1, 64], dtype: .float16)
       switch attention.appendForAttention(keys: k, values: k) {
       case .dense(let keys, _):
         trace += keys.asType(.float32).mean(axes: [1, 3]).asArray(Float.self)
@@ -64,7 +64,7 @@ struct PrefixStoreTests {
     let (store, dir) = store()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let tokens = Array(1...64)
+    let tokens = Array(1...400)
     let original = ModelCache(fullAttention: schedule, kvConfig: kv)
     fill(original, tokens: tokens.count)
 
@@ -77,6 +77,11 @@ struct PrefixStoreTests {
 
     let entry = try #require(store.bestMatch(for: tokens + [999], modelID: "pack-a", kvConfig: kv))
     #expect(entry.tokens == tokens)
+
+    // 400 tokens behind an 8-token window is well past the drain threshold, so this archive
+    // carries a compressed store and not just a dense window.
+    let quantized = original.layers.compactMap { $0 as? QuantizedKVCache }
+    #expect(quantized.allSatisfy { $0.quantizedTokenCount > 0 })
 
     let restored = ModelCache(fullAttention: schedule, kvConfig: kv)
     #expect(store.load(entry, into: restored))
