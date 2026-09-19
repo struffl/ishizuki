@@ -67,6 +67,15 @@ public final class WeightStore: @unchecked Sendable {
   public func names(prefix: String) -> [String] {
     arrays.keys.filter { $0.hasPrefix(prefix) }.sorted()
   }
+
+  /// A safetensors tensor arrives as a promise: nothing is read off disk until something
+  /// evaluates it. This redeems a whole tower at once, so its shard is read in one pass
+  /// rather than a tensor at a time through the forward pass.
+  public func warm(prefix: String) {
+    let pending = names(prefix: prefix).compactMap { arrays[$0] }
+    guard !pending.isEmpty else { return }
+    eval(pending)
+  }
 }
 
 public struct PackedModuleFactory {

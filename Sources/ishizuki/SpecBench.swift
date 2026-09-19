@@ -27,7 +27,7 @@ struct SpecBench: ParsableCommand {
 
   func run() throws {
     let packURL = URL(filePath: model)
-    let bonsai = try BonsaiModel(directory: packURL, loadVision: false)
+    let bonsai = try BonsaiModel(directory: packURL)
     let template = try ChatTemplate(directory: packURL)
 
     let text =

@@ -191,6 +191,9 @@ export OPENAI_BASE_URL=http://127.0.0.1:8128/v1     # OpenAI clients
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8128     # Claude Code
 ```
 
+The vision tower is read off disk on the first image request rather than at startup, so a
+text-only session never pays for it. `--hot` loads it up front instead.
+
 ### launchd
 
 ```bash

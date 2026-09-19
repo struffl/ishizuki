@@ -88,7 +88,11 @@ struct Serve: ParsableCommand {
   @Flag(name: .long, help: "Do not load the model until the first request arrives.")
   var lazyLoad = false
 
-  @Flag(name: .long, help: "Load the model immediately at startup. Wins over --lazy-load.")
+  @Flag(
+    name: .long,
+    help:
+      "Load the model and its vision tower at startup rather than on demand. Wins over --lazy-load."
+  )
   var hot = false
 
   @Flag(name: .long, help: "Disable coloured output.")
@@ -160,7 +164,8 @@ struct Serve: ParsableCommand {
           minimumTokens: prefixCacheMinimum)
         : nil,
       catalog: catalog,
-      preload: hot || !lazyLoad)
+      preload: hot || !lazyLoad,
+      hot: hot)
 
     var header = [
       Style.banner("serving \(activeName) on http://127.0.0.1:\(port)"),

@@ -19,7 +19,7 @@ struct LayerDivergenceProbe {
   func probe() throws {
     let env = ProcessInfo.processInfo.environment
     let sourceURL = URL(filePath: env["ISHIZUKI_DENSE"]!)
-    let reference = try BonsaiModel(directory: URL(filePath: env["ISHIZUKI_REF"]!), loadVision: false)
+    let reference = try BonsaiModel(directory: URL(filePath: env["ISHIZUKI_REF"]!))
     let dense = try CalibrationModel(source: try SourceCheckpoint(directory: sourceURL))
 
     let prompt = reference.tokenizer.encode("The capital of France is")

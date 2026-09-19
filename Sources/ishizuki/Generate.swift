@@ -108,8 +108,7 @@ struct Generate: ParsableCommand {
       try ModelDownloader.ensure(directory: packURL, repo: repo)
     }
     let loadStart = Date()
-    let bonsai = try BonsaiModel(
-      directory: packURL, loadVision: !image.isEmpty, ropeScaling: scaling)
+    let bonsai = try BonsaiModel(directory: packURL, ropeScaling: scaling)
     if scaling.isActive {
       note(
         Style.field(
