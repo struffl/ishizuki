@@ -80,4 +80,47 @@ public enum GGUFWeights {
 
     return WeightStore(arrays: dense, ggml: packed, valueHeadLayout: .tiled)
   }
+
+  /// The tower out of its own file, folded into a store the language model already built.
+  ///
+  /// Nothing here stays in blocks. The tower is a rounding error beside the language model, it
+  /// runs dense in this runtime either way, and `VisionTower` reads every one of these through
+  /// the plain array table.
+  public static func loadVision(
+    file: GGUFFile, into store: WeightStore, dtype: DType = .bfloat16
+  ) throws -> WeightStore {
+    var dense = store.arrays
+    var halves: [Int: MLXArray] = [:]
+
+    for tensor in file.tensors {
+      let values = try GGMLDequant.dequantize(
+        try file.data(for: tensor), type: tensor.type, count: tensor.elementCount)
+      let array = MLXArray(values, tensor.shape).asType(
+        tensor.type == .f32 ? .float32 : dtype)
+
+      switch tensor.name {
+      case GGUFVisionNaming.patchEmbedding: halves[0] = array
+      case GGUFVisionNaming.patchEmbeddingSecond: halves[1] = array
+      default:
+        guard let name = GGUFVisionNaming.canonical(tensor.name) else {
+          throw BonsaiError.unsupportedModel(
+            "\(tensor.name) has no module in this runtime's vision tower")
+        }
+        dense[name] = array
+      }
+    }
+
+    guard let first = halves[0], let second = halves[1] else {
+      throw BonsaiError.missingWeight(
+        "the mmproj is missing half of its patch embedding")
+    }
+    // ggml has no Conv3D, so the converter sliced the temporal axis into two Conv2Ds. Stacking
+    // them back gives [out, in, t, h, w] — the layout a checkpoint ships — which then takes the
+    // same channels-last relayout every other path applies to it.
+    let name = GGUFVisionNaming.prefix + "patch_embed.proj.weight"
+    dense[name] = TensorNaming.relayout(name, stacked([first, second], axis: 2))
+
+    return WeightStore(
+      arrays: dense, ggml: store.ggmlArrays, valueHeadLayout: store.valueHeadLayout)
+  }
 }

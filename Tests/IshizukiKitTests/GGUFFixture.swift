@@ -77,6 +77,60 @@ enum GGUFFixture {
     }
   }
 
+  struct Writer {
+    var metadata: [(String, UInt32, Data)] = []
+    var tensors: [(name: String, dims: [Int], type: GGMLType, payload: Data)] = []
+
+    static func string(_ value: String) -> Data {
+      var out = Data()
+      let bytes = Array(value.utf8)
+      withUnsafeBytes(of: UInt64(bytes.count)) { out.append(contentsOf: $0) }
+      out.append(contentsOf: bytes)
+      return out
+    }
+
+    static func u32(_ value: UInt32) -> Data {
+      var out = Data()
+      withUnsafeBytes(of: value) { out.append(contentsOf: $0) }
+      return out
+    }
+
+    func write(to url: URL) throws {
+      var data = Data()
+      func put<T>(_ value: T) { withUnsafeBytes(of: value) { data.append(contentsOf: $0) } }
+
+      put(GGUFFile.magic)
+      put(UInt32(3))
+      put(UInt64(tensors.count))
+      put(UInt64(metadata.count))
+      for (key, type, payload) in metadata {
+        data.append(Self.string(key))
+        put(type)
+        data.append(payload)
+      }
+
+      var cursor = 0
+      for tensor in tensors {
+        data.append(Self.string(tensor.name))
+        put(UInt32(tensor.dims.count))
+        for dim in tensor.dims.reversed() { put(UInt64(dim)) }
+        put(tensor.type.rawValue)
+        cursor = (cursor + 31) / 32 * 32
+        put(UInt64(cursor))
+        cursor += tensor.payload.count
+      }
+      data.append(Data(repeating: 0, count: (32 - data.count % 32) % 32))
+
+      var section = Data()
+      for tensor in tensors {
+        section.append(Data(repeating: 0, count: (32 - section.count % 32) % 32))
+        section.append(tensor.payload)
+      }
+      data.append(section)
+      try data.write(to: url)
+    }
+  }
+
   static func temporaryURL(_ tag: String = "gguf") -> URL {
     URL(filePath: NSTemporaryDirectory()).appending(path: "\(tag)-\(UUID().uuidString).gguf")
   }
