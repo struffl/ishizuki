@@ -14,8 +14,8 @@ struct ANECheck: ParsableCommand {
     abstract: "Measure a projection split across the Neural Engine and Metal.")
 
   @Option(name: .long) var model: String = defaultModelPath
-  @Option(name: .long, help: "Compiled .mlmodelc holding the INT8 channel slice.")
-  var ane: String
+  @Option(name: .long, help: "Compiled .mlmodelc or .mlpackage holding the INT8 channel slice.")
+  var slice: String
   @Option(name: .long, help: "Projection the slice was cut from.")
   var projection: String = "model.layers.0.mlp.gate_proj"
   @Option(name: .long) var rows: Int = 2048
@@ -32,7 +32,7 @@ struct ANECheck: ParsableCommand {
 
     let mlConfig = MLModelConfiguration()
     mlConfig.computeUnits = .cpuAndNeuralEngine
-    var aneURL = URL(filePath: ane)
+    var aneURL = URL(filePath: slice)
     if aneURL.pathExtension == "mlpackage" {
       aneURL = try MLModel.compileModel(at: aneURL)
       print(Style.faint("compiled to \(aneURL.path)"))
@@ -71,19 +71,28 @@ struct ANECheck: ParsableCommand {
     }
     eval(rotated)
 
-    guard inDesc.multiArrayConstraint?.dataType == .float32,
-      outDesc.multiArrayConstraint?.dataType == .float32
+    let ioType = inDesc.multiArrayConstraint?.dataType ?? .float32
+    guard ioType == outDesc.multiArrayConstraint?.dataType,
+      ioType == .float16 || ioType == .float32
     else {
-      throw ValidationError("this bench expects the CoreML interface to be float32")
+      throw ValidationError("the CoreML interface must be float16 or float32 on both sides")
     }
 
     let buffer = try MLMultiArray(
-      shape: [rows, full.inputDim] as [NSNumber], dataType: .float32)
-    let host = rotated.asType(.float32).asArray(Float.self)
+      shape: [rows, full.inputDim] as [NSNumber], dataType: ioType)
     buffer.withUnsafeMutableBytes { raw, _ in
-      let dst = raw.bindMemory(to: Float.self)
-      host.withUnsafeBufferPointer { src in
-        dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
+      if ioType == .float16 {
+        let host = rotated.asType(.float16).asArray(Float16.self)
+        let dst = raw.bindMemory(to: Float16.self)
+        host.withUnsafeBufferPointer {
+          dst.baseAddress!.update(from: $0.baseAddress!, count: $0.count)
+        }
+      } else {
+        let host = rotated.asType(.float32).asArray(Float.self)
+        let dst = raw.bindMemory(to: Float.self)
+        host.withUnsafeBufferPointer {
+          dst.baseAddress!.update(from: $0.baseAddress!, count: $0.count)
+        }
       }
     }
     let provider = try MLDictionaryFeatureProvider(dictionary: [
@@ -120,9 +129,14 @@ struct ANECheck: ParsableCommand {
     let count = rows * split
     var aneValues = [Float](repeating: 0, count: count)
     got.withUnsafeBytes { raw in
-      let src = raw.bindMemory(to: Float.self)
-      aneValues.withUnsafeMutableBufferPointer { dst in
-        dst.baseAddress!.update(from: src.baseAddress!, count: count)
+      if ioType == .float16 {
+        let src = raw.bindMemory(to: Float16.self)
+        for i in 0..<count { aneValues[i] = Float(src[i]) }
+      } else {
+        let src = raw.bindMemory(to: Float.self)
+        aneValues.withUnsafeMutableBufferPointer { dst in
+          dst.baseAddress!.update(from: src.baseAddress!, count: count)
+        }
       }
     }
     let aneArray = MLXArray(aneValues).reshaped([rows, split]).asType(.float32)
@@ -157,6 +171,7 @@ struct ANECheck: ParsableCommand {
     print("")
     print(Style.field("projection", "\(projection)  \(full.inputDim)→\(full.outputDim)"))
     print(Style.field("rows", "\(rows)"))
+    print(Style.field("io", ioType == .float16 ? "float16" : "float32"))
     print(
       Style.field(
         "split",
@@ -184,6 +199,22 @@ struct ANECheck: ParsableCommand {
     let line = String(
       format: "  hybrid vs Metal alone         %6.2fx", speedup)
     print(speedup > 1 ? Style.good(line) : Style.bad(line))
+
+    // Both legs run concurrently, so the split is best where they finish together. Extrapolating
+    // each leg to the whole projection gives that point directly.
+    let aneWhole = neural / fraction
+    let optimal = baseline / (baseline + aneWhole)
+    print("")
+    print(
+      Style.bright(
+        String(
+          format: "  optimal split here            %5.1f%% on ANE, predicted %.2fx",
+          optimal * 100, 1 / (1 - optimal))))
+    print(
+      Style.faint(
+        String(
+          format: "  whole projection: Metal %.1f ms, ANE %.1f ms",
+          baseline * 1000, aneWhole * 1000)))
   }
 
   private func time(_ body: () -> Void) -> Double {

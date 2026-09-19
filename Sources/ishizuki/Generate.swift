@@ -59,6 +59,8 @@ struct Generate: ParsableCommand {
   @Flag(name: .long, help: "Route batch-2..5 projections through the qmv_wide kernel.")
   var qmvWide = false
 
+  @OptionGroup var neural: ANEOption
+
   @Option(
     name: .long,
     help: "Stretch context past the trained 262144 by this factor, e.g. 2 for ~512K.")
@@ -95,6 +97,7 @@ struct Generate: ParsableCommand {
 
     BonsaiRuntime.useFusedHadamard = fusedHadamard
     BonsaiRuntime.useQMVWide = qmvWide
+    try neural.apply()
 
     if cacheLimit > 0 {
       Memory.cacheLimit = cacheLimit * 1024 * 1024
