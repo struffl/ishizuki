@@ -24,6 +24,18 @@ public struct BitAllocator {
 
   public let profile: QuantProfile
 
+  /// Below this width the vocabulary embedding and the head that reads back from it stop
+  /// degrading gracefully and start producing garbage completions. The greedy auction below
+  /// judges every module purely by error removed per byte spent, and that measure is
+  /// deliberately size-invariant — which means these two, being a large fraction of the whole
+  /// model's parameters, can lose every round to a crowd of cheaper wins and never get lifted
+  /// at all. Pinning them sidesteps the auction instead of hoping it favours them.
+  private static let pinnedMinimumBits = 4
+
+  private static func isPinned(_ path: String) -> Bool {
+    path.hasSuffix("embed_tokens.weight") || path.hasSuffix("lm_head.weight")
+  }
+
   public init(profile: QuantProfile) {
     self.profile = profile
   }
@@ -39,11 +51,14 @@ public struct BitAllocator {
     var totalBytes = 0.0
 
     for measurement in measurements {
-      bits[measurement.path] = profile.baseBits
+      let floor =
+        Self.isPinned(measurement.path)
+        ? max(profile.baseBits, Self.pinnedMinimumBits) : profile.baseBits
+      bits[measurement.path] = floor
       elements[measurement.path] = measurement.elements
       measured[measurement.path] = measurement
       totalElements += measurement.elements
-      totalBytes += measurement.bytes(bits: profile.baseBits, groupSize: groupSize)
+      totalBytes += measurement.bytes(bits: floor, groupSize: groupSize)
     }
     guard totalElements > 0 else {
       return Result(bits: [:], achievedBpw: 0, boosted: 0, total: 0)
@@ -71,8 +86,9 @@ public struct BitAllocator {
     // only for the module that just moved.
     var candidates: [(path: String, next: Int, value: Double)] = []
     for path in bits.keys {
-      guard let next = widths.first(where: { $0 > profile.baseBits }),
-        let score = value(path, from: profile.baseBits, to: next)
+      let current = bits[path] ?? profile.baseBits
+      guard let next = widths.first(where: { $0 > current }),
+        let score = value(path, from: current, to: next)
       else { continue }
       candidates.append((path, next, score))
     }

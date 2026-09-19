@@ -28,6 +28,13 @@ struct Quantize: ParsableCommand {
   @Flag(name: .long, help: "Replace an existing output directory.")
   var force = false
 
+  @Flag(
+    name: .long,
+    help:
+      "Measure real activations first and quantize against them, instead of blind to them. Slower — a real forward pass over the whole model — but closes most of the gap to a calibrated pack like oQ4e."
+  )
+  var calibrate = false
+
   @Flag(name: .long, help: "Print what would be built and stop.")
   var dryRun = false
 
@@ -97,7 +104,7 @@ struct Quantize: ParsableCommand {
     screen.begin()
     let quantizer = Quantizer(
       source: checkpoint, profile: profile, destination: destination,
-      shardLimit: Int(shardGB * 1_073_741_824)
+      shardLimit: Int(shardGB * 1_073_741_824), calibrate: calibrate
     ) { progress in
       screen.apply(progress)
     }

@@ -32,19 +32,34 @@ public struct ModuleMeasurement: Sendable {
 /// module's name or position — a projection is boosted because it measurably suffers at the
 /// base width, not because projections of that name usually do.
 public enum ModuleSurvey {
+  /// - Parameters:
+  ///   - importance: per-input-channel activation energy from a calibration pass. When given,
+  ///     each width is quantized with `WeightedAffineQuantizer` instead of MLX's plain
+  ///     `quantized()`, so the measured error — and everything the allocator later decides off
+  ///     of it — reflects the quantizer this module will actually be written with.
   public static func measure(
-    _ weight: MLXArray, path: String, widths: [Int], groupSize: Int
+    _ weight: MLXArray, path: String, widths: [Int], groupSize: Int,
+    importance: MLXArray? = nil
   ) -> ModuleMeasurement {
     let reference = weight.asType(.float32)
     let denominator = sqrt((reference * reference).sum()).item(Float.self)
 
     var errors: [Int: Double] = [:]
     for bits in widths {
-      let (wq, scales, biases) = quantized(
-        weight, groupSize: groupSize, bits: bits, mode: .affine)
-      let restored = dequantized(
-        wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine
-      ).asType(.float32)
+      let restored: MLXArray
+      if let importance {
+        let (wq, scales, biases) = WeightedAffineQuantizer.quantize(
+          weight, groupSize: groupSize, bits: bits, importance: importance)
+        restored = dequantized(
+          wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine
+        ).asType(.float32)
+      } else {
+        let (wq, scales, biases) = quantized(
+          weight, groupSize: groupSize, bits: bits, mode: .affine)
+        restored = dequantized(
+          wq, scales: scales, biases: biases, groupSize: groupSize, bits: bits, mode: .affine
+        ).asType(.float32)
+      }
       let difference = restored - reference
       let numerator = sqrt((difference * difference).sum()).item(Float.self)
       errors[bits] = denominator > 0 ? Double(numerator / denominator) : 0

@@ -74,13 +74,25 @@ public struct PackedModuleFactory {
   public let records: [String: BonsaiConfig.PackedModuleRecord]
   public let tensorPrefix: String
   public let quantization: BonsaiConfig.QuantizationConfig
+  /// When set, every module comes back as a dense projection over the raw weight in `store`
+  /// (no scales, no biases, no Hadamard block) rather than a quantized one. Calibration uses
+  /// this to run the exact forward pass a checkpoint about to be quantized would produce,
+  /// through the same `Attention`/`GatedDeltaNet`/`MLP` code the real packs run — nothing
+  /// downstream of this factory needs to know the difference.
+  public let dense: Bool
+  private let collector: ActivationCollector?
 
-  public init(store: WeightStore, config: BonsaiConfig, tensorPrefix: String) {
+  public init(
+    store: WeightStore, config: BonsaiConfig, tensorPrefix: String,
+    dense: Bool = false, collector: ActivationCollector? = nil
+  ) {
     self.store = store
     self.records = Dictionary(
       uniqueKeysWithValues: config.modules.map { ($0.path, $0) })
     self.tensorPrefix = tensorPrefix
     self.quantization = config.quantization
+    self.dense = dense
+    self.collector = collector
   }
 
   public var groupSize: Int { quantization.groupSize }
@@ -110,6 +122,10 @@ public struct PackedModuleFactory {
   }
 
   public func embedding(_ path: String) throws -> PackedEmbedding {
+    let key = tensorPrefix + path
+    if dense {
+      return PackedEmbedding(dense: try store(key + ".weight"))
+    }
     let block: Int
     if let record = records[path] {
       guard record.embedding else {
@@ -122,7 +138,6 @@ public struct PackedModuleFactory {
       }
       block = 0
     }
-    let key = tensorPrefix + path
     let entry = quant(for: path)
     return try PackedEmbedding(
       weight: store(key + ".weight"),
@@ -137,7 +152,7 @@ public struct PackedModuleFactory {
   /// The same module can arrive packed or dense depending on what the quantizer decided to
   /// leave alone, so the small delta-net projections resolve by what is actually on disk.
   public func projection(_ path: String) throws -> any Projection {
-    if store.has(tensorPrefix + path + ".scales") {
+    if dense || store.has(tensorPrefix + path + ".scales") {
       return try linear(path)
     }
     return try DenseLinear(store: store, prefix: tensorPrefix + path)
@@ -145,6 +160,11 @@ public struct PackedModuleFactory {
 
   private func packedLinear(_ path: String, block: Int) throws -> PackedLinear {
     let key = tensorPrefix + path
+    if dense {
+      let weight = try store(key + ".weight")
+      guard let collector else { return PackedLinear(dense: weight) }
+      return PackedLinear(dense: weight) { x in collector.record(path: path, x: x) }
+    }
     let entry = quant(for: path)
     return try PackedLinear(
       weight: store(key + ".weight"),

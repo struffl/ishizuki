@@ -20,6 +20,7 @@ public final class Quantizer: @unchecked Sendable {
   public struct Progress: Sendable {
     public enum Phase: String, Sendable {
       case scanning
+      case calibrating
       case surveying
       case allocating
       case writing
@@ -63,18 +64,30 @@ public final class Quantizer: @unchecked Sendable {
   public let profile: QuantProfile
   public let destination: URL
   public let shardLimit: Int
+  /// When set, a calibration pass runs the checkpoint's real, unquantized forward over a text
+  /// corpus first, and every module is quantized against the activation importance it measured
+  /// (`WeightedAffineQuantizer`) rather than blind to it (plain `quantized()`). Off by default:
+  /// it is a real forward pass over the whole model, not free, and the fast constant-memory
+  /// path some callers want stays available without it.
+  public let calibrate: Bool
+  /// Pre-tokenized calibration sequences, used instead of tokenizing `CalibrationModel
+  /// .defaultCorpus`. A caller with a real corpus supplies it here; tests that want to
+  /// calibrate without shipping a tokenizer fixture do the same.
+  public let calibrationTokens: [[Int32]]?
 
   private let onProgress: @Sendable (Progress) -> Void
 
   public init(
     source: SourceCheckpoint, profile: QuantProfile, destination: URL,
-    shardLimit: Int = 4 << 30,
+    shardLimit: Int = 4 << 30, calibrate: Bool = false, calibrationTokens: [[Int32]]? = nil,
     onProgress: @escaping @Sendable (Progress) -> Void = { _ in }
   ) {
     self.source = source
     self.profile = profile
     self.destination = destination
     self.shardLimit = shardLimit
+    self.calibrate = calibrate
+    self.calibrationTokens = calibrationTokens
     self.onProgress = onProgress
   }
 
@@ -99,15 +112,27 @@ public final class Quantizer: @unchecked Sendable {
 
     report(.scanning, 0, 1, "reading the checkpoint", 0, "")
     let names = source.tensorNames.sorted()
+    // Upstream checkpoints nest their towers differently from the packs this runtime reads.
+    let canonical = TensorNaming.map(names)
+    let upstream = TensorNaming.isHuggingFaceLayout(names)
+    let zeroCentredNorms = TensorNaming.usesZeroCentredNorms(source.config)
     var quantizable: [String] = []
     var passthrough: [String] = []
     for name in names {
       let shape = try source.tensor(name).shape
-      if Self.isQuantizable(name, shape: shape) {
+      if Self.isQuantizable(canonical[name] ?? name, shape: shape) {
         quantizable.append(name)
       } else {
         passthrough.append(name)
       }
+    }
+
+    // Pass zero: calibration, if asked for. Importance is keyed by the original (pre-canonical)
+    // name, same as everything else in this pass, so the lookups below never have to reconcile
+    // two naming schemes.
+    var importance: [String: MLXArray] = [:]
+    if calibrate {
+      importance = try runCalibration(quantizable: quantizable, canonical: canonical)
     }
 
     // Pass one.
@@ -125,7 +150,8 @@ public final class Quantizer: @unchecked Sendable {
       }
       measurements.append(
         ModuleSurvey.measure(
-          weight, path: name, widths: widths, groupSize: profile.groupSize))
+          weight, path: name, widths: widths, groupSize: profile.groupSize,
+          importance: importance[name]))
       surveyed += weight.size
       report(
         .surveying, measurements.count, quantizable.count, short(name), surveyed,
@@ -136,6 +162,8 @@ public final class Quantizer: @unchecked Sendable {
 
     report(.allocating, 0, 1, "spending the budget", surveyed, "")
     let allocation = BitAllocator(profile: profile).allocate(measurements)
+    let canonicalBits = Dictionary(
+      uniqueKeysWithValues: allocation.bits.map { (canonical[$0.key] ?? $0.key, $0.value) })
 
     // Pass two.
     var writer = PackWriter(directory: destination, shardLimit: shardLimit)
@@ -145,10 +173,19 @@ public final class Quantizer: @unchecked Sendable {
     for name in quantizable {
       let bits = allocation.bits[name] ?? profile.baseBits
       let weight = try source.tensor(name)
-      let (wq, scales, biases) = quantized(
-        weight, groupSize: profile.groupSize, bits: bits, mode: .affine)
-      let base = String(name.dropLast(".weight".count))
-      try writer.add(name, wq)
+      let wq: MLXArray
+      let scales: MLXArray
+      let biases: MLXArray?
+      if let moduleImportance = importance[name] {
+        (wq, scales, biases) = WeightedAffineQuantizer.quantize(
+          weight, groupSize: profile.groupSize, bits: bits, importance: moduleImportance)
+      } else {
+        (wq, scales, biases) = quantized(
+          weight, groupSize: profile.groupSize, bits: bits, mode: .affine)
+      }
+      let target = canonical[name] ?? name
+      let base = String(target.dropLast(".weight".count))
+      try writer.add(target, wq)
       try writer.add(base + ".scales", scales.asType(.float16))
       try writer.add(base + ".biases", (biases ?? MLXArray.zeros(like: scales)).asType(.float16))
       written += 1
@@ -157,17 +194,19 @@ public final class Quantizer: @unchecked Sendable {
     }
 
     for name in passthrough {
-      let tensor = try source.tensor(name)
+      var tensor = try source.tensor(name)
+      if upstream {
+        tensor = TensorNaming.relayout(name, tensor, zeroCentredNorms: zeroCentredNorms)
+      }
       // fp16 throughout: it is what ishizuki runs in, and prefill is faster for it.
-      try writer.add(
-        name, tensor.dtype == .float32 ? tensor.asType(.float16) : tensor.asType(.float16))
+      try writer.add(canonical[name] ?? name, tensor.asType(.float16))
       written += 1
       report(.writing, written, totalToWrite, short(name), surveyed, "")
     }
 
     report(.finishing, 0, 1, "writing the index and config", surveyed, "")
     let summary = try writer.finish()
-    try writeConfig(allocation: allocation, quantized: Set(quantizable))
+    try writeConfig(allocation: allocation, bits: canonicalBits)
 
     return Outcome(
       directory: destination,
@@ -178,21 +217,61 @@ public final class Quantizer: @unchecked Sendable {
       seconds: -started.timeIntervalSinceNow)
   }
 
+  // MARK: - Calibration
+
+  /// Runs the checkpoint's exact forward over the calibration corpus and returns each
+  /// quantizable module's importance, keyed by its original (pre-canonical) name so callers
+  /// never have to reconcile naming schemes. A module calibration never reached — the
+  /// embedding and the head, which oMLX excludes for the same reason (a row is gathered by
+  /// token id, not consumed as an input channel), or one an unusually short corpus missed —
+  /// is simply absent, and falls back to plain, unweighted quantization.
+  private func runCalibration(
+    quantizable: [String], canonical: [String: String]
+  ) throws -> [String: MLXArray] {
+    let model = try CalibrationModel(source: source)
+
+    if let calibrationTokens {
+      report(.calibrating, 0, calibrationTokens.count, "loading the checkpoint", 0, "")
+      for (index, tokens) in calibrationTokens.enumerated() {
+        model.calibrate(tokens)
+        report(
+          .calibrating, index + 1, calibrationTokens.count,
+          "measuring what the real network actually uses", 0, "")
+      }
+    } else {
+      report(.calibrating, 0, CalibrationModel.defaultCorpus.count, "loading the checkpoint", 0, "")
+      let tokenizer = try BonsaiTokenizer(directory: source.directory)
+      for (index, text) in CalibrationModel.defaultCorpus.enumerated() {
+        model.calibrate(text: text, tokenizer: tokenizer)
+        report(
+          .calibrating, index + 1, CalibrationModel.defaultCorpus.count,
+          "measuring what the real network actually uses", 0, "")
+      }
+    }
+
+    var importance: [String: MLXArray] = [:]
+    for name in quantizable {
+      let key = model.importanceKey(forCanonicalName: canonical[name] ?? name)
+      importance[name] = model.collector.importance(for: key)
+    }
+    return importance
+  }
+
   // MARK: - Config
 
   /// Writes the source's config back out with a quantization block in the shape MLX uses: the
   /// base width at the top, and an entry for every module that was lifted off it.
-  private func writeConfig(allocation: BitAllocator.Result, quantized: Set<String>) throws {
+  private func writeConfig(allocation: BitAllocator.Result, bits: [String: Int]) throws {
     var config = source.config
     var quantization: [String: Any] = [
       "bits": profile.baseBits,
       "group_size": profile.groupSize,
       "mode": "affine",
     ]
-    for (path, bits) in allocation.bits where bits != profile.baseBits {
+    for (path, width) in bits where width != profile.baseBits {
       let module = String(path.dropLast(".weight".count))
       quantization[module] = [
-        "bits": bits, "group_size": profile.groupSize, "mode": "affine",
+        "bits": width, "group_size": profile.groupSize, "mode": "affine",
       ]
     }
     config["quantization"] = quantization
