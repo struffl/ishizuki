@@ -15,6 +15,16 @@ public protocol LayerCache: AnyObject {
 public enum CacheSnapshot: @unchecked Sendable {
   case kv(offset: Int)
   case recurrent(conv: MLXArray?, state: MLXArray?, offset: Int)
+
+  /// An attention layer rewinds by moving an offset, so its snapshot is free. A recurrent layer
+  /// has to keep the state itself, which is what makes holding many of them expensive.
+  public var byteCount: Int {
+    switch self {
+    case .kv: 0
+    case .recurrent(let conv, let state, _):
+      (conv?.nbytes ?? 0) + (state?.nbytes ?? 0)
+    }
+  }
 }
 
 public final class KVCache: LayerCache, @unchecked Sendable {
