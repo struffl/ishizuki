@@ -215,6 +215,57 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
       addition.biases ?? MLXArray.zeros(like: addition.scales)
   }
 
+  public func export() -> [String: MLXArray]? {
+    guard offset > 0 else { return nil }
+    var arrays: [String: MLXArray] = [:]
+    if quantizedCount > 0, let quantizedKeys, let quantizedValues {
+      let live = ..<quantizedCount
+      arrays["qk.w"] = quantizedKeys.0[0..., 0..., live, 0...]
+      arrays["qk.s"] = quantizedKeys.1[0..., 0..., live, 0...]
+      arrays["qk.b"] = quantizedKeys.2[0..., 0..., live, 0...]
+      arrays["qv.w"] = quantizedValues.0[0..., 0..., live, 0...]
+      arrays["qv.s"] = quantizedValues.1[0..., 0..., live, 0...]
+      arrays["qv.b"] = quantizedValues.2[0..., 0..., live, 0...]
+    }
+    if let windowKeys, let windowValues, windowKeys.dim(2) > 0 {
+      arrays["wk"] = windowKeys
+      arrays["wv"] = windowValues
+    }
+    return arrays.isEmpty ? nil : arrays
+  }
+
+  public func load(_ arrays: [String: MLXArray], offset: Int) -> Bool {
+    var restoredQuantized = 0
+    var keys: (MLXArray, MLXArray, MLXArray)?
+    var values: (MLXArray, MLXArray, MLXArray)?
+    if let w = arrays["qk.w"], let sc = arrays["qk.s"], let b = arrays["qk.b"],
+      let vw = arrays["qv.w"], let vs = arrays["qv.s"], let vb = arrays["qv.b"]
+    {
+      keys = (w, sc, b)
+      values = (vw, vs, vb)
+      restoredQuantized = w.dim(2)
+    }
+
+    let window: (MLXArray, MLXArray)?
+    if let wk = arrays["wk"], let wv = arrays["wv"] {
+      window = (wk, wv)
+    } else {
+      window = nil
+    }
+
+    // The two stores have to account for exactly the tokens the archive claims.
+    guard restoredQuantized + (window?.0.dim(2) ?? 0) == offset else { return false }
+
+    quantizedKeys = keys
+    quantizedValues = values
+    quantizedCount = restoredQuantized
+    quantizedCapacity = restoredQuantized
+    windowKeys = window?.0
+    windowValues = window?.1
+    self.offset = offset
+    return true
+  }
+
   public var byteCount: Int {
     var total = 0
     for array in [quantizedKeys, quantizedValues].compactMap({ $0 }) {

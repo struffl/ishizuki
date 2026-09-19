@@ -10,6 +10,14 @@ public protocol LayerCache: AnyObject {
 
   func snapshot() -> CacheSnapshot
   func restore(_ snapshot: CacheSnapshot)
+
+  /// Everything needed to rebuild this layer, keyed within the layer, or nil if it holds
+  /// nothing worth writing. The offset travels separately, in the archive's metadata.
+  func export() -> [String: MLXArray]?
+
+  /// Rebuilds the layer from an export. False leaves the cache untouched and the archive
+  /// unusable, which the caller treats as a miss rather than an error.
+  func load(_ arrays: [String: MLXArray], offset: Int) -> Bool
 }
 
 public enum CacheSnapshot: @unchecked Sendable {
@@ -52,6 +60,24 @@ public final class KVCache: LayerCache, @unchecked Sendable {
 
   public func trim(to length: Int) {
     offset = min(length, offset)
+  }
+
+  public func export() -> [String: MLXArray]? {
+    guard offset > 0, let keys, let values else { return nil }
+    return [
+      "keys": keys[0..., 0..., ..<offset, 0...],
+      "values": values[0..., 0..., ..<offset, 0...],
+    ]
+  }
+
+  public func load(_ arrays: [String: MLXArray], offset: Int) -> Bool {
+    guard let keys = arrays["keys"], let values = arrays["values"],
+      keys.dim(2) >= offset, values.dim(2) >= offset
+    else { return false }
+    self.keys = keys
+    self.values = values
+    self.offset = offset
+    return true
   }
 
   public func reserve(_ tokens: Int, shapedLike keys: MLXArray, values: MLXArray) {
@@ -131,6 +157,21 @@ public final class GatedDeltaNetCache: LayerCache, @unchecked Sendable {
 
   public func advance(_ count: Int) {
     offset += count
+  }
+
+  public func export() -> [String: MLXArray]? {
+    guard offset > 0 else { return nil }
+    var arrays: [String: MLXArray] = [:]
+    if let convState { arrays["conv"] = convState }
+    if let recurrentState { arrays["state"] = recurrentState }
+    return arrays.isEmpty ? nil : arrays
+  }
+
+  public func load(_ arrays: [String: MLXArray], offset: Int) -> Bool {
+    convState = arrays["conv"]
+    recurrentState = arrays["state"]
+    self.offset = offset
+    return true
   }
 }
 
