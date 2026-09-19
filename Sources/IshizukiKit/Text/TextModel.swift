@@ -45,10 +45,18 @@ public final class DecoderLayer: @unchecked Sendable {
   }
 
   public func callAsFunction(
-    _ x: MLXArray, mask: MLXArray?, cache: LayerCache?, positions: MLXArray?
+    _ x: MLXArray, mask: MLXArray?, cache: LayerCache?, positions: MLXArray?,
+    compute: DType? = nil
   ) -> MLXArray {
+    // The residual carries float32 while the modules run in the pack's own width: sixty-four
+    // layers of bf16 addition is where this runtime drifts from the reference, and a wider
+    // accumulator costs a cast rather than a wider matmul.
+    // Not the norm weight's own dtype: a pack may store its norms wider than its projections,
+    // and running the projections at the norm's width is how this got three times slower.
+    let compute = compute ?? x.dtype
     let normed = MLXFast.rmsNorm(
-      x, weight: inputLayerNorm.asType(x.dtype), eps: eps)
+      x, weight: inputLayerNorm.asType(x.dtype), eps: eps
+    ).asType(compute)
 
     let attended: MLXArray
     if let linearAttention {
@@ -60,10 +68,11 @@ public final class DecoderLayer: @unchecked Sendable {
       attended = normed
     }
 
-    let h = x + attended
+    let h = x + attended.asType(x.dtype)
     let postNormed = MLXFast.rmsNorm(
-      h, weight: postAttentionLayerNorm.asType(h.dtype), eps: eps)
-    return h + mlp(postNormed)
+      h, weight: postAttentionLayerNorm.asType(h.dtype), eps: eps
+    ).asType(compute)
+    return h + mlp(postNormed).asType(h.dtype)
   }
 }
 
@@ -143,13 +152,16 @@ public final class TextModel: @unchecked Sendable {
       fatalError("hidden(inputs:) requires token ids or embeddings")
     }
 
+    let compute = h.dtype
     let offset = cache?.offset ?? 0
-    let mask = causalMask(length: h.dim(1), offset: offset, dtype: h.dtype)
+    let mask = causalMask(length: h.dim(1), offset: offset, dtype: compute)
 
+    h = h.asType(.float32)
     for (index, layer) in layers.enumerated() {
-      h = layer(h, mask: mask, cache: cache?.layers[index], positions: positions)
+      h = layer(
+        h, mask: mask, cache: cache?.layers[index], positions: positions, compute: compute)
     }
-    return h
+    return h.asType(compute)
   }
 
   public func callAsFunction(
