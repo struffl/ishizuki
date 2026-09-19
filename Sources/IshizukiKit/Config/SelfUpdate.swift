@@ -145,27 +145,27 @@ public enum SelfUpdate {
     guard let newExecutable = locate("ishizuki", under: unpacked) else {
       throw BonsaiError.missingComponent("\(release.assetName) contains no ishizuki executable")
     }
-    guard let newMetallib = locate("mlx.metallib", under: unpacked) else {
-      throw BonsaiError.missingComponent("\(release.assetName) contains no mlx.metallib")
-    }
+    let newMetallib = locate("mlx.metallib", under: unpacked)
 
     try verify(newExecutable, against: executable, log: log)
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o755], ofItemAtPath: newExecutable.path)
 
-    // MLX loads the metallib colocated with the executable before anything in the SwiftPM bundle,
-    // so writing it here keeps kernels and binary in step without resealing the signed bundle.
+    // Releases carry the metallib inside the executable and lay it down on first run, so a stale
+    // one beside the binary heals itself. Older archives ship it loose; replace it when present.
     var applied: [Replacement] = []
     do {
       applied.append(try replace(executable, with: newExecutable))
-      applied.append(
-        try replace(directory.appending(path: "mlx.metallib"), with: newMetallib))
+      if let newMetallib {
+        applied.append(
+          try replace(directory.appending(path: "mlx.metallib"), with: newMetallib))
+      }
     } catch {
       for replacement in applied.reversed() { replacement.undo() }
       throw error
     }
     for replacement in applied { replacement.commit() }
-    log("replaced ishizuki and mlx.metallib in \(directory.path)")
+    log("replaced ishizuki in \(directory.path)")
     record(tag: release.tag)
   }
 

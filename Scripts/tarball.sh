@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 # SPDX-License-Identifier: MIT
 #
-# Build a signed + notarized loose tarball: the binary and the metallib it needs, nothing else.
+# Build a signed + notarized loose tarball: one binary with the metallib inside it.
 set -euo pipefail
 
 SWIFT="${SWIFT:-swift}"
@@ -21,6 +21,9 @@ trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' E
 
 echo "==> Building release"
 "$SWIFT" build -c release
+mkdir -p .build/embed
+cp .build/release/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib .build/embed/mlx.metallib
+ISHIZUKI_METALLIB="$root_dir/.build/embed/mlx.metallib" "$SWIFT" build -c release
 
 BIN=".build/release/ishizuki"
 BUNDLE=".build/release/mlx-swift_Cmlx.bundle"
@@ -37,7 +40,6 @@ mkdir -p "$payload"
 
 echo "==> Staging payload"
 cp "$BIN" "$payload/ishizuki"
-cp "$BUNDLE/Contents/Resources/default.metallib" "$payload/mlx.metallib"
 cp LICENSE "$payload/LICENSE"
 
 echo "==> Code signing"

@@ -16,9 +16,12 @@ bundle := ".build/release/mlx-swift_Cmlx.bundle"
 default:
     @just --list
 
-# build the release binary
+# build the release binary, with the metallib embedded in it
 release:
     {{ swift }} build -c release
+    @mkdir -p .build/embed
+    @cp {{ bundle }}/Contents/Resources/default.metallib .build/embed/mlx.metallib
+    ISHIZUKI_METALLIB="{{ justfile_directory() }}/.build/embed/mlx.metallib" {{ swift }} build -c release
 
 # run the server: OpenAI + Anthropic on one port (default :8128). e.g. just serve --kv-bits 3.5
 serve *args: release
@@ -71,12 +74,13 @@ install: icon
     trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' EXIT
     ./Scripts/stamp-version.sh "{{ version }}"
     {{ swift }} build -c release
+    mkdir -p .build/embed
+    cp {{ bundle }}/Contents/Resources/default.metallib .build/embed/mlx.metallib
+    ISHIZUKI_METALLIB="{{ justfile_directory() }}/.build/embed/mlx.metallib" {{ swift }} build -c release
     prefix="{{ prefix }}"
     install -d "$prefix/libexec/ishizuki" "$prefix/bin"
     install -m 0755 {{ bin }} "$prefix/libexec/ishizuki/ishizuki"
     rm -rf "$prefix/libexec/ishizuki/mlx-swift_Cmlx.bundle"
-    cp -R {{ bundle }} "$prefix/libexec/ishizuki/"
-    cp {{ bundle }}/Contents/Resources/default.metallib "$prefix/libexec/ishizuki/mlx.metallib"
     cp assets/ishizuki.icns "$prefix/libexec/ishizuki/"
     install -m 0755 Scripts/uninstall.sh "$prefix/libexec/ishizuki/uninstall.sh"
     printf '#!/bin/sh\nexec "$(dirname "$0")/../libexec/ishizuki/ishizuki" "$@"\n' > "$prefix/bin/ishizuki"
@@ -105,7 +109,7 @@ uninstall:
 package: release
     ./Scripts/package.sh {{ version }}
 
-# build a signed, notarized loose tarball (binary + metallib)
+# build a signed, notarized loose tarball (one self-contained binary)
 tarball: release
     ./Scripts/tarball.sh {{ version }}
 

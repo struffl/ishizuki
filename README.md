@@ -41,8 +41,8 @@ notarized, and it installs to your home folder (`~/.local`), so there's **no adm
 
 Add `--purge` to also delete downloaded models.
 
-Or take the loose binary, `ishizuki-<version>-macos-arm64.tar.gz` — the executable and the
-metallib it loads, signed and notarized. Put the two anywhere, together:
+Or take the loose binary, `ishizuki-<version>-macos-arm64.tar.gz` — one signed and notarized
+executable, with the Metal kernels inside it. Put it anywhere:
 
 ```bash
 tar -xzf ishizuki-<version>-macos-arm64.tar.gz
@@ -54,7 +54,7 @@ From source needs Xcode 16+ and [`just`](https://github.com/casey/just) (`brew i
 ```bash
 just install         # rootless build + install to ~/.local
 just package         # signed + notarized .pkg (identities from .env — see .env.example)
-just tarball         # signed + notarized loose binary + metallib
+just tarball         # signed + notarized single-file binary
 just dist            # both
 ```
 
@@ -64,8 +64,8 @@ just dist            # both
 ishizuki update
 ```
 
-Replaces the executable and the metallib beside it, in place, wherever ishizuki was
-installed from — the `.pkg`, the tarball, or `just install`. Models, configuration files,
+Replaces the executable in place, wherever ishizuki was installed from — the `.pkg`, the
+tarball, or `just install`. Models, configuration files,
 and the launchd agent are left alone, and a server that is already running keeps the code
 it started with until you restart it.
 

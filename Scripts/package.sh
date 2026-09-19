@@ -23,11 +23,12 @@ trap 'git checkout -- Sources/IshizukiKit/BuildInfo.swift 2>/dev/null || true' E
 
 echo "==> Building release"
 "$SWIFT" build -c release
+mkdir -p .build/embed
+cp .build/release/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib .build/embed/mlx.metallib
+ISHIZUKI_METALLIB="$root_dir/.build/embed/mlx.metallib" "$SWIFT" build -c release
 
 BIN=".build/release/ishizuki"
-BUNDLE=".build/release/mlx-swift_Cmlx.bundle"
-[ -x "$BIN" ]    || { echo "missing $BIN"; exit 1; }
-[ -d "$BUNDLE" ] || { echo "missing $BUNDLE"; exit 1; }
+[ -x "$BIN" ] || { echo "missing $BIN"; exit 1; }
 
 echo "==> Compiling app icon"
 ICON_OUT="$(mktemp -d)"
@@ -44,20 +45,17 @@ mkdir -p "$libexec" "$bindir"
 
 echo "==> Staging payload"
 cp "$BIN" "$libexec/ishizuki"
-cp -R "$BUNDLE" "$libexec/"
-cp "$BUNDLE/Contents/Resources/default.metallib" "$libexec/mlx.metallib"
 cp "$ICNS" "$libexec/ishizuki.icns"
 install -m 0755 Scripts/uninstall.sh "$libexec/uninstall.sh"
 cat > "$bindir/ishizuki" <<'SHIM'
 #!/bin/sh
-# MLX finds its metallib next to the real binary (dladdr, symlinks unresolved),
-# so exec the real path rather than symlinking to it.
+# MLX finds its metallib next to the real binary (dladdr, symlinks unresolved), and the binary
+# lays that metallib down itself, so exec the real path rather than symlinking to it.
 exec "$(dirname "$0")/../libexec/ishizuki/ishizuki" "$@"
 SHIM
 chmod 0755 "$bindir/ishizuki"
 
 echo "==> Code signing"
-codesign --force --timestamp --sign "$APP_IDENTITY" "$libexec/mlx-swift_Cmlx.bundle"
 codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$libexec/ishizuki"
 codesign --verify --strict --verbose=2 "$libexec/ishizuki"
 
