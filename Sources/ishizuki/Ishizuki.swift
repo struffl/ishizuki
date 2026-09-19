@@ -18,6 +18,7 @@ struct Ishizuki: ParsableCommand {
     ])
 
   static func main() {
+    EmbeddedMetallib.materialize()
     Self.main(ANEOption.normalize(Array(CommandLine.arguments.dropFirst())))
   }
 }

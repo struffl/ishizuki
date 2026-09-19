@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Foundation
 import PackageDescription
+
+let embeddedMetallib = ProcessInfo.processInfo.environment["ISHIZUKI_METALLIB"]
 
 let package = Package(
   name: "ishizuki",
@@ -35,7 +38,15 @@ let package = Package(
       dependencies: [
         "IshizukiKit",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
-      ]
+      ],
+      linkerSettings: embeddedMetallib.map {
+        [
+          .unsafeFlags([
+            "-Xlinker", "-sectcreate",
+            "-Xlinker", "__MLX", "-Xlinker", "__metallib", "-Xlinker", $0,
+          ])
+        ]
+      } ?? []
     ),
     .testTarget(
       name: "IshizukiKitTests",
