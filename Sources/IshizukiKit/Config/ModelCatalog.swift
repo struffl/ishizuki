@@ -6,16 +6,33 @@ import Foundation
 /// The packs on this machine that this runtime can actually load.
 ///
 /// A directory qualifies by having a config.json this build understands and weights beside it,
-/// so a half-finished download or an unrelated checkout is not offered as a model.
+/// so a half-finished download or an unrelated checkout is not offered as a model. A `.gguf`
+/// qualifies on its own, since it carries its architecture, its vocabulary and its weights in
+/// the one file.
 public struct ModelCatalog: Sendable {
+  public enum Format: String, Sendable, Equatable {
+    /// This runtime's own directory of quantized shards beside a config.json.
+    case pack
+    /// One file in llama.cpp's container.
+    case gguf
+  }
+
   public struct Entry: Sendable, Equatable {
     public let id: String
-    public let directory: URL
+    public let format: Format
+    /// The pack's directory, or the `.gguf` file itself.
+    public let url: URL
     public let byteCount: Int
     public let quantization: String
     public let hasVision: Bool
     public let hasMTP: Bool
     public let contextTokens: Int
+
+    /// Where a pack's other files live — its chat template, its ANE bank, its prefix store. A
+    /// GGUF has no such files, so this is the folder it happens to sit in and nothing more.
+    public var directory: URL {
+      format == .pack ? url : url.deletingLastPathComponent()
+    }
 
     public var displayName: String { id }
   }
@@ -37,9 +54,14 @@ public struct ModelCatalog: Sendable {
     var found: [String: Entry] = [:]
     for root in roots {
       for directory in candidates(under: root) {
-        guard let entry = inspect(directory) else { continue }
-        // First root wins, so an explicitly managed copy outranks a cached one.
-        if found[entry.id] == nil { found[entry.id] = entry }
+        if let entry = inspect(directory), found[entry.id] == nil {
+          // First root wins, so an explicitly managed copy outranks a cached one.
+          found[entry.id] = entry
+        }
+        for file in ggufFiles(in: directory) {
+          guard let entry = inspect(gguf: file), found[entry.id] == nil else { continue }
+          found[entry.id] = entry
+        }
       }
     }
     return ModelCatalog(entries: found.values.sorted { $0.id < $1.id })
@@ -69,6 +91,56 @@ public struct ModelCatalog: Sendable {
     return result
   }
 
+  /// The model files in a directory, which is every `.gguf` but the vision projector: an
+  /// `mmproj` is half a model, loadable only beside the one it was split from.
+  private static func ggufFiles(in directory: URL) -> [URL] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    return
+      names
+      .filter { $0.hasSuffix(".gguf") && !$0.lowercased().hasPrefix("mmproj") }
+      .sorted()
+      .map { directory.appending(path: $0) }
+  }
+
+  private static func inspect(gguf file: URL) -> Entry? {
+    guard let opened = try? GGUFFile(url: file),
+      let architecture = try? GGUFArchitecture(file: opened)
+    else { return nil }
+
+    let size =
+      (try? file.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+
+    return Entry(
+      id: file.deletingPathExtension().lastPathComponent,
+      format: .gguf,
+      url: file,
+      byteCount: size ?? 0,
+      quantization: dominantType(of: opened),
+      // The tower travels as its own file in this format, so a model is text-only until an
+      // mmproj is found beside it.
+      hasVision: hasProjector(beside: file),
+      hasMTP: architecture.hasMTP,
+      contextTokens: architecture.textConfig.maxPositionEmbeddings)
+  }
+
+  /// The type the file mostly *is*, weighted by bytes rather than by tensor count: a pack is
+  /// hundreds of small f32 norms and a handful of enormous projections, and counting tensors
+  /// would name it after the norms.
+  private static func dominantType(of file: GGUFFile) -> String {
+    var bytes: [GGMLType: Int] = [:]
+    for tensor in file.tensors { bytes[tensor.type, default: 0] += tensor.byteCount }
+    guard let winner = bytes.max(by: { $0.value < $1.value })?.key else { return "unknown" }
+    return winner.name
+  }
+
+  private static func hasProjector(beside file: URL) -> Bool {
+    let directory = file.deletingLastPathComponent()
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    return names.contains {
+      $0.lowercased().hasPrefix("mmproj") && $0.hasSuffix(".gguf")
+    }
+  }
+
   private static func inspect(_ directory: URL) -> Entry? {
     let fm = FileManager.default
     guard fm.fileExists(atPath: directory.appending(path: "config.json").path),
@@ -87,7 +159,8 @@ public struct ModelCatalog: Sendable {
 
     return Entry(
       id: name(for: directory),
-      directory: directory,
+      format: .pack,
+      url: directory,
       byteCount: MemoryBudget.weightBytes(in: directory) ?? 0,
       quantization: "\(quantization) g\(config.quantization.groupSize)",
       hasVision: config.components?.vision == true,
