@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: MIT
 
+import Foundation
 import MLX
 import Testing
 
@@ -144,6 +145,51 @@ struct SessionCacheTests {
     pool.setByteLimit(1)
     #expect(pool.slotCount == 1)
     #expect(inFlight.cache.offset == 3)
+  }
+
+  @Test("a prefix that fell out of memory comes back from disk")
+  func diskTier() {
+    let dir = URL(filePath: NSTemporaryDirectory())
+      .appending(path: "session-disk-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = PrefixStore(directory: dir, minimumTokens: 4)
+    let pool = pool(capacity: 1)
+    pool.setStore(store, modelID: "pack-a")
+
+    let prompt = Array(1...32)
+    turn(pool, prompt: prompt)
+    pool.persistAll()
+    #expect(store.entries().count == 1)
+
+    // Everything in memory is gone, as after an idle unload.
+    pool.reset()
+    #expect(pool.slotCount == 0)
+
+    let revived = lease(pool, prompt + [99])
+    #expect(revived.reused == 32)
+    #expect(revived.cache.offset == 32)
+    #expect(pool.diskHits == 1)
+  }
+
+  @Test("a disk prefix from another pack is not read into this one")
+  func diskFingerprint() {
+    let dir = URL(filePath: NSTemporaryDirectory())
+      .appending(path: "session-disk-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let store = PrefixStore(directory: dir, minimumTokens: 4)
+    let writer = pool(capacity: 1)
+    writer.setStore(store, modelID: "pack-a")
+    let prompt = Array(1...32)
+    turn(writer, prompt: prompt)
+    writer.persistAll()
+
+    let reader = pool(capacity: 1)
+    reader.setStore(store, modelID: "pack-b")
+    let lease = lease(reader, prompt + [99])
+    #expect(lease.reused == 0)
+    #expect(reader.diskHits == 0)
   }
 
   @Test("checkpoints are counted against the cache's own memory")

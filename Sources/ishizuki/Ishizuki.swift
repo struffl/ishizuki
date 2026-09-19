@@ -12,6 +12,7 @@ struct Ishizuki: ParsableCommand {
     version: BuildInfo.version,
     subcommands: [
       Demo.self, Generate.self, Serve.self, Launch.self, Pull.self, Update.self, InstallAgent.self,
+      CacheCommand.self,
       BatchCheck.self, KernelCheck.self, ANECheck.self,
       ContextBench.self, KVBench.self, PrefillBench.self, SpecBench.self, Verify.self,
       VerifyLogits.self,

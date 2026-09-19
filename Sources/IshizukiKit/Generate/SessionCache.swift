@@ -52,6 +52,36 @@ public final class SessionCache: @unchecked Sendable {
   public private(set) var branches = 0
   public private(set) var evictions = 0
   private var byteLimit = 0
+  private var store: PrefixStore?
+  private var modelID = ""
+  public private(set) var diskHits = 0
+
+  /// Backs the pool with a disk tier. `modelID` identifies the pack, so an archive is never
+  /// read into a model it was not built from.
+  public func setStore(_ store: PrefixStore?, modelID: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    self.store = store
+    self.modelID = modelID
+  }
+
+  /// Writes every idle slot worth keeping to the disk tier. Called before the pool is dropped —
+  /// on idle unload or shutdown — rather than on every eviction, because archiving a long
+  /// prefix costs real time and should not land in the middle of a request.
+  public func persistAll() {
+    lock.lock()
+    let store = self.store
+    let modelID = self.modelID
+    let pending = slots.filter { !$0.busy && $0.tokens.count == $0.cache.offset }
+      .map { ($0.cache, $0.tokens, $0.cache.kvConfig) }
+    lock.unlock()
+
+    guard let store else { return }
+    for (cache, tokens, kvConfig) in pending {
+      store.save(cache: cache, tokens: tokens, modelID: modelID, kvConfig: kvConfig)
+    }
+    store.evictToLimit()
+  }
 
   /// `checkpoints` is how many rewind points each slot keeps. On a hybrid model each one holds
   /// every recurrent layer's state, so the default is deliberately small: enough to rewind the
@@ -180,20 +210,35 @@ public final class SessionCache: @unchecked Sendable {
     lastReusedTokens = 0
     misses += 1
 
-    if let recycled = evictableSlot(matching: kvConfig) {
-      recycled.cache.reset()
-      recycled.clearCheckpoints()
-      recycled.tokens = promptTokens
-      recycled.lastUsed = Date()
-      recycled.busy = true
-      return Lease(
-        cache: recycled.cache, reused: 0, recycled: true, branched: false, slot: recycled)
+    let slot: Slot
+    let recycled: Bool
+    if let reusable = evictableSlot(matching: kvConfig) {
+      reusable.cache.reset()
+      reusable.clearCheckpoints()
+      slot = reusable
+      recycled = true
+    } else {
+      slot = Slot(tokens: promptTokens, cache: makeCache())
+      slots.append(slot)
+      recycled = false
     }
 
-    let slot = Slot(tokens: promptTokens, cache: makeCache())
+    // Nothing in memory continues this prompt; the disk tier may still hold a prefix of it.
+    var fromDisk = 0
+    if let store,
+      let entry = store.bestMatch(for: promptTokens, modelID: modelID, kvConfig: kvConfig),
+      store.load(entry, into: slot.cache)
+    {
+      fromDisk = entry.tokens.count
+      lastReusedTokens = fromDisk
+      diskHits += 1
+    }
+
+    slot.tokens = promptTokens
+    slot.lastUsed = Date()
     slot.busy = true
-    slots.append(slot)
-    return Lease(cache: slot.cache, reused: 0, recycled: false, branched: false, slot: slot)
+    return Lease(
+      cache: slot.cache, reused: fromDisk, recycled: recycled, branched: false, slot: slot)
   }
 
   public func commit(_ lease: Lease, generated: [Int]) {

@@ -15,6 +15,7 @@ public final class APIServer: @unchecked Sendable {
   public let ropeScaling: RopeScaling
   public let residency: ResidencyManager
   public let sessions: SessionCache
+  public let prefixStore: PrefixStore?
   public let budget: MemoryBudget
   public let stats = ServeStats()
 
@@ -31,6 +32,7 @@ public final class APIServer: @unchecked Sendable {
     politeness: Politeness.Level = .adaptive,
     ropeScaling: RopeScaling = .none,
     budget: MemoryBudget? = nil,
+    prefixStore: PrefixStore? = nil,
     preload: Bool = true
   ) throws {
     self.politeness = politeness
@@ -49,6 +51,10 @@ public final class APIServer: @unchecked Sendable {
         weights: MemoryBudget.weightBytes(in: directory) ?? MemoryBudget.defaultWeights)
     self.budget = budget
     self.sessions = SessionCache(capacity: budget.tier.slots)
+    self.prefixStore = prefixStore
+    // The pack's own directory names the weights it was built from, which is what an archive
+    // has to agree with before it can be read back.
+    self.sessions.setStore(prefixStore, modelID: directory.lastPathComponent)
     self.residency = ResidencyManager(options: residency)
     budget.apply()
 
@@ -65,6 +71,9 @@ public final class APIServer: @unchecked Sendable {
     self.residency.onEvict = { [weak self] in
       guard let self else { return }
       self.generationQueue.async {
+        // Archived before the pool is dropped, so the next turn of a conversation that is
+        // merely idle does not pay for a full re-prefill.
+        self.sessions.persistAll()
         self.sessions.evict()
         self.loaded = nil
         Memory.clearCache()
@@ -108,6 +117,7 @@ public final class APIServer: @unchecked Sendable {
     server = nil
     residency.stopMonitoring()
     residency.unwire()
+    sessions.persistAll()
   }
 
   private func route(_ request: HTTPRequest, _ writer: ResponseWriter, _ id: Int?) {
