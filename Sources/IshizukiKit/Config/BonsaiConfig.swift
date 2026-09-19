@@ -60,6 +60,15 @@ public struct BonsaiConfig: Codable, Sendable {
       case groupSize = "group_size"
       case mode
     }
+
+    /// `mode` is optional in a pack's overrides: mlx_lm writes only the width and group size for
+    /// a module that differs from the default, and a missing mode means the pack's own.
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      self.bits = try container.decode(Int.self, forKey: .bits)
+      self.groupSize = try container.decode(Int.self, forKey: .groupSize)
+      self.mode = try container.decodeIfPresent(String.self, forKey: .mode) ?? "affine"
+    }
   }
 
   /// MLX writes the sensitivity-guided profiles oMLX calls oQ*e as one flat object: the
@@ -188,6 +197,18 @@ public struct BonsaiConfig: Codable, Sendable {
     public var partialRotaryFactor: Float?
     public var outputGateType: String?
     public var mtpNumHiddenLayers: Int?
+
+    /// Sparse feed-forward geometry. Absent, or an expert count of zero, means every layer's
+    /// MLP is dense.
+    public var numExperts: Int?
+    public var numExpertsPerTok: Int?
+    public var moeIntermediateSize: Int?
+    public var sharedExpertIntermediateSize: Int?
+    public var normTopkProb: Bool?
+    /// Every `decoderSparseStep`-th layer is sparse; the rest are dense, as are any layer named
+    /// in `mlpOnlyLayers`.
+    public var decoderSparseStep: Int?
+    public var mlpOnlyLayers: [Int]?
     public var bosTokenId: Int?
     public var eosTokenId: Int?
 
@@ -215,6 +236,13 @@ public struct BonsaiConfig: Codable, Sendable {
       case partialRotaryFactor = "partial_rotary_factor"
       case outputGateType = "output_gate_type"
       case mtpNumHiddenLayers = "mtp_num_hidden_layers"
+      case numExperts = "num_experts"
+      case numExpertsPerTok = "num_experts_per_tok"
+      case moeIntermediateSize = "moe_intermediate_size"
+      case sharedExpertIntermediateSize = "shared_expert_intermediate_size"
+      case normTopkProb = "norm_topk_prob"
+      case decoderSparseStep = "decoder_sparse_step"
+      case mlpOnlyLayers = "mlp_only_layers"
       case bosTokenId = "bos_token_id"
       case eosTokenId = "eos_token_id"
     }
@@ -225,6 +253,18 @@ public struct BonsaiConfig: Codable, Sendable {
       }
       let interval = fullAttentionInterval ?? 4
       return (0..<numHiddenLayers).map { ($0 + 1) % interval == 0 }
+    }
+
+    /// Which layers route through experts. A checkpoint can be sparse everywhere, sparse on a
+    /// stride, or dense in named layers, so the three are resolved together rather than at each
+    /// call site.
+    public var isSparse: [Bool] {
+      guard let experts = numExperts, experts > 0 else {
+        return Array(repeating: false, count: numHiddenLayers)
+      }
+      let step = max(decoderSparseStep ?? 1, 1)
+      let dense = Set(mlpOnlyLayers ?? [])
+      return (0..<numHiddenLayers).map { !dense.contains($0) && $0 % step == 0 }
     }
 
     public var ropeDimensions: Int {
@@ -295,6 +335,19 @@ public struct BonsaiConfig: Codable, Sendable {
       text["rope_parameters"] = rope
     } else {
       text["rope_parameters"] = ["rope_theta": nested["rope_theta"] ?? 1_000_000]
+    }
+
+    // Upstream is inconsistent about which of these sits in the text tower and which sits at
+    // the top: a dense Qwen3.5 writes `attn_output_gate` beside the dimensions, the MoE writes
+    // it at the root. Reading only the nested copy silently loses the query gate, which halves
+    // the projection the attention expects and fails on a reshape far from here.
+    for key in [
+      "attn_output_gate", "full_attention_interval", "partial_rotary_factor",
+      "num_experts", "num_experts_per_tok", "moe_intermediate_size",
+      "shared_expert_intermediate_size", "norm_topk_prob", "decoder_sparse_step",
+      "mlp_only_layers", "mtp_num_hidden_layers",
+    ] where text[key] == nil {
+      if let value = o[key] { text[key] = value }
     }
 
     // A dense model leaves the delta-net geometry out entirely.
