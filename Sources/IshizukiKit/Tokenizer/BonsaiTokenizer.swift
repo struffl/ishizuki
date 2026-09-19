@@ -22,7 +22,13 @@ public final class BonsaiTokenizer: @unchecked Sendable {
   private var cache: [String: [Int]] = [:]
   private let cacheLock = NSLock()
 
-  public init(directory: URL, config: BonsaiConfig? = nil) throws {
+  /// The Qwen byte-level split, which is what a `qwen35` GGUF means by its `gpt2` model and
+  /// `qwen35` pre-tokenizer; a checkpoint that names its own overrides it.
+  static let defaultSplitPattern =
+    "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}"
+    + "| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+
+  public convenience init(directory: URL, config: BonsaiConfig? = nil) throws {
     let data = try Data(contentsOf: directory.appending(path: "tokenizer.json"))
     guard
       let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -42,45 +48,84 @@ public final class BonsaiTokenizer: @unchecked Sendable {
         vocabulary[content] = id
       }
     }
+
+    var merges: [(String, String)] = []
+    if let raw = model["merges"] as? [String] {
+      merges.reserveCapacity(raw.count)
+      for merge in raw {
+        guard let space = merge.firstIndex(of: " ") else { continue }
+        merges.append(
+          (String(merge[merge.startIndex..<space]), String(merge[merge.index(after: space)...])))
+      }
+    } else if let raw = model["merges"] as? [[String]] {
+      merges = raw.filter { $0.count == 2 }.map { ($0[0], $0[1]) }
+    }
+
+    var pattern = Self.defaultSplitPattern
+    if let pre = root["pre_tokenizer"] as? [String: Any] {
+      let candidates = (pre["pretokenizers"] as? [[String: Any]]) ?? [pre]
+      for entry in candidates where entry["type"] as? String == "Split" {
+        if let p = entry["pattern"] as? [String: Any], let regex = p["Regex"] as? String {
+          pattern = regex
+        }
+      }
+    }
+
+    try self.init(
+      vocabulary: vocabulary, addedIds: addedIds, merges: merges, pattern: pattern,
+      config: config)
+  }
+
+  /// A GGUF carries its tokenizer as metadata rather than a file: the vocabulary is an array
+  /// indexed by id, and the tokens llama.cpp marks CONTROL or USER_DEFINED are the ones a
+  /// `tokenizer.json` would have listed under `added_tokens`. They must not be reached by BPE,
+  /// only matched whole, which is what that list is for.
+  public convenience init(gguf file: GGUFFile, config: BonsaiConfig? = nil) throws {
+    guard let tokens = file["tokenizer.ggml.tokens"]?.stringArray else {
+      throw BonsaiError.unsupportedModel("the GGUF carries no tokenizer.ggml.tokens")
+    }
+    let kinds = file["tokenizer.ggml.token_type"]?.intArray ?? []
+
+    var vocabulary: [String: Int] = [:]
+    vocabulary.reserveCapacity(tokens.count)
+    var addedIds: [String: Int] = [:]
+    for (id, token) in tokens.enumerated() {
+      vocabulary[token] = id
+      let kind = id < kinds.count ? kinds[id] : 1
+      if kind == 3 || kind == 4 { addedIds[token] = id }
+    }
+
+    var merges: [(String, String)] = []
+    if let raw = file["tokenizer.ggml.merges"]?.stringArray {
+      merges.reserveCapacity(raw.count)
+      for merge in raw {
+        guard let space = merge.firstIndex(of: " ") else { continue }
+        merges.append(
+          (String(merge[merge.startIndex..<space]), String(merge[merge.index(after: space)...])))
+      }
+    }
+
+    try self.init(
+      vocabulary: vocabulary, addedIds: addedIds, merges: merges,
+      pattern: Self.defaultSplitPattern, config: config,
+      extraEOS: [file["tokenizer.ggml.eos_token_id"]?.intValue].compactMap { $0 })
+  }
+
+  private init(
+    vocabulary: [String: Int], addedIds: [String: Int], merges: [(String, String)],
+    pattern: String, config: BonsaiConfig?, extraEOS: [Int] = []
+  ) throws {
     self.vocabulary = vocabulary
     self.addedTokenIds = addedIds
     self.reverseVocabulary = Dictionary(
       vocabulary.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
 
     var ranks: [String: Int] = [:]
-    if let merges = model["merges"] as? [String] {
-      ranks.reserveCapacity(merges.count)
-      for (rank, merge) in merges.enumerated() {
-        guard let space = merge.firstIndex(of: " ") else { continue }
-        let left = String(merge[merge.startIndex..<space])
-        let right = String(merge[merge.index(after: space)...])
-        ranks[left + "\u{0}" + right] = rank
-      }
-    } else if let merges = model["merges"] as? [[String]] {
-      for (rank, pair) in merges.enumerated() where pair.count == 2 {
-        ranks[pair[0] + "\u{0}" + pair[1]] = rank
-      }
+    ranks.reserveCapacity(merges.count)
+    for (rank, pair) in merges.enumerated() {
+      ranks[pair.0 + "\u{0}" + pair.1] = rank
     }
     self.mergeRanks = ranks
-
-    var pattern =
-      "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}"
-      + "| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
-    if let pre = root["pre_tokenizer"] as? [String: Any] {
-      let candidates: [[String: Any]]
-      if let sequence = pre["pretokenizers"] as? [[String: Any]] {
-        candidates = sequence
-      } else {
-        candidates = [pre]
-      }
-      for entry in candidates where entry["type"] as? String == "Split" {
-        if let p = entry["pattern"] as? [String: Any],
-          let regex = p["Regex"] as? String
-        {
-          pattern = regex
-        }
-      }
-    }
     self.splitPattern = try NSRegularExpression(pattern: pattern)
 
     if addedIds.isEmpty {
@@ -102,6 +147,7 @@ public final class BonsaiTokenizer: @unchecked Sendable {
     if let id = addedIds["<|im_end|>"] { eos.insert(id) }
     if let id = addedIds["<|endoftext|>"] { eos.insert(id) }
     if let id = config?.textConfig.eosTokenId { eos.insert(id) }
+    for id in extraEOS { eos.insert(id) }
     self.eosTokenIds = eos
 
     self.imageTokenId = config?.imageTokenId ?? addedIds["<|image_pad|>"]
