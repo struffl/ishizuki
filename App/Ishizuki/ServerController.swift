@@ -58,7 +58,7 @@ final class ServerController {
   }
 
   func start() {
-    guard case .stopped = phase else { return }
+    guard !phase.isBusy, !phase.isRunning else { return }
     guard let entry = activeEntry else {
       phase = .failed("No model installed yet.")
       return
@@ -122,8 +122,12 @@ final class ServerController {
   func activate(_ id: String) {
     settings.activeModelID = id
     guard phase.isRunning, let server else { return }
-    Task.detached {
-      try? server.activate(id)
+    Task.detached { [weak self] in
+      do {
+        try server.activate(id)
+      } catch {
+        await MainActor.run { self?.append("switch to \(id) failed: \(error)") }
+      }
     }
   }
 

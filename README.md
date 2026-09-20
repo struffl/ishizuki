@@ -19,6 +19,7 @@ Requires Apple Silicon and macOS 15+.
 - [Run](#run)
 - [Serve](#serve)
   - [launchd](#launchd)
+- [App](#app) — the menu bar server
 - [Benchmarks](#benchmarks)
 - [Context](#context)
   - [macOS wired ceiling](#macos-wired-ceiling)
@@ -202,6 +203,23 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/studio.ishizuki.server.p
 ```
 
 Uses `--lazy-load`: the port listens but no weights are resident until a request arrives.
+
+## App
+
+A menu bar app runs the same server in its own process — no CLI, no subprocess. The bonsai in
+the status bar drops down what is loaded, the rate, and what memory is held; the window behind
+it prints the terminal dashboard field for field, and manages packs.
+
+```bash
+just app-run          # build and launch (needs xcodegen: brew install xcodegen)
+just app-store        # archive and export a Mac App Store package
+```
+
+It is sandboxed, so it reads only its own container and folders you hand it. Point it at
+`~/Library/Application Support/Ishizuki/models` or a HuggingFace cache from the Models tab and
+nothing is copied — the packs are read where they sit.
+
+Needs macOS 26.
 
 ## Benchmarks
 
