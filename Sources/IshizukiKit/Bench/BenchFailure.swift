@@ -11,7 +11,3 @@ public struct BenchFailure: Error, CustomStringConvertible {
 
   public var description: String { reason }
 }
-
-func padded(_ text: String, _ width: Int) -> String {
-  text.count >= width ? text : text + String(repeating: " ", count: width - text.count)
-}

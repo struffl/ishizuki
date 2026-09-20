@@ -10,12 +10,14 @@ struct ToolsView: View {
   @Bindable var controller: ServerController
   @Bindable var runner: JobRunner
   @Bindable var quantize: QuantizeController
+  @Bindable var bench: BenchController
 
   var body: some View {
     ScrollView {
       GlassEffectContainer(spacing: 12) {
         VStack(alignment: .leading, spacing: 18) {
           ConsoleView(runner: runner)
+          benchSection
           quantizeSection
           CacheSection(controller: controller)
         }
@@ -24,6 +26,49 @@ struct ToolsView: View {
     }
     .scrollContentBackground(.hidden)
     .task { quantize.rescan(roots: controller.library.searchRoots()) }
+  }
+
+  @ViewBuilder private var benchSection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Measure")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .textCase(.uppercase)
+
+      GlassCard {
+        VStack(alignment: .leading, spacing: 10) {
+          Picker("Check", selection: $bench.kind) {
+            ForEach(BenchKind.allCases) { kind in
+              Text(kind.title).tag(kind)
+            }
+          }
+          Text(bench.kind.summary)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+
+          if let entry = controller.activeEntry {
+            Field(label: "against") {
+              Text("\(entry.displayName)  ·  \(entry.format.rawValue)")
+                .foregroundStyle(.secondary)
+            }
+            if bench.kind.needsGGUF, entry.format != .gguf {
+              Field(label: "") {
+                Label("select a GGUF to run this", systemImage: "exclamationmark.triangle")
+                  .foregroundStyle(.orange)
+              }
+            }
+          }
+
+          Button("Run") {
+            guard let entry = controller.activeEntry else { return }
+            bench.start(
+              on: runner, entry: entry, neuralEngine: controller.settings.neuralEngine)
+          }
+          .buttonStyle(.glassProminent)
+          .disabled(runner.isRunning || !bench.canRun(controller.activeEntry))
+        }
+      }
+    }
   }
 
   @ViewBuilder private var quantizeSection: some View {
