@@ -23,6 +23,7 @@ final class ServerSettings {
   var hot: Bool { didSet { write(hot, "hot") } }
   var activeModelID: String { didSet { write(activeModelID, "activeModelID") } }
   var startOnLaunch: Bool { didSet { write(startOnLaunch, "startOnLaunch") } }
+  var neuralEngine: Bool { didSet { write(neuralEngine, "neuralEngine") } }
 
   private let defaults = UserDefaults.standard
 
@@ -41,6 +42,7 @@ final class ServerSettings {
     hot = defaults.object(forKey: "hot") as? Bool ?? false
     activeModelID = defaults.object(forKey: "activeModelID") as? String ?? ""
     startOnLaunch = defaults.object(forKey: "startOnLaunch") as? Bool ?? false
+    neuralEngine = defaults.object(forKey: "neuralEngine") as? Bool ?? false
   }
 
   private func write(_ value: Any, _ key: String) {

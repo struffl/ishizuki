@@ -69,6 +69,10 @@ struct SettingsView: View {
         }
         Toggle("Load the pack at startup", isOn: Bindable(settings).preload)
         Toggle("Read the vision tower too", isOn: Bindable(settings).hot)
+        Toggle("Prefill on the Neural Engine", isOn: Bindable(settings).neuralEngine)
+          .help(
+            "Splits the wide projections between the GPU and the ANE, timed so both finish "
+              + "together. Only packs carrying exported slices can use it.")
       }
 
       Section("Scheduling") {

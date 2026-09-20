@@ -7,6 +7,35 @@ public enum ANEOffload: Equatable, Sendable {
   // Time both halves on this machine and split them where they finish together.
   case automatic
   case fraction(Double)
+
+  public enum Refusal: Error, CustomStringConvertible {
+    case noSlices
+    case cutElsewhere(cut: Double, wanted: Double)
+
+    public var description: String {
+      switch self {
+      case .noSlices:
+        "This pack carries no Neural Engine slices."
+      case .cutElsewhere(let cut, let wanted):
+        String(
+          format: "This pack's slices are cut at %.2f, not %.2f — re-export to change the split",
+          cut, wanted)
+      }
+    }
+  }
+
+  /// The channel split is settled when the slices are cut, so the pack decides it and this only
+  /// says whether to use them — and refuses a fraction the pack was not cut at.
+  public static func apply(_ setting: ANEOffload?, pack: URL) throws {
+    BonsaiRuntime.aneOffload = setting
+    guard let setting else { return }
+
+    guard let bank = ANEBank(pack: pack) else { throw Refusal.noSlices }
+    if case .fraction(let wanted) = setting, let cut = bank.fraction, abs(cut - wanted) > 0.02 {
+      throw Refusal.cutElsewhere(cut: cut, wanted: wanted)
+    }
+    BonsaiRuntime.aneBank = bank
+  }
 }
 
 public enum BonsaiRuntime {

@@ -98,9 +98,17 @@ final class ServerController {
     let url = entry.url
     let name = entry.id
 
+    let neural = settings.neuralEngine
+
     Task {
       do {
         try kvConfig.validate()
+        do {
+          try ANEOffload.apply(neural ? .automatic : nil, pack: url)
+        } catch {
+          // A pack without slices is a reason to serve on the GPU alone, not to refuse.
+          self.append("neural engine off: \(error)")
+        }
         let server = try await Self.build(
           url: url, name: name, kvConfig: kvConfig, level: level, maxContext: maxContext,
           contextScale: contextScale, residency: residency, prefixGB: prefixGB,
