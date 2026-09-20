@@ -102,6 +102,11 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        LabeledContent("Version") {
+          Text(Machine.version)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)

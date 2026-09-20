@@ -24,6 +24,13 @@ enum Machine {
     weightBytes + MemoryBudget.workingReserve <= workingSet
   }
 
+  static var version: String {
+    let info = Bundle.main.infoDictionary
+    let short = info?["CFBundleShortVersionString"] as? String ?? "0"
+    let build = info?["CFBundleVersion"] as? String ?? "0"
+    return "\(short) (\(build))"
+  }
+
   static var summary: String {
     "\(ReadoutFormat.gigabytes(physicalMemory)) unified · "
       + "\(ReadoutFormat.gigabytes(workingSet)) addressable · \(deviceName)"

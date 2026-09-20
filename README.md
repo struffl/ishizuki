@@ -9,17 +9,14 @@ Native macOS inference engine for **Ternary Bonsai 2 27B** on [MLX Swift](https:
 
 Uses minimal memory and offers the fastest possible speeds on Apple Silicon.
 
-Requires Apple Silicon and macOS 15+.
+Requires Apple Silicon and macOS 26.
 
 ## Contents
 
 - [Install](#install)
-- [Update](#update)
 - [Agents](#agents) — Hermes, Claude Code, Pi
-- [Run](#run)
 - [Serve](#serve)
-  - [launchd](#launchd)
-- [App](#app) — the menu bar server
+- [Tools](#tools) — quantize, measure, prune
 - [Benchmarks](#benchmarks)
 - [Context](#context)
   - [macOS wired ceiling](#macos-wired-ceiling)
@@ -31,92 +28,37 @@ Requires Apple Silicon and macOS 15+.
 
 ## Install
 
-Download `ishizuki-<version>.pkg` from [Releases](../../releases) and open it — signed and
-notarized, and it installs to your home folder (`~/.local`), so there's **no admin password**.
+Ishizuki is a menu bar app. The bonsai in the status bar drops down what is loaded, the rate,
+and the memory held; the window behind it carries the full dashboard, the model library, the
+tools and the settings.
 
-**Uninstall is one command, also without a password** (the installer's last screen shows it too):
-
-```bash
-~/.local/libexec/ishizuki/uninstall.sh
-```
-
-Add `--purge` to also delete downloaded models.
-
-Or take the loose binary, `ishizuki-<version>-macos-arm64.tar.gz` — one signed and notarized
-executable, with the Metal kernels inside it. Put it anywhere:
+From source needs Xcode 26+, [`just`](https://github.com/casey/just) and
+[`xcodegen`](https://github.com/yonaskolb/XcodeGen):
 
 ```bash
-tar -xzf ishizuki-<version>-macos-arm64.tar.gz
-./ishizuki-<version>-macos-arm64/ishizuki serve
+brew install just xcodegen
+just app-run         # build and launch
+just app-store       # archive and export a Mac App Store package
 ```
 
-From source needs Xcode 16+ and [`just`](https://github.com/casey/just) (`brew install just`):
+Requires Apple Silicon and macOS 26.
 
-```bash
-just install         # rootless build + install to ~/.local
-just package         # signed + notarized .pkg (identities from .env — see .env.example)
-just tarball         # signed + notarized single-file binary
-just dist            # both
-```
+### Models
 
-## Update
+The app is sandboxed, so it reads its own container and nothing else until you say otherwise.
+Packs land in `~/Library/Containers/studio.ishizuki.app/…/Ishizuki/models` when the app fetches
+them, and the Models tab will take any HuggingFace repo by name — `org/model`, or
+`org/model:file.gguf` to lift one quantization out of a repo carrying several.
 
-```bash
-ishizuki update
-```
-
-Replaces the executable in place, wherever ishizuki was installed from — the `.pkg`, the
-tarball, or `just install`. Models, configuration files,
-and the launchd agent are left alone, and a server that is already running keeps the code
-it started with until you restart it.
-
-Nothing is written until both checks pass: the download's sha256 matches the digest GitHub
-publishes for that asset, and the new executable carries an intact Developer ID signature
-from the same team as the binary it replaces. If either fails, or a file cannot be moved
-into place, the old files are put back.
-
-```bash
-ishizuki update --check        # report what is available, change nothing
-ishizuki update --tag v0.1.7   # install a specific release
-ishizuki update --force        # reinstall the current version
-ishizuki --version
-```
-
-`serve` and `launch` mention a newer release in their header, from a check refreshed in the
-background once a day. Set `ISHIZUKI_NO_UPDATE_CHECK=1` to turn that off.
-
-Updating writes to the install directory: a `~/.local` install needs no password, a
-system-wide one needs `sudo`. The updater looks for a release asset named
-`ishizuki-<tag>-macos-<arch>.tar.gz`, which is what `just tarball` produces.
+Packs you already have stay where they are: point the Models tab at the folder holding them and
+it reads them in place, nothing copied.
 
 ## Agents
 
-Wire a coding agent to the local model. `launch` starts the server (or attaches to one
-already running), configures the tool, and hands over the terminal.
+Point a coding agent at the local model. Start the server from the status bar; the dashboard
+header carries the two base URLs with a button to copy each.
 
-**Hermes Agent**
-
-```bash
-ishizuki launch hermes
-```
-
-**Claude Code**
-
-```bash
-ishizuki launch claude
-```
-
-**Pi**
-
-```bash
-ishizuki launch pi
-```
-
-Pass arguments through after `--`, e.g. `ishizuki launch hermes -- chat -q "hello"`.
-`ishizuki launch list` shows the tools, `--print-config` shows the changes without
-applying them.
-
-Configuring it yourself instead — Claude Code needs only environment variables:
+Claude Code needs only environment variables:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8128
@@ -167,15 +109,6 @@ Pi needs a provider in `~/.pi/agent/models.json`, then
 ```
 
 
-## Run
-
-```bash
-ishizuki generate --prompt "Explain gated delta networks."
-ishizuki generate --image photo.jpg --prompt "What is in this picture?"
-ishizuki serve --kv-bits 3.5
-```
-
-
 ## Serve
 
 One port, both API shapes. Streaming (SSE) on both.
@@ -193,33 +126,22 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8128     # Claude Code
 ```
 
 The vision tower is read off disk on the first image request rather than at startup, so a
-text-only session never pays for it. `--hot` loads it up front instead.
+text-only session never pays for it. Settings can load it up front instead.
 
-### launchd
+Settings holds the rest: the port, KV bits, how long an idle pool is held before it is freed
+and the model unloaded, the scheduling politeness, the disk budget for prefixes, whether to
+serve at launch and whether to open at login.
 
-```bash
-ishizuki install-agent --kv-bits 3.5 --evict-timeout 900
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/studio.ishizuki.server.plist
-```
+## Tools
 
-Uses `--lazy-load`: the port listens but no weights are resident until a request arrives.
+The Tools tab carries the work that is not serving:
 
-## App
-
-A menu bar app runs the same server in its own process — no CLI, no subprocess. The bonsai in
-the status bar drops down what is loaded, the rate, and what memory is held; the window behind
-it prints the terminal dashboard field for field, and manages packs.
-
-```bash
-just app-run          # build and launch (needs xcodegen: brew install xcodegen)
-just app-store        # archive and export a Mac App Store package
-```
-
-It is sandboxed, so it reads only its own container and folders you hand it. Point it at
-`~/Library/Application Support/Ishizuki/models` or a HuggingFace cache from the Models tab and
-nothing is copied — the packs are read where they sit.
-
-Needs macOS 26.
+- **Measure** — the kernel and batch checks, and the KV, context, prefill and speculative
+  sweeps, run against the selected pack. Output streams into a console and can be cancelled.
+- **Quantize** — build a mixed-width pack from a full-precision checkpoint. The plan names its
+  destination and estimates its size before it starts, and it can measure real activations
+  first rather than quantizing blind to them.
+- **Prefix cache** — what is archived between runs, and getting rid of it.
 
 ## Benchmarks
 
@@ -229,11 +151,7 @@ KV quantization, batching, speculative decoding, and custom-kernel numbers are i
 
 ## Context
 
-Native 262 144. Extend with `--context-scale` (YaRN by default; `--rope-scaling ntk|linear|none`):
-
-```bash
-ishizuki generate --context-scale 2 --prompt "..."     # ~512K
-```
+Native 262 144, stretched from Settings (YaRN) up to about 1M.
 
 Beyond the trained length is extrapolation and unmeasured. Only the 16 full-attention layers
 carry position; the 48 recurrent layers have no maximum.
@@ -261,12 +179,12 @@ Weights 8.6 GB + recurrent 0.15 GB; the rest is KV budget.
 | 18 GB (24 GB Mac) | ~9 GB | ~147K | ~590K |
 | 48 GB (64 GB Mac) | ~39 GB | ~639K | ~2.5M |
 
-Ceilings, not recommendations. Exceeding it degrades sharply rather than erroring.
-`--wire-gb` reserves within the ceiling; it cannot raise it.
+Ceilings, not recommendations. Exceeding it degrades sharply rather than erroring. The wired
+reservation in Settings claims memory within the ceiling; it cannot raise it.
 
 ## Politeness
 
-Default `--politeness adaptive`: utility QoS, quarter-size prefill chunks (shorter GPU
+Default `adaptive`: utility QoS, quarter-size prefill chunks (shorter GPU
 submissions), and backoff under thermal pressure or Low Power Mode. Costs ~6% prefill and ~0.5%
 decode.
 
@@ -284,13 +202,13 @@ set does not dissolve as temperature rises. Pinned in `SamplerTests`.
 
 ## Dependencies
 
-`mlx-swift`, `swift-argument-parser`, `swift-jinja` (chat templates).
+`mlx-swift`, `swift-jinja` (chat templates).
 
 ## Layout
 
 ```
 Sources/IshizukiKit/
-  Config/      pack config + validation, model fetch, self-update
+  Config/      pack config + validation, model fetch, paths
   Core/        Hadamard, packed layers, caches, KV quantization, custom kernels
   Text/        attention, gated delta net, MLP, RoPE + scaling
   Vision/      encoder, image processing, multimodal splicing
@@ -298,9 +216,10 @@ Sources/IshizukiKit/
   Generate/    model, sampler, generation loop, prefix cache
   Speculative/ drafters + verified decoding
   Serve/       HTTP, OpenAI + Anthropic APIs, residency, politeness
-Sources/ishizuki/     generate serve launch pull update install-agent
-                      verify verify-logits kv-bench spec-bench batch-check
-                      context-bench kernel-check
+  Quantize/    checkpoint scan, bit allocation, pack writing
+  Bench/       kernel, batch, KV, context, prefill, speculative harnesses
+App/Ishizuki/         the menu bar app: status item, dashboard, models,
+                      tools, settings
 ```
 
 ## License
