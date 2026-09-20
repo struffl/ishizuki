@@ -5,12 +5,12 @@ import Foundation
 import IOKit
 
 /// Device utilization, read from the accelerator's own IOKit performance statistics.
-enum GPUMeter {
+public enum GPUMeter {
   private static let interval: TimeInterval = 0.5
   private static let lock = NSLock()
   private nonisolated(unsafe) static var cached: (value: Double?, taken: Date)?
 
-  static func utilization() -> Double? {
+  public static func utilization() -> Double? {
     lock.lock()
     if let cached, -cached.taken.timeIntervalSinceNow < interval {
       defer { lock.unlock() }

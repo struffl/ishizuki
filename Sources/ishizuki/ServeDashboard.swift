@@ -15,7 +15,6 @@ final class ServeDashboard: @unchecked Sendable {
   private var logLines: [String] = []
   private var painted = 0
   private var stopped = false
-  private var peakHeld = 0
 
   private var timer: DispatchSourceTimer?
   private var signals: [DispatchSourceSignal] = []
@@ -27,7 +26,6 @@ final class ServeDashboard: @unchecked Sendable {
   }
 
   private var stats: ServeStats { server.stats }
-  private var budget: MemoryBudget { server.budget }
 
   static var isSupported: Bool { isatty(STDOUT_FILENO) == 1 && Style.depth != .none }
 
@@ -83,24 +81,24 @@ final class ServeDashboard: @unchecked Sendable {
     let recent = logLines
     lock.unlock()
 
-    let snapshot = stats.snapshot()
+    let readout = server.readout()
     let width = terminalWidth()
     var lines: [String] = []
 
-    lines.append(inFlightHeading(snapshot))
-    if snapshot.inFlight.isEmpty {
+    lines.append(inFlightHeading(readout))
+    if readout.inFlight.isEmpty {
       lines.append("  " + Style.faint("idle — waiting for requests"))
     } else {
-      for request in snapshot.inFlight.prefix(10) {
+      for request in readout.inFlight.prefix(10) {
         lines.append(requestLine(request, width: width))
       }
-      if snapshot.inFlight.count > 10 {
-        lines.append("  " + Style.faint("+\(snapshot.inFlight.count - 10) more"))
+      if readout.inFlight.count > 10 {
+        lines.append("  " + Style.faint("+\(readout.inFlight.count - 10) more"))
       }
     }
 
     lines.append("  " + Style.rule)
-    lines.append(contentsOf: sessionLines(snapshot.totals))
+    lines.append(contentsOf: sessionLines(readout))
 
     if !recent.isEmpty {
       lines.append("  " + Style.rule)
@@ -112,11 +110,11 @@ final class ServeDashboard: @unchecked Sendable {
     paint(lines)
   }
 
-  private func inFlightHeading(_ snapshot: ServeStats.Snapshot) -> String {
+  private func inFlightHeading(_ readout: ServeReadout) -> String {
     var parts: [String] = []
-    parts.append(Style.bright("\(snapshot.running)") + Style.muted(" running"))
-    if snapshot.queued > 0 {
-      parts.append(Style.warn("\(snapshot.queued)") + Style.muted(" queued"))
+    parts.append(Style.bright("\(readout.running)") + Style.muted(" running"))
+    if readout.queued > 0 {
+      parts.append(Style.warn("\(readout.queued)") + Style.muted(" queued"))
     }
     return "  " + Style.muted("in flight  ") + parts.joined(separator: Style.faint(" · "))
   }
@@ -176,7 +174,8 @@ final class ServeDashboard: @unchecked Sendable {
       + Style.faint(String(repeating: "╌", count: width - filled))
   }
 
-  private func sessionLines(_ totals: ServeStats.Totals) -> [String] {
+  private func sessionLines(_ readout: ServeReadout) -> [String] {
+    let totals = readout.totals
     var lines: [String] = []
 
     lines.append(
@@ -224,45 +223,41 @@ final class ServeDashboard: @unchecked Sendable {
             + Style.faint(
               "  \(totals.cacheHits) hit · \(totals.cacheMisses) miss · "
                 + "\(group(totals.cachedTokens)) tok reused")))
-    lines.append(contentsOf: loadLines(totals))
+    lines.append(contentsOf: loadLines(readout))
 
-    let residency = server.residency.options
-    var conditions = [Style.accent(server.politeness.rawValue)]
-    conditions.append(Style.faint("thermal \(Politeness.thermalDescription)"))
-    if Politeness.isLowPowerMode { conditions.append(Style.warn("low power")) }
-    if residency.idleSeconds > 0 {
-      conditions.append(Style.faint("pool freed at \(Int(residency.idleSeconds))s idle"))
+    let state = readout.state
+    var conditions = [Style.accent(state.politeness.rawValue)]
+    conditions.append(Style.faint("thermal \(state.thermal)"))
+    if state.lowPower { conditions.append(Style.warn("low power")) }
+    if state.idleSeconds > 0 {
+      conditions.append(Style.faint("pool freed at \(Int(state.idleSeconds))s idle"))
     }
-    if residency.evictSeconds > 0 {
-      conditions.append(Style.faint("unload at \(Int(residency.evictSeconds))s idle"))
+    if state.evictSeconds > 0 {
+      conditions.append(Style.faint("unload at \(Int(state.evictSeconds))s idle"))
     }
-    conditions.append(Style.faint("up \(duration(totals.uptime))"))
+    conditions.append(Style.faint("up \(duration(state.uptime))"))
     lines.append("  " + Style.field("state", conditions.joined(separator: Style.faint(" · "))))
 
     return lines
   }
 
-  private func loadLines(_ totals: ServeStats.Totals) -> [String] {
-    let memory = Memory.snapshot()
-    let weights = budget.weightBytes
-    let held = max(weights, memory.activeMemory) + memory.cacheMemory
-    let ceiling = max(budget.ceiling, 1)
-    let tier = budget.tier
-    peakHeld = max(peakHeld, held, max(weights, memory.peakMemory))
+  private func loadLines(_ readout: ServeReadout) -> [String] {
+    let load = readout.load
+    let context = readout.context
 
     var lines: [String] = []
     lines.append(
       "  "
         + Style.field(
           "memory",
-          gauge(Double(held) / Double(ceiling))
-            + " " + Style.bright(pad(percent(Double(held) / Double(ceiling)), 4, right: false))
-            + " " + Style.faint("\(gigabytes(held)) / \(gigabytes(ceiling))")
+          gauge(load.fraction)
+            + " " + Style.bright(pad(percent(load.fraction), 4, right: false))
+            + " " + Style.faint("\(gigabytes(load.held)) / \(gigabytes(load.ceiling))")
             + Style.faint(
-              "   weights \(gigabytes(weights))"
-                + " · peak \(gigabytes(peakHeld))")))
+              "   weights \(gigabytes(load.weights))"
+                + " · peak \(gigabytes(load.peak))")))
 
-    if let usage = GPUMeter.utilization() {
+    if let usage = load.gpu {
       lines.append(
         "  "
           + Style.field(
@@ -276,48 +271,44 @@ final class ServeDashboard: @unchecked Sendable {
       "  "
         + Style.field(
           "budget",
-          Style.accent(budget.describe())
-            + Style.faint(" · \(gigabytes(budget.headroom)) spare")))
+          Style.accent(readout.budgetSummary)
+            + Style.faint(" · \(gigabytes(readout.headroom)) spare")))
     lines.append(
       "  "
         + Style.field(
           "context",
-          Style.accent(MemoryBudget.tokens(totals.peakContextTokens) + " peak")
+          Style.accent(MemoryBudget.tokens(context.peakTokens) + " peak")
             + Style.faint(
-              " · \(MemoryBudget.tokens(tier.contextTokens)) reserved"
-                + " · \(MemoryBudget.tokens(budget.maxContextTokens)) ceiling"
-                + " · \(compact(server.sessions.cachedBytes)) kv held")))
+              " · \(MemoryBudget.tokens(context.reservedTokens)) reserved"
+                + " · \(MemoryBudget.tokens(context.ceilingTokens)) ceiling"
+                + " · \(compact(context.kvHeldBytes)) kv held")))
 
-    let sessions = server.sessions
-    let lookups = sessions.hits + sessions.misses
-    if lookups > 0 || server.prefixStore != nil {
+    if let prefix = readout.prefix {
       // What the prefix cache is holding, against what it is allowed to hold, in each tier it
       // uses. A hit rate with no denominator says nothing about whether it has room to work.
       var occupancy: [String] = []
-      let ramLimit = sessions.byteLimitBytes
       occupancy.append(
-        ramLimit > 0
-          ? "\(compact(sessions.cachedBytes)) / \(compact(ramLimit)) ram"
-          : "\(compact(sessions.cachedBytes)) ram")
-      if let store = server.prefixStore {
-        occupancy.append(
-          "\(compact(store.totalBytes)) / \(compact(store.byteLimit)) disk")
+        prefix.ramLimit > 0
+          ? "\(compact(prefix.ramBytes)) / \(compact(prefix.ramLimit)) ram"
+          : "\(compact(prefix.ramBytes)) ram")
+      if let bytes = prefix.diskBytes, let limit = prefix.diskLimit {
+        occupancy.append("\(compact(bytes)) / \(compact(limit)) disk")
       }
 
       var headline = Style.accent(occupancy.joined(separator: Style.faint(" · ")))
-      if lookups > 0 {
+      if prefix.lookups > 0 {
         headline =
-          Style.accent(percent(Double(sessions.hits) / Double(lookups)) + " hit")
+          Style.accent(percent(prefix.hitRate) + " hit")
           + Style.faint(" · ") + headline
       }
       lines.append("  " + Style.field("prefix", headline))
 
       var detail: [String] = []
-      if lookups > 0 { detail.append("\(sessions.hits) of \(lookups) reused") }
-      if sessions.branches > 0 { detail.append("\(sessions.branches) branched") }
-      if sessions.diskHits > 0 { detail.append("\(sessions.diskHits) from disk") }
-      if sessions.evictions > 0 { detail.append("\(sessions.evictions) evicted") }
-      detail.append("\(sessions.slotCount) slot\(sessions.slotCount == 1 ? "" : "s")")
+      if prefix.lookups > 0 { detail.append("\(prefix.hits) of \(prefix.lookups) reused") }
+      if prefix.branches > 0 { detail.append("\(prefix.branches) branched") }
+      if prefix.diskHits > 0 { detail.append("\(prefix.diskHits) from disk") }
+      if prefix.evictions > 0 { detail.append("\(prefix.evictions) evicted") }
+      detail.append("\(prefix.slots) slot\(prefix.slots == 1 ? "" : "s")")
       lines.append("  " + Style.field("", Style.faint(detail.joined(separator: " · "))))
     }
 
@@ -378,6 +369,11 @@ func clip(_ line: String, to width: Int) -> String {
     let character = line[index]
     if character == "\u{1B}" {
       var end = line.index(after: index)
+      // `[` is itself in the final-byte range, so the CSI introducer has to be stepped over
+      // before the terminator search, or style bytes count against the visible width.
+      if end < line.endIndex, line[end] == "[" {
+        end = line.index(after: end)
+      }
       while end < line.endIndex, !("@"..."~").contains(line[end]) {
         end = line.index(after: end)
       }

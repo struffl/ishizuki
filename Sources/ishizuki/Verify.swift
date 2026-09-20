@@ -77,29 +77,19 @@ struct Verify: ParsableCommand {
   }
 }
 
-let modelsDirectory = applicationSupportDirectory.appending(path: "Ishizuki/models")
+let modelsDirectory = IshizukiPaths.models
 
-let defaultRepo = "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit"
+let defaultRepo = IshizukiPaths.defaultRepo
 
-let defaultModelPath = modelsDirectory.appending(path: "Ternary-Bonsai-2-27B-mlx-2bit").path
-let defaultServedName = "ternary-bonsai-2-27b"
+let defaultModelPath = IshizukiPaths.defaultModelPath
+let defaultServedName = IshizukiPaths.defaultServedName
 
 func resolvedModelPath(_ model: String, repo: String) -> String {
-  guard model == defaultModelPath, repo != defaultRepo else { return model }
-  return modelsDirectory.appending(path: (repo as NSString).lastPathComponent).path
+  IshizukiPaths.resolvedModelPath(model, repo: repo)
 }
 
-/// Everywhere a loadable pack might be sitting, in the order a duplicate should be resolved:
-/// what ishizuki manages itself first, then what HuggingFace's own tooling has pulled.
-let modelSearchRoots: [URL] = [
-  modelsDirectory,
-  URL(filePath: NSHomeDirectory()).appending(path: ".cache/huggingface/hub"),
-]
+let modelSearchRoots = IshizukiPaths.searchRoots()
 
-/// Where cached prefixes are archived between runs.
-let prefixCacheDirectory =
-  applicationSupportDirectory.appending(path: "Ishizuki/cache/prefixes")
+let prefixCacheDirectory = IshizukiPaths.prefixCache
 
-let applicationSupportDirectory =
-  FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-  ?? URL(filePath: NSHomeDirectory()).appending(path: "Library/Application Support")
+let applicationSupportDirectory = IshizukiPaths.applicationSupport

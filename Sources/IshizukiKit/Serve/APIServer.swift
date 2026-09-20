@@ -35,6 +35,9 @@ public final class APIServer: @unchecked Sendable {
   private var server: HTTPServer?
   public var log: (@Sendable (String) -> Void)?
 
+  /// The high-water mark a readout reports, kept here so every reader sees the same peak.
+  var peakHeld = 0
+
   public init(
     directory: URL, modelName: String = "ternary-bonsai-2-27b",
     thinking: Bool = true, samplingOptions: SamplingOptions = SamplingOptions(),
