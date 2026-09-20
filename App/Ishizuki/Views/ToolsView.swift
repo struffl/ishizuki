@@ -17,6 +17,7 @@ struct ToolsView: View {
         VStack(alignment: .leading, spacing: 18) {
           ConsoleView(runner: runner)
           quantizeSection
+          CacheSection(controller: controller)
         }
         .padding(16)
       }

@@ -29,6 +29,7 @@ final class ServerController {
   let library = ModelLibrary()
 
   private var server: APIServer?
+  private var idleStore: PrefixStore?
   private var ticker: Task<Void, Never>?
   private let logLimit = 200
 
@@ -49,6 +50,18 @@ final class ServerController {
   }
 
   var baseURL: String { "http://127.0.0.1:\(settings.port)" }
+
+  /// The running server's store when there is one, so archives are never deleted out from
+  /// under the instance holding them.
+  var prefixStore: PrefixStore {
+    if let store = server?.prefixStore { return store }
+    if let idle = idleStore { return idle }
+    let store = PrefixStore(
+      directory: IshizukiPaths.prefixCache,
+      byteLimit: Int(settings.prefixCacheGB * 1_073_741_824))
+    idleStore = store
+    return store
+  }
 
   func rescan() {
     catalog = ModelCatalog.discover(in: library.searchRoots())

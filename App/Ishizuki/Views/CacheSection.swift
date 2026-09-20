@@ -1,0 +1,89 @@
+// SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// The prefixes kept between runs: what is archived, and getting rid of it.
+
+import IshizukiKit
+import SwiftUI
+
+struct CacheSection: View {
+  @Bindable var controller: ServerController
+  @State private var entries: [PrefixStore.Entry] = []
+  @State private var totalBytes = 0
+  @State private var confirmingClear = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Prefix cache")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .textCase(.uppercase)
+
+      GlassCard {
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 8) {
+            Text(
+              entries.isEmpty
+                ? "Nothing archived yet."
+                : "\(entries.count) archived · \(ReadoutFormat.bytes(totalBytes)) on disk"
+            )
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+            Spacer()
+            Button("Reload") { reload() }
+              .buttonStyle(.glass)
+              .controlSize(.small)
+            Button("Clear All") { confirmingClear = true }
+              .buttonStyle(.glass)
+              .controlSize(.small)
+              .disabled(entries.isEmpty)
+          }
+
+          ForEach(entries.prefix(12), id: \.id) { entry in
+            HStack(spacing: 10) {
+              Text(MemoryBudget.tokens(entry.tokens.count) + " tok")
+                .frame(width: 80, alignment: .leading)
+              Text(ReadoutFormat.bytes(entry.byteCount))
+                .foregroundStyle(.secondary)
+                .frame(width: 70, alignment: .leading)
+              Text(entry.lastUsed.formatted(date: .abbreviated, time: .shortened))
+                .foregroundStyle(.tertiary)
+              Spacer()
+              Button {
+                _ = controller.prefixStore.remove(entry.id)
+                reload()
+              } label: {
+                Image(systemName: "trash")
+              }
+              .buttonStyle(.borderless)
+              .controlSize(.small)
+            }
+            .font(.system(size: 10, design: .monospaced))
+          }
+
+          if entries.count > 12 {
+            Text("+\(entries.count - 12) more")
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.tertiary)
+          }
+        }
+      }
+    }
+    .task { reload() }
+    .alert("Clear every archived prefix?", isPresented: $confirmingClear) {
+      Button("Clear", role: .destructive) {
+        controller.prefixStore.removeAll()
+        reload()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("\(ReadoutFormat.bytes(totalBytes)) will be freed. Sessions re-prefill instead.")
+    }
+  }
+
+  private func reload() {
+    let store = controller.prefixStore
+    entries = store.entries().sorted { $0.lastUsed > $1.lastUsed }
+    totalBytes = store.totalBytes
+  }
+}
