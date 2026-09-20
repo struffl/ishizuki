@@ -105,6 +105,23 @@ uninstall:
       echo "uninstalled (models kept)"
     fi
 
+# regenerate the Xcode project for the menu bar app from App/project.yml
+app-project:
+    cd App && xcodegen generate
+
+# build the menu bar app (Debug) into App/.build
+app: app-project
+    cd App && xcodebuild -project Ishizuki.xcodeproj -scheme Ishizuki -configuration Debug \
+      -derivedDataPath .build -skipPackagePluginValidation -skipMacroValidation build
+
+# build and launch the menu bar app
+app-run: app
+    open App/.build/Build/Products/Debug/Ishizuki.app
+
+# archive and export a Mac App Store upload (needs Apple Distribution + installer identities)
+app-store: app-project
+    ./Scripts/app-store.sh {{ version }}
+
 # build a signed, notarized, stapled .pkg (needs identities from .env)
 package: release
     ./Scripts/package.sh {{ version }}

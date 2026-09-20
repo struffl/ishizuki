@@ -64,6 +64,40 @@ public struct ServeReadout: Sendable {
   public var queued: Int { inFlight.filter { $0.phase == .queued }.count }
 }
 
+/// How the readout's numbers are spelled, so a window and a terminal word them the same.
+public enum ReadoutFormat {
+  public static func gigabytes(_ bytes: Int) -> String {
+    String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+  }
+
+  public static func compact(_ bytes: Int) -> String {
+    bytes < 1_073_741_824
+      ? String(format: "%.0f MB", Double(bytes) / 1_048_576)
+      : gigabytes(bytes)
+  }
+
+  public static func group(_ value: Int) -> String {
+    let digits = Array(String(value))
+    var out = ""
+    for (index, digit) in digits.enumerated() {
+      if index > 0, (digits.count - index) % 3 == 0 { out += " " }
+      out.append(digit)
+    }
+    return out
+  }
+
+  public static func percent(_ fraction: Double) -> String {
+    String(format: "%.0f%%", min(max(fraction, 0), 1) * 100)
+  }
+
+  public static func duration(_ seconds: Double) -> String {
+    let total = Int(seconds)
+    if total < 60 { return "\(total)s" }
+    if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+    return "\(total / 3600)h \((total % 3600) / 60)m"
+  }
+}
+
 extension APIServer {
   /// Everything the dashboard reports, gathered once so the terminal and the app cannot drift.
   public func readout() -> ServeReadout {

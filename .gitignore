@@ -1,6 +1,8 @@
 .build/
 .swiftpm/
 *.xcodeproj
+App/Ishizuki/Info.plist
+App/Ishizuki/Ishizuki.entitlements
 .DS_Store
 assets/ishizuki.icns
 ishizuki-*.pkg

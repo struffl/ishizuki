@@ -315,9 +315,7 @@ final class ServeDashboard: @unchecked Sendable {
     return lines
   }
 
-  private func percent(_ fraction: Double) -> String {
-    String(format: "%.0f%%", min(max(fraction, 0), 1) * 100)
-  }
+  private func percent(_ fraction: Double) -> String { ReadoutFormat.percent(fraction) }
 
   private func gauge(_ fraction: Double, width: Int = 14) -> String {
     let clamped = min(max(fraction, 0), 1)
@@ -403,29 +401,7 @@ private func truncate(_ text: String, to width: Int) -> String {
   return String(text.prefix(width - 1)) + "…"
 }
 
-private func group(_ value: Int) -> String {
-  let digits = Array(String(value))
-  var out = ""
-  for (index, digit) in digits.enumerated() {
-    if index > 0, (digits.count - index) % 3 == 0 { out += " " }
-    out.append(digit)
-  }
-  return out
-}
-
-private func gigabytes(_ bytes: Int) -> String {
-  String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-}
-
-private func compact(_ bytes: Int) -> String {
-  bytes < 1_073_741_824
-    ? String(format: "%.0f MB", Double(bytes) / 1_048_576)
-    : gigabytes(bytes)
-}
-
-private func duration(_ seconds: Double) -> String {
-  let total = Int(seconds)
-  if total < 60 { return "\(total)s" }
-  if total < 3600 { return "\(total / 60)m \(total % 60)s" }
-  return "\(total / 3600)h \((total % 3600) / 60)m"
-}
+private func group(_ value: Int) -> String { ReadoutFormat.group(value) }
+private func gigabytes(_ bytes: Int) -> String { ReadoutFormat.gigabytes(bytes) }
+private func compact(_ bytes: Int) -> String { ReadoutFormat.compact(bytes) }
+private func duration(_ seconds: Double) -> String { ReadoutFormat.duration(seconds) }

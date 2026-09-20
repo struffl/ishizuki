@@ -12,6 +12,25 @@ public enum ModelDownloader {
     let sha256: String
   }
 
+  /// Where a fetch has got to, reported often enough to drive a progress bar.
+  public struct Progress: Sendable {
+    public var file: String
+    public var fileIndex: Int
+    public var fileCount: Int
+    public var fileBytes: Int
+    public var fileTotal: Int
+    public var completedBytes: Int
+    public var totalBytes: Int
+
+    public var fraction: Double {
+      totalBytes > 0 ? min(max(Double(completedBytes) / Double(totalBytes), 0), 1) : 0
+    }
+  }
+
+  public struct Cancelled: Error {
+    public init() {}
+  }
+
   static let essentials = [
     "config.json", "model.safetensors", "tokenizer.json", "chat_template.jinja",
   ]
@@ -29,7 +48,9 @@ public enum ModelDownloader {
     token explicitToken: String? = nil,
     verify: Bool = false,
     only: [String] = [],
-    log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+    log: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
+    progress: (@Sendable (Progress) -> Void)? = nil,
+    isCancelled: (@Sendable () -> Bool)? = nil
   ) throws {
     let token = resolveToken(explicitToken)
 
@@ -68,10 +89,27 @@ public enum ModelDownloader {
     let total = missing.reduce(0) { $0 + $1.entry.size }
     log("model: fetching \(missing.count) file(s), \(humanBytes(total)), from \(repo)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    for (name, entry) in missing {
+
+    var done = 0
+    let count = missing.count
+    for (index, (name, entry)) in missing.enumerated() {
+      if isCancelled?() == true { throw Cancelled() }
+      let completedBefore = done
+      let size = entry.size
+      let report = progress.map { emit in
+        { @Sendable (written: Int) in
+          emit(
+            Progress(
+              file: name, fileIndex: index, fileCount: count,
+              fileBytes: written, fileTotal: size,
+              completedBytes: completedBefore + written, totalBytes: total))
+        }
+      }
       try fetch(
         name: name, saveAs: destination(for: name, only: only), entry: entry, into: directory,
-        repo: repo, revision: revision, token: token, verify: verify)
+        repo: repo, revision: revision, token: token, verify: verify,
+        report: report, isCancelled: isCancelled)
+      done += entry.size
     }
     log("model: ready at \(directory.path)")
   }
@@ -138,7 +176,8 @@ public enum ModelDownloader {
 
   private static func fetch(
     name: String, saveAs: String, entry: Entry, into directory: URL, repo: String,
-    revision: String, token: String?, verify: Bool
+    revision: String, token: String?, verify: Bool,
+    report: (@Sendable (Int) -> Void)?, isCancelled: (@Sendable () -> Bool)?
   ) throws {
     let dst = directory.appending(path: saveAs)
     let part = directory.appending(path: saveAs + ".part")
@@ -155,11 +194,13 @@ public enum ModelDownloader {
     if offset < entry.size {
       let url = fileURL(repo, revision, name)
       var attempt = download(
-        url: url, part: part, offset: offset, total: entry.size, token: token, label: name)
+        url: url, part: part, offset: offset, total: entry.size, token: token, label: name,
+        report: report, isCancelled: isCancelled)
       if attempt.status == 416, offset > 0 {
         try? FileManager.default.removeItem(at: part)
         attempt = download(
-          url: url, part: part, offset: 0, total: entry.size, token: token, label: name)
+          url: url, part: part, offset: 0, total: entry.size, token: token, label: name,
+          report: report, isCancelled: isCancelled)
       }
       if let error = attempt.error { throw error }
     }
@@ -178,13 +219,20 @@ public enum ModelDownloader {
   }
 
   private static func download(
-    url: URL, part: URL, offset: Int, total: Int, token: String?, label: String
+    url: URL, part: URL, offset: Int, total: Int, token: String?, label: String,
+    report: (@Sendable (Int) -> Void)?, isCancelled: (@Sendable () -> Bool)?
   ) -> (error: Error?, status: Int) {
     var request = URLRequest(url: url)
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
 
-    let stream = FileStream(part: part, offset: offset, total: total, label: label)
+    let stream = FileStream(
+      part: part, offset: offset, total: total, label: label,
+      report: report ?? { written in
+        FileHandle.standardError.write(
+          Data("\r  \(label)  \(humanBytes(written)) / \(humanBytes(total))   ".utf8))
+      },
+      isCancelled: isCancelled)
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = 120
     let session = URLSession(configuration: config, delegate: stream, delegateQueue: nil)
@@ -249,15 +297,22 @@ private final class FileStream: NSObject, URLSessionDataDelegate, @unchecked Sen
   private let offset: Int
   private let total: Int
   private let label: String
+  private let report: @Sendable (Int) -> Void
+  private let isCancelled: (@Sendable () -> Bool)?
   private var handle: FileHandle?
   private var written = 0
   private var lastReport = Date.distantPast
 
-  init(part: URL, offset: Int, total: Int, label: String) {
+  init(
+    part: URL, offset: Int, total: Int, label: String,
+    report: @escaping @Sendable (Int) -> Void, isCancelled: (@Sendable () -> Bool)?
+  ) {
     self.part = part
     self.offset = offset
     self.total = total
     self.label = label
+    self.report = report
+    self.isCancelled = isCancelled
   }
 
   func urlSession(
@@ -293,6 +348,11 @@ private final class FileStream: NSObject, URLSessionDataDelegate, @unchecked Sen
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    if isCancelled?() == true {
+      error = ModelDownloader.Cancelled()
+      dataTask.cancel()
+      return
+    }
     do {
       try handle?.write(contentsOf: data)
     } catch {
@@ -301,8 +361,8 @@ private final class FileStream: NSObject, URLSessionDataDelegate, @unchecked Sen
       return
     }
     written += data.count
-    if Date().timeIntervalSince(lastReport) > 0.5 {
-      report()
+    if Date().timeIntervalSince(lastReport) > 0.2 {
+      report(written)
       lastReport = Date()
     }
   }
@@ -310,16 +370,7 @@ private final class FileStream: NSObject, URLSessionDataDelegate, @unchecked Sen
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     if let error, self.error == nil { self.error = error }
     try? handle?.close()
-    if self.error == nil {
-      report()
-      FileHandle.standardError.write(Data("\n".utf8))
-    }
+    if self.error == nil { report(written) }
     done.signal()
-  }
-
-  private func report() {
-    let percent = total > 0 ? Int(Double(written) / Double(total) * 100) : 0
-    let line = "\r  \(label)  \(humanBytes(written)) / \(humanBytes(total))  \(percent)%   "
-    FileHandle.standardError.write(Data(line.utf8))
   }
 }
