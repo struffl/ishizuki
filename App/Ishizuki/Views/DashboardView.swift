@@ -7,9 +7,11 @@ import IshizukiKit
 import SwiftUI
 
 struct DashboardView: View {
-  enum Tab: String { case server, models, settings }
+  enum Tab: String { case server, models, tools, settings }
 
   @Bindable var controller: ServerController
+  @State private var runner = JobRunner()
+  @State private var quantize = QuantizeController()
   @State private var tab: Tab
 
   init(controller: ServerController) {
@@ -25,6 +27,9 @@ struct DashboardView: View {
       ModelsView(controller: controller)
         .tabItem { Label("Models", systemImage: "shippingbox") }
         .tag(Tab.models)
+      ToolsView(controller: controller, runner: runner, quantize: quantize)
+        .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+        .tag(Tab.tools)
       SettingsView(controller: controller)
         .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         .tag(Tab.settings)

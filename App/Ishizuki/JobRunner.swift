@@ -6,6 +6,31 @@
 import Foundation
 import Observation
 
+/// A value a progress callback can carry across the threads MLX runs its work on.
+final class Mutex<Value>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Value
+
+  init(_ value: Value) {
+    self.value = value
+  }
+
+  var current: Value {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  @discardableResult
+  func swap(_ next: Value) -> Value {
+    lock.lock()
+    defer { lock.unlock() }
+    let previous = value
+    value = next
+    return previous
+  }
+}
+
 /// The handle the work writes through. It runs off the actor, so the flag and the sink are
 /// both lock-guarded rather than isolated.
 final class JobLog: @unchecked Sendable {

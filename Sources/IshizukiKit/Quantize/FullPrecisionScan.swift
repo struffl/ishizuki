@@ -2,22 +2,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
-import IshizukiKit
 
 /// Finds checkpoints worth quantizing: the full-precision ones.
 ///
 /// The model catalog deliberately lists only what can be served, and an unquantized checkpoint
 /// cannot be, so this looks for the opposite — a config with no quantization block and weights
 /// beside it.
-enum FullPrecisionScan {
-  struct Candidate {
-    let name: String
-    let directory: URL
-    let byteCount: Int
-    let dtype: String
+public enum FullPrecisionScan {
+  public struct Candidate: Sendable {
+    public let name: String
+    public let directory: URL
+    public let byteCount: Int
+    public let dtype: String
   }
 
-  static func run(in roots: [URL]) -> [Candidate] {
+  public static func run(in roots: [URL]) -> [Candidate] {
     var found: [String: Candidate] = [:]
     for root in roots {
       for directory in candidates(under: root) {
@@ -50,7 +49,7 @@ enum FullPrecisionScan {
   }
 
   /// A path the user named directly, described the same way a discovered one is.
-  static func describe(_ directory: URL) -> Candidate {
+  public static func describe(_ directory: URL) -> Candidate {
     inspect(directory)
       ?? Candidate(
         name: name(for: directory), directory: directory,

@@ -70,6 +70,15 @@ public enum ReadoutFormat {
     String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
   }
 
+  /// Down to kilobytes, for the sizes a pack's parts come in.
+  public static func bytes(_ count: Int) -> String {
+    let gb = Double(count) / 1_073_741_824
+    if gb >= 1 { return String(format: "%.1f GB", gb) }
+    let mb = Double(count) / 1_048_576
+    if mb >= 1 { return String(format: "%.0f MB", mb) }
+    return String(format: "%.0f KB", Double(count) / 1024)
+  }
+
   public static func compact(_ bytes: Int) -> String {
     bytes < 1_073_741_824
       ? String(format: "%.0f MB", Double(bytes) / 1_048_576)
