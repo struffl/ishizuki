@@ -61,6 +61,12 @@ struct ModelsView: View {
             }
           }
 
+          section("This Mac") {
+            Text(Machine.summary)
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.secondary)
+          }
+
           section("Folders") {
           ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
             FolderRow(url: root, removable: false, library: library)
@@ -168,6 +174,13 @@ private struct CuratedRow: View {
         Text(model.summary).font(.system(size: 10)).foregroundStyle(.secondary)
       }
       Spacer()
+      if !Machine.fits(weightBytes: model.bytes) {
+        Label("won't fit", systemImage: "exclamationmark.triangle")
+          .font(.system(size: 10))
+          .foregroundStyle(.orange)
+          .help(
+            "This pack needs more than this Mac will keep resident — \(Machine.summary).")
+      }
       Text(ReadoutFormat.gigabytes(model.bytes))
         .font(.system(size: 10, design: .monospaced))
         .foregroundStyle(.tertiary)

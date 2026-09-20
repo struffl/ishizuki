@@ -35,11 +35,6 @@ struct CuratedModel: Identifiable, Sendable {
       summary: "2-bit Hadamard-rotated. Vision, tool calling, the pack ishizuki was built for.",
       bytes: 8_600_000_000),
     CuratedModel(
-      repo: "prism-ml/Ternary-Bonsai-8B-mlx-2bit",
-      name: "Ternary Bonsai 8B",
-      summary: "The small pack — fits comfortably where the 27B will not.",
-      bytes: 2_300_000_000),
-    CuratedModel(
       repo: "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF",
       name: "Qwen3.8 27B GSQ-RCO",
       summary: "IQ2_XS with the MTP head, for speculative decoding.",
