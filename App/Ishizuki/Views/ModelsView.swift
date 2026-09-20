@@ -10,8 +10,19 @@ import SwiftUI
 struct ModelsView: View {
   @Bindable var controller: ServerController
   @State private var deleteTarget: ModelCatalog.Entry?
+  @State private var repo = ""
 
   private var library: ModelLibrary { controller.library }
+
+  /// `org/model:file.gguf` names one file out of a repo that carries every quantization of
+  /// the same model side by side.
+  private func pull() {
+    let parts = repo.split(separator: ":", maxSplits: 1)
+    guard let name = parts.first, name.contains("/") else { return }
+    let files = parts.count > 1 ? [String(parts[1])] : []
+    library.download(repo: String(name), only: files)
+    repo = ""
+  }
 
   var body: some View {
     ScrollView {
@@ -58,6 +69,28 @@ struct ModelsView: View {
           section("Available") {
             ForEach(available) { model in
               CuratedRow(model: model, library: library)
+            }
+            GlassCard {
+              VStack(alignment: .leading, spacing: 6) {
+                Text("Any HuggingFace repo")
+                  .font(.system(size: 12, weight: .medium))
+                HStack {
+                  TextField("org/model", text: $repo)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+                    .onSubmit(pull)
+                  Button("Download", action: pull)
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .disabled(!repo.contains("/"))
+                }
+                Text(
+                  "A pack is taken whole. For a GGUF repo add the file after a colon, "
+                    + "e.g. org/model:Qwen3.8-27B-IQ3_S.gguf"
+                )
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+              }
             }
           }
 
