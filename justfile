@@ -41,11 +41,11 @@ test:
 
 # format Swift in place
 fmt:
-    {{ swift_format }} format --in-place --recursive --parallel Sources Tests Package.swift
+    {{ swift_format }} format --in-place --recursive --parallel Sources Tests App/Ishizuki Package.swift
 
 # check formatting (nonzero on findings; for CI)
 fmt-check:
-    {{ swift_format }} lint --strict --recursive Sources Tests Package.swift
+    {{ swift_format }} lint --strict --recursive Sources Tests App/Ishizuki Package.swift
 
 # numerics + kernel checks
 verify: release

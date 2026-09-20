@@ -68,12 +68,12 @@ struct ModelsView: View {
           }
 
           section("Folders") {
-          ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
-            FolderRow(url: root, removable: false, library: library)
-          }
-          ForEach(library.grantedFolders, id: \.self) { root in
-            FolderRow(url: root, removable: true, library: library)
-          }
+            ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
+              FolderRow(url: root, removable: false, library: library)
+            }
+            ForEach(library.grantedFolders, id: \.self) { root in
+              FolderRow(url: root, removable: true, library: library)
+            }
             Button("Add Folder…") {
               library.grantFolder()
               controller.rescan()

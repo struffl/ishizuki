@@ -26,14 +26,16 @@ struct BonsaiGlyph: View {
 
       let trunk = NSBezierPath()
       trunk.move(to: point(9, 13.2))
-      trunk.curve(to: point(9.6, 7.6), controlPoint1: point(9.3, 11.2), controlPoint2: point(7.7, 9.6))
+      trunk.curve(
+        to: point(9.6, 7.6), controlPoint1: point(9.3, 11.2), controlPoint2: point(7.7, 9.6))
       trunk.lineWidth = unit * 1.3
       trunk.lineCapStyle = .round
       trunk.stroke()
 
       let branch = NSBezierPath()
       branch.move(to: point(9.0, 10.4))
-      branch.curve(to: point(5.6, 8.9), controlPoint1: point(7.8, 10.5), controlPoint2: point(6.4, 9.9))
+      branch.curve(
+        to: point(5.6, 8.9), controlPoint1: point(7.8, 10.5), controlPoint2: point(6.4, 9.9))
       branch.lineWidth = unit
       branch.lineCapStyle = .round
       branch.stroke()
