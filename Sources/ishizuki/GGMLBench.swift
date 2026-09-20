@@ -12,6 +12,10 @@ import MLXRandom
 /// Decode is memory bound: a token reads every weight once. The useful number is therefore not
 /// milliseconds but how much of the machine's bandwidth a kernel manages to use, which is what
 /// makes an affine pack and a GGUF comparable at all despite holding different bits.
+///
+/// Several launches go into each `eval`. One launch per `eval` measures the host's dispatch cost
+/// as much as the kernel's: it puts a floor of a few hundred microseconds under every projection,
+/// which is longer than the small ones take and would hide any change to them.
 struct GGMLBench: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "ggml-bench",
@@ -20,6 +24,19 @@ struct GGMLBench: ParsableCommand {
   @Option(name: .long, help: "A .gguf to take real weights from.") var gguf: String
   @Option(name: .long) var iterations: Int = 50
   @Option(name: .long, help: "Rows of x per launch.") var batch: Int = 1
+  @Option(name: .long, help: "Launches queued per eval.") var queue: Int = 16
+
+  /// The mean seconds one launch took, with `queue` of them in flight per `eval`.
+  private func time(_ launch: (Int) -> MLXArray) -> Double {
+    for i in 0..<queue { eval(launch(i)) }
+    var best = Double.infinity
+    for _ in 0..<3 {
+      let start = Date()
+      for _ in 0..<iterations { eval((0..<queue).map(launch)) }
+      best = min(best, -start.timeIntervalSinceNow / Double(iterations * queue))
+    }
+    return best
+  }
 
   func run() throws {
     let file = try GGUFFile(url: URL(filePath: gguf))
@@ -47,23 +64,19 @@ struct GGMLBench: ParsableCommand {
       let n = blocks.outputDim
       let bytes = blocks.bytes.size
 
-      let x = MLXRandom.normal([batch, k]).asType(.bfloat16)
-      eval(x)
+      let xs = (0..<queue).map { _ in MLXRandom.normal([batch, k]).asType(.bfloat16) }
+      eval(xs)
 
-      guard let warm = GGMLKernels.matvec(x, blocks: blocks.bytes, type: blocks.type, outputDim: n)
+      guard
+        GGMLKernels.matvec(xs[0], blocks: blocks.bytes, type: blocks.type, outputDim: n) != nil
       else {
         print("  \(path): no kernel for \(blocks.type.name)")
         continue
       }
-      eval(warm)
 
-      let start = Date()
-      for _ in 0..<iterations {
-        let y = GGMLKernels.matvec(
-          x, blocks: blocks.bytes, type: blocks.type, outputDim: n)
-        eval(y!)
+      let seconds = time { i in
+        GGMLKernels.matvec(xs[i], blocks: blocks.bytes, type: blocks.type, outputDim: n)!
       }
-      let seconds = -start.timeIntervalSinceNow / Double(iterations)
       let gbs = Double(bytes) / seconds / 1_073_741_824
 
       print(
@@ -78,21 +91,15 @@ struct GGMLBench: ParsableCommand {
     for (n, k) in [(17408, 5120), (5120, 17408)] {
       let w = MLXRandom.normal([n, k]).asType(.float32)
       let (q, scales, biases) = quantized(w, groupSize: 64, bits: 4)
-      let x = MLXRandom.normal([batch, k]).asType(.bfloat16)
-      eval(q, scales, biases!, x)
+      let xs = (0..<queue).map { _ in MLXRandom.normal([batch, k]).asType(.bfloat16) }
+      eval(q, scales, biases!, xs)
       // `size` counts elements; only the GGML blocks are bytes already.
       let bytes = q.size * 4 + scales.size * 2 + biases!.size * 2
 
-      let warm = quantizedMatmul(
-        x, q, scales: scales, biases: biases, transpose: true, groupSize: 64, bits: 4)
-      eval(warm)
-      let start = Date()
-      for _ in 0..<iterations {
-        let y = quantizedMatmul(
-          x, q, scales: scales, biases: biases, transpose: true, groupSize: 64, bits: 4)
-        eval(y)
+      let seconds = time { i in
+        quantizedMatmul(
+          xs[i], q, scales: scales, biases: biases, transpose: true, groupSize: 64, bits: 4)
       }
-      let seconds = -start.timeIntervalSinceNow / Double(iterations)
       print(
         String(
           format: "  mlx quantizedMatmul 4-bit           %5d x %-5d  %7.3f ms  %6.1f GB/s",

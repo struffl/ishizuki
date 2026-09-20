@@ -111,7 +111,7 @@ struct GGMLMatvecTests {
   @Test("the fused matvec matches expanding the weight and multiplying")
   func matchesExpandedMatmul() throws {
     let types: [GGMLType] = [
-      .q2_K, .q4_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+      .q2_K, .q4_K, .q6_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
     ]
     let k = 512
     let rows = 17
@@ -143,7 +143,7 @@ struct GGMLMatvecTests {
   func refusesWideBatch() {
     let type = GGMLType.iq2_xs
     let raw = MLXArray(blocks(type, rows: 4, k: 256, seed: 1))
-    let wide = MLXRandom.normal([8, 256])
+    let wide = MLXRandom.normal([GGMLKernels.matvecBatch.upperBound + 1, 256])
     #expect(GGMLKernels.matvec(wide, blocks: raw, type: type, outputDim: 4) == nil)
 
     let ragged = MLXRandom.normal([1, 100])
