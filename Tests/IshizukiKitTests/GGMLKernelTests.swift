@@ -139,6 +139,33 @@ struct GGMLMatvecTests {
     }
   }
 
+  /// The gather walks `(row, block)` pairs several to a thread and writes into a different
+  /// tensor's layout, so a row that lands one slot over still looks like a plausible embedding.
+  /// Expanding the whole table and indexing it is the definition it has to match.
+  @Test("gathering rows matches indexing the expanded table")
+  func gatherMatchesIndexing() throws {
+    let types: [GGMLType] = [
+      .q2_K, .q4_K, .q6_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+    ]
+    let k = 512
+    let rows = 40
+    let ids = MLXArray(
+      [0, 39, 1, 17, 17, 38, 2, 23, 9, 4, 31, 12, 30, 5, 21, 8, 11].map(Int32.init))
+
+    for type in types {
+      let raw = MLXArray(blocks(type, rows: rows, k: k, seed: 0xC0FFEE))
+      let table = try #require(
+        GGMLKernels.dequantize(blocks: raw, type: type, shape: [rows, k], dtype: .float32))
+      let actual = try #require(
+        GGMLKernels.gather(ids: ids, blocks: raw, type: type, inputDim: k, dtype: .float32))
+      let expected = table[ids]
+      eval(actual, expected)
+      #expect(actual.shape == [ids.size, k], "\(type.name) gathered the wrong shape")
+      let worst = abs(actual - expected).max().item(Float.self)
+      #expect(worst == 0, "\(type.name): gathered rows differ from the expanded table")
+    }
+  }
+
   @Test("a batch the fused path does not cover falls back")
   func refusesWideBatch() {
     let type = GGMLType.iq2_xs

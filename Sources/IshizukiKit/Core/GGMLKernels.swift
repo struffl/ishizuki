@@ -70,7 +70,8 @@ public enum GGMLKernels {
       guard blocks.size >= blockCount * type.typeSize else { return nil }
 
       let threads = 256
-      let work = blockCount * 32
+      let perThread = blockRepeat(type)
+      let work = (blockCount + perThread - 1) / perThread * 32
       let groups = (work + threads - 1) / threads
       let outputs = dequantKernel(
         [blocks] + GGMLGrids.buffers + [blockCount],
@@ -80,6 +81,8 @@ public enum GGMLKernels {
           ("block_bytes", type.typeSize),
           ("block_elems", type.blockSize),
           ("grid_bytes", gridBytes(type)),
+          ("sign_words", signWords(type)),
+          ("per_thread", perThread),
         ],
         grid: (groups * threads, 1, 1),
         threadGroup: (threads, 1, 1),
@@ -109,8 +112,10 @@ public enum GGMLKernels {
       let perRow = inputDim / type.blockSize
 
       let threads = 256
+      let perThread = blockRepeat(type)
       let work = count * perRow
-      let groups = (work * 32 + threads - 1) / threads
+      let slots = (work + perThread - 1) / perThread * 32
+      let groups = (slots + threads - 1) / threads
       let outputs = gatherKernel(
         [ids.asType(.int32).reshaped([count]), blocks] + GGMLGrids.buffers + [inputDim, work],
         template: [
@@ -119,6 +124,8 @@ public enum GGMLKernels {
           ("block_bytes", type.typeSize),
           ("block_elems", type.blockSize),
           ("grid_bytes", gridBytes(type)),
+          ("sign_words", signWords(type)),
+          ("per_thread", perThread),
         ],
         grid: (groups * threads, 1, 1),
         threadGroup: (threads, 1, 1),
@@ -137,6 +144,20 @@ public enum GGMLKernels {
   /// a real matmul overtakes the fused path somewhere in the high twenties, which leaves this
   /// well inside both limits.
   public static let matvecBatch = 1...16
+
+  /// Words of sign mask a type needs staged, or zero for one that carries no sign bits: a
+  /// nibble's four masks, sixteen nibbles, so a vector's are one aligned read.
+  static func signWords(_ type: GGMLType) -> Int {
+    switch type {
+    case .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s: 64
+    default: 0
+    }
+  }
+
+  /// Blocks one thread walks in the dequantizer and the gather. A threadgroup's staging is paid
+  /// once however many blocks it goes on to decode, so a type with a codebook wants more of
+  /// them; one without has nothing to amortise and takes them one at a time.
+  static func blockRepeat(_ type: GGMLType) -> Int { gridBytes(type) > 0 ? 8 : 1 }
 
   /// Bytes of the codebook a type indexes into, or zero for one that decodes arithmetically.
   /// The matvec stages this much into threadgroup memory before any row starts.
@@ -179,6 +200,7 @@ public enum GGMLKernels {
           ("block_elems", type.blockSize),
           ("vecs", m),
           ("grid_bytes", gridBytes(type)),
+          ("sign_words", signWords(type)),
         ],
         grid: (groups * threads, 1, 1),
         threadGroup: (threads, 1, 1),
@@ -199,7 +221,8 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "n_blocks",
         ],
         outputNames: ["y"],
-        source: macros + blockMacros + storeEach + blockTables + dequantProlog + blockChain)
+        source: macros + blockMacros + storeEach + blockTables + dequantProlog + blockChain
+          + storeEpilog)
     }()
 
     private static let gatherKernel: MLXFast.MLXFastKernel? = {
@@ -210,7 +233,8 @@ public enum GGMLKernels {
           "ksigns", "kvalues", "K", "n_work",
         ],
         outputNames: ["y"],
-        source: macros + blockMacros + storeEach + blockTables + gatherProlog + blockChain)
+        source: macros + blockMacros + storeEach + blockTables + gatherProlog + blockChain
+          + storeEpilog)
     }()
 
     private static let matvecKernel: MLXFast.MLXFastKernel? = {
@@ -235,32 +259,32 @@ public enum GGMLKernels {
     /// A simdgroup per block, and the eight outputs a lane holds written as two vectors.
     private static let dequantProlog = """
           const uint gid = thread_position_in_grid.x;
-          const uint bi = gid / 32;
           const int lane = (int)(gid % 32);
-          if (bi >= (uint)n_blocks) { return; }
+          const uint slots = ((uint)n_blocks + per_thread - 1u) / per_thread;
 
-          device const uchar *b = blocks + (ulong)bi * block_bytes;
-          device vec<OT, 4> *yp =
-              (device vec<OT, 4> *)(y + (ulong)bi * block_elems + 8 * lane);
+          for (uint bi = gid / 32; bi < (uint)n_blocks; bi += slots) {
+              device const uchar *b = blocks + (ulong)bi * block_bytes;
+              device vec<OT, 4> *yp =
+                  (device vec<OT, 4> *)(y + (ulong)bi * block_elems + 8 * lane);
 
       """
 
     /// The same, over `(row, block)` pairs rather than a tensor's blocks in order.
     private static let gatherProlog = """
           const uint gid = thread_position_in_grid.x;
-          const uint unit = gid / 32;
           const int lane = (int)(gid % 32);
-          if (unit >= (uint)n_work) { return; }
-
           const int nblk = K / block_elems;
-          const int slot = (int)unit / nblk;
-          const int blk = (int)unit % nblk;
-          const int row = ids[slot];
+          const uint slots = ((uint)n_work + per_thread - 1u) / per_thread;
 
-          device const uchar *b = w + (ulong)row * nblk * block_bytes
-                                + (ulong)blk * block_bytes;
-          device vec<OT, 4> *yp =
-              (device vec<OT, 4> *)(y + (ulong)slot * K + blk * block_elems + 8 * lane);
+          for (uint unit = gid / 32; unit < (uint)n_work; unit += slots) {
+              const int slot = (int)unit / nblk;
+              const int blk = (int)unit % nblk;
+              const int row = ids[slot];
+
+              device const uchar *b = w + (ulong)row * nblk * block_bytes
+                                    + (ulong)blk * block_bytes;
+              device vec<OT, 4> *yp =
+                  (device vec<OT, 4> *)(y + (ulong)slot * K + blk * block_elems + 8 * lane);
 
       """
 
@@ -309,8 +333,14 @@ public enum GGMLKernels {
     /// and the thirty-two lanes of a simdgroup spread over all thirty-two banks.
     private static let blockTables = """
           threadgroup int8_t tg_grid[grid_bytes > 0 ? grid_bytes : 1];
+          threadgroup uint tg_smask[sign_words > 0 ? sign_words : 1];
           threadgroup uchar tg_signs[128];
           threadgroup float tg_kv[16];
+          if (sign_words > 0) {
+              for (uint i = thread_position_in_threadgroup.x; i < (uint)sign_words; i += 256u) {
+                  tg_smask[i] = ((i >> 2) >> (i & 3) & 1u) << 31;
+              }
+          }
           if (grid_bytes > 0) {
               device const int8_t *src = (qtype == 16) ? g_iq2xxs
                                        : (qtype == 17) ? g_iq2xs
@@ -347,16 +377,23 @@ public enum GGMLKernels {
 
     /// What every format's body is written against.
     ///
-    /// A lane holds eight weights, so a group is two vector loads and one scale. A sign bit is
-    /// applied by flipping the float's own sign bit, which is what multiplying by ±1 does and
-    /// costs no multiply.
+    /// A lane holds eight weights, so a group is two vector loads and one scale.
+    ///
+    /// A sign byte is applied by flipping the floats' own sign bits, which is what multiplying
+    /// by ±1 does and costs no multiply. Deriving the four masks of a vector from the byte costs
+    /// sixteen operations, though, and these formats have no spare issue slots: thirty-two added
+    /// integer operations per group of eight cost a third of the kernel's throughput. So the
+    /// masks are read rather than derived. A vector only ever needs a nibble's worth, so the
+    /// table is sixteen entries of four — two hundred and fifty-six bytes, which is small enough
+    /// that a threadgroup stages it without noticing.
     private static let blockMacros = """
-          #define GGML_FLIP(g, sb, sh) as_type<float4>(as_type<uint4>(g) \\
-              ^ (((uint4((sb)) >> uint4((sh), (sh) + 1, (sh) + 2, (sh) + 3)) & 1u) << 31))
+          #define GGML_NIB(n) (*(threadgroup const uint4 *)(tg_smask + 4 * (n)))
 
           #define GGML_W8(sb, g0, g1) \\
-              const float4 w0 = GGML_FLIP(g0, sb, 0); \\
-              const float4 w1 = GGML_FLIP(g1, sb, 4);
+              const float4 w0 = \\
+                  as_type<float4>(as_type<uint4>(g0) ^ GGML_NIB((sb) & 0xF)); \\
+              const float4 w1 = \\
+                  as_type<float4>(as_type<uint4>(g1) ^ GGML_NIB((sb) >> 4));
 
           #define GGML_TG4(i) float4(*(threadgroup const char4 *)(tg_grid + 4 * (i)))
           #define GGML_G8(i) \\
@@ -605,6 +642,11 @@ public enum GGMLKernels {
         (i == 0 ? "if" : "} else if") + " (qtype == \(entry.0.rawValue)) {" + entry.1
       }.joined() + "}"
     }()
+
+    private static let storeEpilog = """
+
+          }
+      """
 
     private static let matvecEpilog = """
 

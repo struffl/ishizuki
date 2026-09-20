@@ -72,8 +72,8 @@ multiplied — so the speed of a GGUF is the speed of the kernel that decodes it
 
 | | Prefill | Decode |
 |---|---|---|
-| before | 62.5 tok/s | 3.5 tok/s |
-| after | **92.9 tok/s** | **8.2 tok/s** |
+| before | 61.6 tok/s | 3.4 tok/s |
+| after | **92.1 tok/s** | **9.9 tok/s** |
 
 The dequantizer's output is bit-identical to what it produced before, on every block type. The
 matvec sums a row in a different order, so it is not. Against the exact product of that same
@@ -82,21 +82,21 @@ magnitudes, neither consistently nearer than the other — six orders below the 
 activations already cost. Greedy generation tracks the old kernel's for a hundred-odd tokens
 and then parts at a near-tie, which is what a reordered sum does.
 
-Per projection, best of four runs of `ishizuki ggml-bench` (GB/s of block bytes read; MLX's
-affine 4-bit matvec on the same shapes measured 292 and 288 GB/s in both runs, so the two runs
-saw the same machine):
+Per projection, best of five alternating runs of `ishizuki ggml-bench` (GB/s of block bytes
+read; MLX's affine 4-bit matvec on the same shapes came out within 1% of itself across the two
+builds, so they saw the same machine):
 
 | Type | Shape | Before | After | |
 |---|---|---|---|---|
-| IQ1_S | 17408 × 5120 | 11.2 | 61.7 | 5.51× |
-| IQ1_M | 248320 × 5120 | 14.8 | 72.5 | 4.90× |
-| IQ2_S | 5120 × 6144 | 15.2 | 70.0 | 4.61× |
-| IQ3_S | 6144 × 5120 | 26.1 | 85.3 | 3.27× |
-| IQ2_XS | 5120 × 17408 | 33.9 | 75.6 | 2.23× |
-| Q4_K | 1024 × 5120 | 34.0 | 49.7 | 1.46× |
-| IQ3_XXS | 1024 × 5120 | 25.3 | 36.2 | 1.43× |
-| Q2_K | 5120 × 17408 | 71.6 | 94.5 | 1.32× |
-| IQ2_XXS | 5120 × 17408 | 54.3 | 69.6 | 1.28× |
+| IQ1_S | 17408 × 5120 | 10.5 | 58.5 | 5.57× |
+| IQ2_S | 5120 × 6144 | 14.3 | 78.8 | 5.51× |
+| IQ1_M | 248320 × 5120 | 13.7 | 68.4 | 4.99× |
+| IQ3_S | 6144 × 5120 | 24.4 | 95.8 | 3.93× |
+| IQ2_XS | 5120 × 17408 | 32.1 | 86.8 | 2.70× |
+| IQ2_XXS | 5120 × 17408 | 52.2 | 82.6 | 1.58× |
+| IQ3_XXS | 1024 × 5120 | 25.7 | 39.0 | 1.52× |
+| Q4_K | 1024 × 5120 | 34.7 | 50.9 | 1.47× |
+| Q2_K | 5120 × 17408 | 68.3 | 90.4 | 1.32× |
 
 What changed is who reads what. A simdgroup used to take thirty-two blocks at once, a lane
 each, which meant thirty-two reads of `x` five hundred bytes apart for what fits in four — and
@@ -106,6 +106,30 @@ for `x`, and for the block's own index and sign bytes, as single contiguous runs
 is read as vectors rather than one weight at a time, and the dequantizer shares those bodies
 rather than keeping a second, scalar copy of each one: it is 1.5–2.6× faster for the same
 bytes, which is where the prefill number comes from.
+
+The formats that carry sign bits then gave up another 1.12–1.22×, which took finding out what
+the kernel is actually short of. It is not arithmetic throughput in general — thirty-two added
+integer operations per group of eight are free for Q2_K and Q4_K — but the i-quants have no
+slack at all: the same thirty-two cost them a third of their throughput. Deriving a vector's
+four sign masks from a sign byte is sixteen of those operations, so the masks are read from a
+table instead. It only needs a nibble's worth at a time, which makes it sixteen entries of
+four: two hundred and fifty-six bytes, small enough that staging it costs nothing. An
+eight-kilobyte table indexed by the whole byte was measurably worse.
+
+What did not work, all measured: prefetching a block's bytes an iteration ahead (0.90×, the
+compiler schedules better without the loop-carried registers), unrolling the block loop by two
+or four (1.00×), several partial sums to break the accumulator chain (0.91–1.00×), threadgroup
+sizes from 128 to 1024 (flat), grids packed two bits per weight (a net loss — every grid holds
+only three distinct values, but unpacking costs more than the memory saves), grids expanded to
+floats to skip a conversion (0.89–1.02×), one sixteen-byte activation load in place of two
+eight-byte ones (0.91–0.97×), and `simd_shuffle` as a register-file gather for IQ4_XS's
+codebook (0.34× — a divergent lane index is emulated).
+
+What remains is the codebook lookup itself. A threadgroup read whose address comes from a
+device load costs about 1.25× against one whose address is known early, and nothing above
+recovers it; the way out would be to transcode the blocks at load time so the index is already
+the codes, which buys perhaps 1.25× for 10–40% more memory and would stop the bytes being
+ggml's own.
 
 Fused decode covers batch 1–16, measured against expanding the weight and calling a real
 matmul, which does not overtake it until the high twenties.
