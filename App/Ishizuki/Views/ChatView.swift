@@ -91,6 +91,9 @@ struct ChatView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
+      // The reveal trick leaves every row a `gutter` wider than it reports, so a switch that
+      // lands mid-drag needs this clip or the overflow shows past the edge instead of hiding.
+      .clipped()
       // Pulled aside and let go, the way a message list gives up its timestamps.
       .gesture(
         DragGesture(minimumDistance: 14)
@@ -107,6 +110,9 @@ struct ChatView: View {
           scroller.scrollTo(chat.isResponding ? "tail" : chat.rows.last?.id, anchor: .bottom)
         }
       }
+      // A drag left mid-gesture by switching chats should not keep shifting the next
+      // conversation's rows aside.
+      .onChange(of: chat.current.id) { reveal = 0 }
     }
   }
 
