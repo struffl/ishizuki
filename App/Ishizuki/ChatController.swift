@@ -111,6 +111,10 @@ final class ChatController {
   private var tokensAtTurnStart = 0
   private var turn: Task<Void, Never>?
   private var poller: Task<Void, Never>?
+  /// When a turn in flight last hit disk, so a crash or a forced quit loses at most a few
+  /// seconds of it rather than the whole thing.
+  private var lastCheckpoint = Date.distantPast
+  private var terminationObserver: NSObjectProtocol?
 
   init(server: ServerController) {
     self.server = server
@@ -126,6 +130,14 @@ final class ChatController {
     }
     if chats.isEmpty { chats = [current] }
     self.transcriptRows = Self.rows(from: current.transcript)
+
+    terminationObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+    ) { [weak self] _ in self?.persist() }
+  }
+
+  deinit {
+    if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
   }
 
   // MARK: - Chats
@@ -445,12 +457,31 @@ final class ChatController {
   /// polling it is enough to show thinking, tool calls and the answer as they arrive.
   private func startPolling(_ agent: CodingAgent) {
     poller?.cancel()
+    lastCheckpoint = Date()
     poller = Task { [weak self] in
       while !Task.isCancelled {
         self?.absorb(Self.rows(from: agent.transcript))
+        self?.checkpoint(agent)
         try? await Task.sleep(for: .milliseconds(50))
       }
     }
+  }
+
+  /// A turn can run for minutes; writing only once it finishes means quitting or crashing
+  /// mid-turn loses all of it. This writes the transcript as it stands every few seconds, so
+  /// the worst a forced exit costs is the last stretch of one response.
+  private func checkpoint(_ agent: CodingAgent) {
+    guard Date().timeIntervalSince(lastCheckpoint) >= 3 else { return }
+    lastCheckpoint = Date()
+    let transcript = agent.transcript
+    guard !transcript.isEmpty else { return }
+    var saved = current
+    saved.transcript = transcript
+    saved.updated = Date()
+    saved.workspace = workspace?.path
+    saved.model = server?.settings.activeModelID
+    saved.effort = effort
+    store.save(saved)
   }
 
   private func finish(_ agent: CodingAgent, seconds: Double) {
