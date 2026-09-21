@@ -27,6 +27,11 @@ struct ChatView: View {
   /// The transcript's own height, watched so growth can be told apart from a scroll: only
   /// growth should pull the view back down while pinned to the bottom.
   @State private var contentHeight: CGFloat = 0
+  /// Whether the mouse is down somewhere in the transcript. A click is a press and a release
+  /// in the same place, and the bottom-follow moves the transcript under the pointer between
+  /// the two — which is why a chevron could not be clicked while a turn was streaming. The
+  /// follow holds off until the button comes back up.
+  @State private var isPressing = false
 
   private struct BottomMarkerKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGFloat = 0
@@ -100,6 +105,9 @@ struct ChatView: View {
                 // than anything downstream believed, and that gap could paint past the window
                 // instead of hiding.
                 ZStack(alignment: .trailing) {
+                  // Equatable, and taken at its word: a poll twenty times a second replaces
+                  // the whole array, and without this every row in the transcript is built
+                  // again for the sake of the one being written into.
                   ChatRowView(
                     row: row, mono: mono, size: fontSize,
                     live: chat.isResponding && row.id == rows.last?.id,
@@ -108,6 +116,7 @@ struct ChatView: View {
                     onExpand: { chat.setExpanded($0, for: row.id) },
                     onShowFull: { chat.setShowFull($0, for: row.id) }
                   )
+                  .equatable()
                   .frame(maxWidth: .infinity, alignment: .leading)
                   .offset(x: -reveal)
                   RowCost(meta: chat.meta(for: row))
@@ -159,6 +168,14 @@ struct ChatView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { reveal = 0 }
               }
           )
+          // Tracked alongside everything else rather than in place of it: a zero-distance drag
+          // recognises on the press and ends on the release without taking the click away from
+          // whatever is under it.
+          .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+              .onChanged { _ in if !isPressing { isPressing = true } }
+              .onEnded { _ in isPressing = false }
+          )
           .onPreferenceChange(BottomMarkerKey.self) { maxY in
             let distance = maxY - outer.size.height
             isAtBottom = distance < 16
@@ -175,7 +192,10 @@ struct ChatView: View {
             // Only while a turn is in flight. A lazy row settling on its true height as it
             // scrolls in also moves this, and following that was the transcript hauling itself
             // back down under someone who was reading it.
-            guard chat.isResponding, isAtBottom else { return }
+            //
+            // And never under a pressed mouse button: whatever is being clicked stays where it
+            // was until the click has been made. The follow resumes on the next tick of growth.
+            guard chat.isResponding, isAtBottom, !isPressing else { return }
             scroller.scrollTo("bottomAnchor", anchor: .bottom)
           }
           .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
@@ -186,12 +206,17 @@ struct ChatView: View {
             // Someone reading back through a turn is left where they are, but sending something
             // always goes to it — that jump is the answer to their own click, not the view
             // wandering off on its own.
-            guard isAtBottom || rows.last?.kind == .prompt else { return }
+            guard !isPressing, isAtBottom || rows.last?.kind == .prompt else { return }
             scroller.scrollTo("bottomAnchor", anchor: .bottom)
           }
           // A drag left mid-gesture by switching chats should not keep shifting the next
-          // conversation's rows aside.
-          .onChange(of: chat.current.id) { reveal = 0 }
+          // conversation's rows aside, and the new transcript opens at its end.
+          .onChange(of: chat.current.id) {
+            reveal = 0
+            isPressing = false
+            isAtBottom = true
+            scroller.scrollTo("bottomAnchor", anchor: .bottom)
+          }
 
           if showJumpToBottom {
             jumpToBottomButton(scroller: scroller)

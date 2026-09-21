@@ -23,7 +23,7 @@ struct ChatSidebar: View {
           .contextMenu {
             Button("Rename…") { beginRenaming(saved) }
             Button("Delete", role: .destructive) { chat.delete(saved) }
-              .disabled(chat.isResponding && saved.id == chat.current.id)
+              .disabled(chat.isRunning(saved))
           }
       }
     }
@@ -37,7 +37,6 @@ struct ChatSidebar: View {
         }
         .buttonStyle(.plain)
         .font(.system(size: 11))
-        .disabled(chat.isResponding)
         Spacer()
       }
       .padding(.horizontal, 12)
@@ -73,9 +72,16 @@ struct ChatSidebar: View {
 
   @ViewBuilder private func row(_ saved: SavedChat) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(saved.title)
-        .font(.system(size: 12))
-        .lineLimit(1)
+      HStack(spacing: 5) {
+        Text(saved.title)
+          .font(.system(size: 12))
+          .lineLimit(1)
+        // A turn keeps going in the conversation it was started in, so the one still being
+        // answered says so from the list rather than only from its own transcript.
+        if chat.isRunning(saved) {
+          AnimatedDots(size: 3, tint: .generating)
+        }
+      }
       HStack(spacing: 5) {
         Text(saved.updated, format: .relative(presentation: .numeric))
           .lineLimit(1)

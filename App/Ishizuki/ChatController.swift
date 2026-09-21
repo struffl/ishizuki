@@ -122,11 +122,70 @@ final class ChatController {
   }
 
   private(set) var meta: [String: RowMeta] = [:]
-  private var rowsThisTurn: Set<String> = []
-  private var turnStart: ServeStats.Totals?
 
   func meta(for row: Row) -> RowMeta? { meta[row.id] }
-  private(set) var isResponding = false
+
+  /// A turn in flight, held beside the conversation it belongs to rather than inside the one
+  /// on screen. Switching away from a turn leaves it running; coming back picks it up where it
+  /// has got to.
+  private final class Run {
+    let chatID: UUID
+    let agent: CodingAgent
+    let started = Date()
+    var task: Task<Void, Never>?
+    var poller: Task<Void, Never>?
+    /// The rows folded so far, so a poll costs what has just arrived rather than the whole
+    /// conversation.
+    var builder = RowBuilder()
+    var rowsThisTurn: Set<String> = []
+    /// The server counts tokens for its whole life, so a turn's share is the difference.
+    var totalsAtStart: ServeStats.Totals?
+    var tokensAtStart = 0
+    /// When the turn last hit disk, so a crash or a forced quit loses at most a few seconds of
+    /// it rather than the whole thing.
+    var lastCheckpoint = Date()
+
+    init(chatID: UUID, agent: CodingAgent) {
+      self.chatID = chatID
+      self.agent = agent
+    }
+  }
+
+  /// What a conversation looked like when it was left: enough to put it back as it was, kept
+  /// only for one that is still being answered. Not observed, because nothing is drawing it —
+  /// a turn running in a conversation you have switched away from costs the window nothing.
+  private struct Parked {
+    var rows: [Row]
+    var meta: [String: RowMeta]
+    var display: [String: RowDisplay]
+    var steers: [Row]
+    var failure: String?
+  }
+
+  @ObservationIgnored private var run: Run?
+  @ObservationIgnored private var parked: [UUID: Parked] = [:]
+  /// Bumped whenever a turn starts or ends, so the window notices a run it cannot otherwise
+  /// see: the run itself is deliberately unobserved.
+  private var runToken = 0
+
+  /// Whether the conversation on screen is the one being answered. A turn in another
+  /// conversation leaves this false: that one is running, this one can be read and scrolled.
+  var isResponding: Bool {
+    _ = runToken
+    return run?.chatID == current.id
+  }
+
+  /// Whether any conversation is being answered. The pack answers one turn at a time, which is
+  /// what stops a second conversation from sending while the first is still going.
+  var isRunningTurn: Bool {
+    _ = runToken
+    return run != nil
+  }
+
+  func isRunning(_ chat: SavedChat) -> Bool {
+    _ = runToken
+    return run?.chatID == chat.id
+  }
   private(set) var failure: String?
   private(set) var meter = Meter()
   /// What the last turn put in front of the model, so the dial can show the prefill against it.
@@ -135,11 +194,21 @@ final class ChatController {
 
   var draft = ""
   var workspace: URL? {
-    didSet { agent = nil }
+    didSet {
+      // A session is bound to the folder it was made for, so changing the folder retires them
+      // — except the one answering, which keeps the folder it started in.
+      guard workspace != oldValue else { return }
+      agents = agents.filter { $0.key == run?.chatID }
+    }
   }
 
   var effort: ReasoningEffort {
-    didSet { engine?.effort = effort }
+    // Not while a turn is in flight: switching conversations sets this, and the turn already
+    // running chose its own. What is set here reaches the engine when the next turn starts.
+    didSet {
+      guard !isRunningTurn else { return }
+      engine?.effort = effort
+    }
   }
 
   /// Every conversation that has been had, newest first, and which one is open.
@@ -150,17 +219,9 @@ final class ChatController {
   private let store = ChatStore()
   private let defaults = UserDefaults.standard
   private weak var server: ServerController?
-  private var agent: CodingAgent?
-  /// The server counts tokens for its whole life, so a turn's share is the difference.
-  private var tokensAtTurnStart = 0
-  private var turn: Task<Void, Never>?
-  private var poller: Task<Void, Never>?
-  /// The rows folded so far, so a poll costs what has just arrived rather than the whole
-  /// conversation.
-  private var builder = RowBuilder()
-  /// When a turn in flight last hit disk, so a crash or a forced quit loses at most a few
-  /// seconds of it rather than the whole thing.
-  private var lastCheckpoint = Date.distantPast
+  /// One session per conversation, kept so switching away and back resumes the thread rather
+  /// than rebuilding it from the transcript every time.
+  @ObservationIgnored private var agents: [UUID: CodingAgent] = [:]
 
   init(server: ServerController) {
     self.server = server
@@ -175,17 +236,17 @@ final class ChatController {
       self.workspace = URL(filePath: path)
     }
     if chats.isEmpty { chats = [current] }
+    var builder = RowBuilder()
     self.transcriptRows = builder.rows(from: current.transcript)
 
     NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: nil
-    ) { [weak self] _ in self?.persist() }
+    ) { [weak self] _ in self?.persistAll() }
   }
 
   // MARK: - Chats
 
   func startNewChat() {
-    guard !isResponding else { return }
     persist()
     let chat = SavedChat(
       workspace: workspace?.path, model: server?.settings.activeModelID, effort: effort)
@@ -194,7 +255,7 @@ final class ChatController {
   }
 
   func select(_ chat: SavedChat) {
-    guard !isResponding, chat.id != current.id else { return }
+    guard chat.id != current.id else { return }
     persist()
     open(chat)
   }
@@ -210,7 +271,10 @@ final class ChatController {
   }
 
   func delete(_ chat: SavedChat) {
-    guard !(isResponding && chat.id == current.id) else { return }
+    // The one being answered stays: there is a turn writing into it.
+    guard !isRunning(chat) else { return }
+    agents[chat.id] = nil
+    parked[chat.id] = nil
     store.delete(chat.id)
     chats.removeAll { $0.id == chat.id }
     if let prefixes = server?.prefixStore {
@@ -223,17 +287,37 @@ final class ChatController {
   /// Opening a conversation rebuilds its session from the transcript it was saved with, so the
   /// model picks up the thread rather than being told about it.
   private func open(_ chat: SavedChat) {
+    park()
     current = chat
-    agent = nil
-    failure = nil
-    pendingSteers.removeAll()
-    meta.removeAll()
-    display.removeAll()
     effort = chat.effort
     if let path = chat.workspace { workspace = URL(filePath: path) }
-    builder = RowBuilder()
-    transcriptRows = builder.rows(from: chat.transcript)
+
+    if let state = parked.removeValue(forKey: chat.id) {
+      // A conversation that was left mid-answer comes back as it was, rows and all: its turn
+      // has been folding into that copy the whole time it was away.
+      transcriptRows = state.rows
+      meta = state.meta
+      display = state.display
+      pendingSteers = state.steers
+      failure = state.failure
+    } else {
+      var builder = RowBuilder()
+      transcriptRows = builder.rows(from: agents[chat.id]?.transcript ?? chat.transcript)
+      meta.removeAll()
+      display.removeAll()
+      pendingSteers.removeAll()
+      failure = nil
+    }
     if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
+  }
+
+  /// Set aside what the conversation being left looks like, but only while it is being
+  /// answered: anything else is cheap enough to fold again from its transcript.
+  private func park() {
+    guard run?.chatID == current.id else { return }
+    parked[current.id] = Parked(
+      rows: transcriptRows, meta: meta, display: display, steers: pendingSteers,
+      failure: failure)
   }
 
   private func update(_ id: UUID, _ change: (inout SavedChat) -> Void) {
@@ -243,26 +327,45 @@ final class ChatController {
   }
 
   /// Written after every turn, so closing the window is never a way to lose a conversation.
-  private func persist() {
-    guard let agent else { return }
+  private func persist() { persist(current.id) }
+
+  /// Both the conversation on screen and the one being answered, for the one moment that has
+  /// to catch both: the window going away.
+  private func persistAll() {
+    persist(current.id)
+    if let id = run?.chatID, id != current.id { persist(id, prompt: true) }
+  }
+
+  /// A conversation is saved from its own session, which may not be the one on screen: a turn
+  /// that finishes while another conversation is being read still has to land on disk.
+  private func persist(_ id: UUID, prompt: Bool = false) {
+    guard let agent = agents[id] else { return }
     let transcript = agent.transcript
     guard !transcript.isEmpty else { return }
-    current.transcript = transcript
-    current.updated = Date()
-    current.workspace = workspace?.path
-    current.model = server?.settings.activeModelID
-    current.effort = effort
-    if let tokens = engine?.lastPromptTokens, !tokens.isEmpty {
-      current.promptTokens = tokens
+    guard var saved = saved(id) else { return }
+    saved.transcript = transcript
+    saved.updated = Date()
+    if id == current.id {
+      saved.workspace = workspace?.path
+      saved.model = server?.settings.activeModelID
+      saved.effort = effort
     }
-    if !current.titleIsCustom, let derived = SavedChat.title(from: transcript) {
-      current.title = derived
+    // Only for the turn that just ran: the engine holds one last prompt, and it belongs to
+    // whichever conversation was being answered.
+    if prompt, let tokens = engine?.lastPromptTokens, !tokens.isEmpty {
+      saved.promptTokens = tokens
     }
-    captionTurn()
-    let saved = current
-    update(saved.id) { $0 = saved }
+    if !saved.titleIsCustom, let derived = SavedChat.title(from: transcript) {
+      saved.title = derived
+    }
+    captionTurn(for: id)
+    update(id) { $0 = saved }
     chats.sort { $0.updated > $1.updated }
     store.save(saved)
+  }
+
+  private func saved(_ id: UUID) -> SavedChat? {
+    id == current.id ? current : chats.first { $0.id == id }
   }
 
   private var engine: AgentEngine? { server?.engine }
@@ -326,12 +429,16 @@ final class ChatController {
     case loading
     case send
     case steer
+    /// Another conversation is being answered. The pack takes one turn at a time, so this one
+    /// waits rather than queueing into a busy engine.
+    case busy
     case nothingToSay
   }
 
   var submission: Submission {
     if workspace == nil { return .chooseFolder }
     if isResponding { return .steer }
+    if isRunningTurn { return .busy }
     if server?.phase.isBusy == true { return .loading }
     if engine == nil { return .load }
     if !typed.isEmpty || !pendingSteers.isEmpty { return .send }
@@ -344,13 +451,14 @@ final class ChatController {
     case .load: "Load"
     case .loading: "Loading"
     case .steer: "Steer"
+    case .busy: "Busy"
     case .send, .nothingToSay: "Send"
     }
   }
 
   var canSubmit: Bool {
     switch submission {
-    case .loading, .nothingToSay: false
+    case .loading, .busy, .nothingToSay: false
     case .steer: !typed.isEmpty
     case .chooseFolder, .load, .send: true
     }
@@ -362,7 +470,7 @@ final class ChatController {
     case .load: load()
     case .send: send()
     case .steer: steer()
-    case .loading, .nothingToSay: break
+    case .loading, .busy, .nothingToSay: break
     }
   }
 
@@ -376,6 +484,7 @@ final class ChatController {
     case .chooseFolder: "Choose a folder to work in."
     case .load: "Press Load to bring the pack up."
     case .loading: "Bringing the pack up…"
+    case .busy: "Another conversation is being answered."
     default: nil
     }
   }
@@ -426,33 +535,44 @@ final class ChatController {
     let text = (pendingSteers.map(\.text) + [typed])
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
-    guard !text.isEmpty, !isResponding, let agent = resolveAgent() else { return }
+    guard !text.isEmpty, !isRunningTurn, let agent = resolveAgent() else { return }
     draft = ""
     failure = nil
     pendingSteers.removeAll()
-    isResponding = true
-    rowsThisTurn.removeAll()
-    builder = RowBuilder()
-    turnStart = server?.readout?.totals
-    tokensAtTurnStart = turnStart?.generatedTokens ?? 0
-    startPolling(agent)
+    engine?.effort = effort
 
-    let started = Date()
-    turn = Task { [weak self] in
+    let run = Run(chatID: current.id, agent: agent)
+    run.totalsAtStart = server?.readout?.totals
+    run.tokensAtStart = run.totalsAtStart?.generatedTokens ?? 0
+    self.run = run
+    runToken += 1
+    startPolling(run)
+
+    run.task = Task { [weak self] in
       do {
         _ = try await agent.send(text)
       } catch is CancellationError {
         // Stopping a turn is an ordinary thing to do, not a failure to report.
       } catch {
-        self?.failure = error.localizedDescription
+        self?.report(error.localizedDescription, for: run.chatID)
       }
       guard let self else { return }
-      self.finish(agent, seconds: -started.timeIntervalSinceNow)
+      self.finish(run)
     }
   }
 
   func stop() {
-    turn?.cancel()
+    run?.task?.cancel()
+  }
+
+  /// A failure belongs to the conversation that earned it, not to whichever one is being read
+  /// when it lands.
+  private func report(_ message: String, for chatID: UUID) {
+    if chatID == current.id {
+      failure = message
+    } else {
+      parked[chatID]?.failure = message
+    }
   }
 
   /// Guidance for the turn after this one. Queued here rather than inside the conversation,
@@ -477,36 +597,40 @@ final class ChatController {
       send()
       return
     }
-    turn?.cancel()
+    run?.task?.cancel()
+    let chatID = current.id
     Task { [weak self] in
-      while self?.isResponding == true {
+      while self?.isRunningTurn == true {
         try? await Task.sleep(for: .milliseconds(60))
       }
-      self?.send()
+      // Only into the conversation the queue belongs to: switching away while the turn unwinds
+      // must not put it in front of a different one.
+      guard let self, self.current.id == chatID else { return }
+      self.send()
     }
   }
 
   private func resolveAgent() -> CodingAgent? {
-    if let agent { return agent }
+    if let agent = agents[current.id] { return agent }
     guard let engine, let workspace else { return nil }
     engine.effort = effort
     let made = CodingAgent(
       engine: engine,
       workspace: Workspace(host: LocalShellHost(workspace: workspace)),
       transcript: current.transcript.isEmpty ? nil : current.transcript)
-    agent = made
+    agents[current.id] = made
     return made
   }
 
   /// The transcript is read rather than mirrored: the executor fills it as the tokens land, so
   /// polling it is enough to show thinking, tool calls and the answer as they arrive.
-  private func startPolling(_ agent: CodingAgent) {
-    poller?.cancel()
-    lastCheckpoint = Date()
-    poller = Task { [weak self] in
+  private func startPolling(_ run: Run) {
+    run.poller?.cancel()
+    run.lastCheckpoint = Date()
+    run.poller = Task { [weak self] in
       while !Task.isCancelled {
-        self?.absorbTranscript(of: agent)
-        self?.checkpoint(agent)
+        self?.absorbTranscript(of: run)
+        self?.checkpoint(run)
         try? await Task.sleep(for: .milliseconds(50))
       }
     }
@@ -515,78 +639,107 @@ final class ChatController {
   /// A turn can run for minutes; writing only once it finishes means quitting or crashing
   /// mid-turn loses all of it. This writes the transcript as it stands every few seconds, so
   /// the worst a forced exit costs is the last stretch of one response.
-  private func checkpoint(_ agent: CodingAgent) {
-    guard Date().timeIntervalSince(lastCheckpoint) >= 3 else { return }
-    lastCheckpoint = Date()
-    let transcript = agent.transcript
-    guard !transcript.isEmpty else { return }
-    var saved = current
+  private func checkpoint(_ run: Run) {
+    guard Date().timeIntervalSince(run.lastCheckpoint) >= 3 else { return }
+    run.lastCheckpoint = Date()
+    let transcript = run.agent.transcript
+    guard !transcript.isEmpty, var saved = saved(run.chatID) else { return }
     saved.transcript = transcript
     saved.updated = Date()
-    saved.workspace = workspace?.path
-    saved.model = server?.settings.activeModelID
-    saved.effort = effort
+    if run.chatID == current.id {
+      saved.workspace = workspace?.path
+      saved.model = server?.settings.activeModelID
+      saved.effort = effort
+    }
     // Encoding a long transcript is not something a turn should stop for: the window is trying
     // to draw tokens while this runs.
     let directory = store.folder
     Task.detached(priority: .utility) { ChatStore.write(saved, in: directory) }
   }
 
-  private func finish(_ agent: CodingAgent, seconds: Double) {
-    poller?.cancel()
-    poller = nil
-    absorbTranscript(of: agent)
-    isResponding = false
-    recordTurnCost()
-    persist()
+  private func finish(_ run: Run) {
+    run.poller?.cancel()
+    run.poller = nil
+    absorbTranscript(of: run)
+    if self.run === run {
+      self.run = nil
+      runToken += 1
+    }
+    recordTurnCost(run)
+    persist(run.chatID, prompt: true)
 
     meter.turns += 1
-    meter.seconds += seconds
+    meter.seconds += -run.started.timeIntervalSinceNow
     if let readout = server?.readout {
-      meter.tokens += max(0, readout.totals.generatedTokens - tokensAtTurnStart)
+      meter.tokens += max(0, readout.totals.generatedTokens - run.tokensAtStart)
       lastPrompt = readout.context.peakTokens
       lastCached = readout.prefix?.hits ?? 0
     }
   }
 
-  private func absorbTranscript(of agent: CodingAgent) {
-    absorb(builder.rows(from: agent.transcript))
+  private func absorbTranscript(of run: Run) {
+    absorb(run.builder.rows(from: run.agent.transcript), for: run)
   }
 
   /// A row's clock starts the first time it is seen, which is as close to when it happened as
   /// a transcript without timestamps allows.
-  private func absorb(_ rows: [Row]) {
-    // Assigning an identical array would still be a change to everything watching it, and at
-    // twenty polls a second that is a re-render of the whole transcript for nothing.
-    guard rows != transcriptRows else { return }
-    transcriptRows = rows
-    for row in rows where meta[row.id] == nil {
-      meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
-      if isResponding { rowsThisTurn.insert(row.id) }
+  ///
+  /// Where the rows land depends on whether the turn is the one being watched: the conversation
+  /// on screen takes them through the observed properties, and one left running takes them into
+  /// its parked copy, which draws nothing until it is opened again.
+  private func absorb(_ rows: [Row], for run: Run) {
+    if run.chatID == current.id {
+      // Assigning an identical array would still be a change to everything watching it, and at
+      // twenty polls a second that is a re-render of the whole transcript for nothing.
+      guard rows != transcriptRows else { return }
+      transcriptRows = rows
+      for row in rows where meta[row.id] == nil {
+        meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
+        run.rowsThisTurn.insert(row.id)
+      }
+    } else {
+      guard var state = parked[run.chatID], rows != state.rows else { return }
+      state.rows = rows
+      for row in rows where state.meta[row.id] == nil {
+        state.meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
+        run.rowsThisTurn.insert(row.id)
+      }
+      parked[run.chatID] = state
     }
   }
 
   /// The turn's cost, split the way the engine splits it and handed to the rows it produced.
-  private func recordTurnCost() {
-    guard let totals = server?.readout?.totals, let start = turnStart else { return }
+  private func recordTurnCost(_ run: Run) {
+    guard let totals = server?.readout?.totals, let start = run.totalsAtStart else { return }
     let read = max(0, totals.prefillSeconds - start.prefillSeconds)
     let wrote = max(0, totals.decodeSeconds - start.decodeSeconds)
     let promptTokens = max(0, totals.promptTokens - start.promptTokens)
     let generated = max(0, totals.generatedTokens - start.generatedTokens)
 
-    for id in rowsThisTurn {
-      guard var record = meta[id] else { continue }
-      record.seconds = record.wasRead ? read : wrote
-      record.tokens = record.wasRead ? promptTokens : generated
-      meta[id] = record
+    withMeta(of: run.chatID) { meta in
+      for id in run.rowsThisTurn {
+        guard var record = meta[id] else { continue }
+        record.seconds = record.wasRead ? read : wrote
+        record.tokens = record.wasRead ? promptTokens : generated
+        meta[id] = record
+      }
     }
-    rowsThisTurn.removeAll()
+    run.rowsThisTurn.removeAll()
+  }
+
+  private func withMeta(of chatID: UUID, _ change: (inout [String: RowMeta]) -> Void) {
+    if chatID == current.id {
+      change(&meta)
+    } else if parked[chatID] != nil {
+      change(&parked[chatID]!.meta)
+    }
   }
 
   /// Captions are asked for once the turn has settled, so the system model is not being asked
   /// to describe a sentence that is still being written.
-  private func captionTurn() {
-    for row in transcriptRows {
+  private func captionTurn(for chatID: UUID) {
+    let rows = chatID == current.id ? transcriptRows : (parked[chatID]?.rows ?? [])
+    for row in rows {
       switch row.kind {
       case .reasoning:
         captioner.request(row.id, text: row.text, as: .thought)
@@ -596,18 +749,17 @@ final class ChatController {
         continue
       }
     }
-    guard !current.titleIsCustom else { return }
+    guard saved(chatID)?.titleIsCustom == false else { return }
     let said =
-      transcriptRows
+      rows
       .filter { if case .prompt = $0.kind { true } else { false } }
       .map(\.text)
       .joined(separator: " ")
-    let chatID = current.id
     let key = "title-\(chatID.uuidString)"
     captioner.request(key, text: said, as: .conversation) { [weak self] written in
-      guard let self, self.current.id == chatID, !self.current.titleIsCustom else { return }
+      guard let self, self.saved(chatID)?.titleIsCustom == false else { return }
       self.update(chatID) { $0.title = written }
-      self.store.save(self.current)
+      if let chat = self.saved(chatID) { self.store.save(chat) }
     }
   }
 
