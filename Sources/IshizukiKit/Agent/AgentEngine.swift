@@ -144,35 +144,37 @@ public final class AgentEngine: @unchecked Sendable {
               tools: tools.isEmpty ? nil : tools.map(\.templateValue))
             let tokens = rendered.flatMap { try? server.model().tokenizer.encode($0) } ?? []
 
-            // Measured by difference rather than by rendering the instructions on their own:
-            // a template is entitled to refuse a conversation that is nothing but a system
-            // message, and measuring a bar is never worth failing a turn over.
-            if systemCount.value == 0 {
+            // Measured by difference, and both halves of it: the instructions and the tool
+            // schemas are each the same every turn, and a bar that counted only the first
+            // called the other one the person's own tokens.
+            if systemCount.value == 0, !tokens.isEmpty {
               let withoutSystem = messages.filter { $0.role != "system" }
-              if withoutSystem.count < messages.count, !withoutSystem.isEmpty,
-                let rest = try? server.template.render(
-                  messages: withoutSystem,
-                  addGenerationPrompt: true,
-                  enableThinking: thinking,
-                  reasoningEffort: effort,
-                  tools: tools.isEmpty ? nil : tools.map(\.templateValue)),
-                let restTokens = try? server.model().tokenizer.encode(rest)
-              {
-                systemCount.set(max(0, tokens.count - restTokens.count))
+              let schema = tools.isEmpty ? nil : tools.map(\.templateValue)
+
+              func size(_ of: [ChatMessage], tools: [[String: Any]]?) -> Int? {
+                guard !of.isEmpty,
+                  let text = try? server.template.render(
+                    messages: of, addGenerationPrompt: true, enableThinking: thinking,
+                    reasoningEffort: effort, tools: tools),
+                  let encoded = try? server.model().tokenizer.encode(text)
+                else { return nil }
+                return encoded.count
               }
-            }
-            if !lastPromptTokens.isEmpty, !tokens.isEmpty {
-              var shared = 0
-              while shared < min(lastPromptTokens.count, tokens.count),
-                lastPromptTokens[shared] == tokens[shared]
-              {
-                shared += 1
+
+              let withoutTools = size(messages, tools: nil)
+              let bare = size(withoutSystem, tools: nil)
+              if let withoutTools, let bare {
+                let schemas = max(0, tokens.count - withoutTools)
+                let instructions = max(0, withoutTools - bare)
+                systemCount.set(schemas + instructions)
+                server.log?(
+                  "prompt: \(instructions) instructions + \(schemas) tool schemas "
+                    + "+ \(bare) conversation = \(tokens.count)")
+              } else if let bare {
+                systemCount.set(max(0, tokens.count - bare))
               }
-              server.log?(
-                "prefix: \(shared) of \(lastPromptTokens.count) previous tokens still agree, "
-                  + "prompt is \(tokens.count)")
+              _ = schema
             }
-            if !tokens.isEmpty { lastPromptTokens = tokens }
 
             let outcome = try server.complete(
               request,
