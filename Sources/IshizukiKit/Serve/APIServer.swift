@@ -265,7 +265,8 @@ public final class APIServer: @unchecked Sendable {
     _ request: Request,
     id: Int? = nil,
     isCancelled: (@Sendable () -> Bool)? = nil,
-    onText: ((String) -> Void)? = nil
+    onText: ((String) -> Void)? = nil,
+    onReasoning: ((String) -> Void)? = nil
   ) throws -> (
     parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool
   ) {
@@ -363,14 +364,16 @@ public final class APIServer: @unchecked Sendable {
           }
         }
       ) { fragment in
-        if let onText, let visible = filter.push(fragment), !visible.isEmpty {
-          onText(visible)
-        }
+        let piece = filter.push(fragment)
+        if let thought = piece.reasoning { onReasoning?(thought) }
+        if let visible = piece.content { onText?(visible) }
         return true
       }
     }
-    if let onText, !result.cancelled, let tail = filter.flush(), !tail.isEmpty {
-      onText(tail)
+    if !result.cancelled {
+      let tail = filter.flush()
+      if let thought = tail.reasoning { onReasoning?(thought) }
+      if let visible = tail.content { onText?(visible) }
     }
     if let lease { sessions.commit(lease, generated: result.tokens) }
     applyBudget(budget.notePoolPressure(cacheMemory: Memory.cacheMemory))
@@ -889,9 +892,17 @@ public final class APIServer: @unchecked Sendable {
   }
 }
 
+/// Splits a raw stream into the thinking and the answer, handing back both as they arrive. A
+/// guard window is held back so a tag split across two fragments is never mistaken for text.
 struct StreamFilter {
+  struct Output {
+    var reasoning: String?
+    var content: String?
+
+    var isEmpty: Bool { reasoning == nil && content == nil }
+  }
+
   private var buffer = ""
-  private var emitted = 0
   private var inThinking: Bool
   private var stopped = false
   private let guardLength = 12
@@ -900,34 +911,45 @@ struct StreamFilter {
     self.inThinking = thinking
   }
 
-  mutating func push(_ fragment: String) -> String? {
-    guard !stopped else { return nil }
+  mutating func push(_ fragment: String) -> Output {
+    guard !stopped else { return Output() }
     buffer += fragment
+    var out = Output()
 
     if inThinking {
-      guard let end = buffer.range(of: "</think>") else { return nil }
+      guard let end = buffer.range(of: "</think>") else {
+        out.reasoning = takeGuarded()
+        return out
+      }
+      let thought = String(buffer[buffer.startIndex..<end.lowerBound])
+      if !thought.isEmpty { out.reasoning = thought }
       buffer = String(buffer[end.upperBound...])
       inThinking = false
     }
+
     if let call = buffer.range(of: "<tool_call>") {
-      buffer = String(buffer[buffer.startIndex..<call.lowerBound])
+      let visible = String(buffer[buffer.startIndex..<call.lowerBound])
+      buffer = ""
       stopped = true
-      return take(all: true)
+      if !visible.isEmpty { out.content = visible }
+      return out
     }
-    return take(all: false)
+    out.content = takeGuarded()
+    return out
   }
 
-  mutating func flush() -> String? {
-    guard !stopped, !inThinking else { return nil }
-    return take(all: true)
+  mutating func flush() -> Output {
+    guard !stopped, !buffer.isEmpty else { return Output() }
+    let rest = buffer
+    buffer = ""
+    return inThinking ? Output(reasoning: rest) : Output(content: rest)
   }
 
-  private mutating func take(all: Bool) -> String? {
+  private mutating func takeGuarded() -> String? {
     let characters = Array(buffer)
-    let available = all ? characters.count : max(0, characters.count - guardLength)
-    guard available > emitted else { return nil }
-    let slice = String(characters[emitted..<available])
-    emitted = available
-    return slice
+    guard characters.count > guardLength else { return nil }
+    let cut = characters.count - guardLength
+    buffer = String(characters[cut...])
+    return String(characters[0..<cut])
   }
 }

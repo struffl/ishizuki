@@ -76,7 +76,8 @@ public final class AgentEngine: @unchecked Sendable {
   public func run(
     messages: [ChatMessage],
     tools: [ToolSchema] = [],
-    onText: (@Sendable (String) -> Void)? = nil
+    onText: (@Sendable (String) -> Void)? = nil,
+    onReasoning: (@Sendable (String) -> Void)? = nil
   ) async throws -> AgentTurn {
     let cancel = Flag()
     return try await withTaskCancellationHandler {
@@ -98,7 +99,8 @@ public final class AgentEngine: @unchecked Sendable {
             let outcome = try server.complete(
               request,
               isCancelled: { cancel.isRaised },
-              onText: onText.map { emit in { fragment in emit(fragment) } })
+              onText: onText.map { emit in { fragment in emit(fragment) } },
+              onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } })
             continuation.resume(
               returning: AgentTurn(
                 reasoning: outcome.parsed.reasoning,

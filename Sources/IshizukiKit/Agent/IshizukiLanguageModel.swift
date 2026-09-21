@@ -70,24 +70,31 @@ public struct IshizukiExecutor: LanguageModelExecutor {
       engine.maxTokens = maximum
     }
 
-    let (fragments, emit) = AsyncStream<String>.makeStream()
+    let (pieces, emit) = AsyncStream<TurnPiece>.makeStream()
     let turn = Task {
       defer { emit.finish() }
       return try await engine.run(
         messages: messages, tools: tools,
-        onText: { fragment in emit.yield(fragment) })
+        onText: { emit.yield(.content($0)) },
+        onReasoning: { emit.yield(.reasoning($0)) })
     }
 
-    for await fragment in fragments {
-      await channel.send(.response(action: .appendText(fragment, tokenCount: 0)))
+    var streamedReasoning = false
+    for await piece in pieces {
+      switch piece {
+      case .content(let text):
+        await channel.send(.response(action: .appendText(text, tokenCount: 0)))
+      case .reasoning(let text):
+        streamedReasoning = true
+        await channel.send(.reasoning(action: .appendText(text, tokenCount: 0)))
+      }
     }
 
     let outcome = try await turn.value
 
-    // The thinking is filtered out of the stream and parsed at the end, so it lands whole.
-    if let reasoning = outcome.reasoning, !reasoning.isEmpty {
-      await channel.send(
-        .reasoning(action: .appendText(reasoning, tokenCount: 0)))
+    // Only when nothing arrived live, so a stream and the final parse cannot both land.
+    if !streamedReasoning, let reasoning = outcome.reasoning, !reasoning.isEmpty {
+      await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
     }
 
     for call in outcome.toolCalls {
@@ -108,6 +115,11 @@ public struct IshizukiExecutor: LanguageModelExecutor {
             totalTokenCount: outcome.completionTokens,
             reasoningTokenCount: 0))))
   }
+}
+
+enum TurnPiece: Sendable {
+  case content(String)
+  case reasoning(String)
 }
 
 /// Turns a session's transcript into the messages the chat template renders, and its tool

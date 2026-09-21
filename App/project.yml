@@ -20,6 +20,8 @@ targets:
     dependencies:
       - package: IshizukiKit
         product: IshizukiKit
+      - package: IshizukiKit
+        product: IshizukiAgent
     info:
       path: Ishizuki/Info.plist
       properties:
@@ -33,11 +35,7 @@ targets:
     entitlements:
       path: Ishizuki/Ishizuki.entitlements
       properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.network.client: true
-        com.apple.security.network.server: true
-        com.apple.security.files.user-selected.read-write: true
-        com.apple.security.files.bookmarks.app-scope: true
+        com.apple.security.app-sandbox: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: studio.ishizuki.app
