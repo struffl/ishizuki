@@ -26,6 +26,7 @@ struct ContextDial: View {
   var body: some View {
     ZStack {
       Circle()
+        .fill(.clear)
         .glassEffect(.clear, in: .circle)
         .frame(width: 46, height: 46)
 
@@ -105,20 +106,28 @@ struct ChatReadoutBar: View {
     .padding(.vertical, 6)
   }
 
-  /// What a turn costs, which is the number a person actually waits on.
+  private var live: ServeStats.Request? {
+    guard let request = chat.inFlight, request.rate > 0 else { return nil }
+    return request
+  }
+
+  /// What a turn costs, which is the number a person actually waits on. Nothing to report
+  /// means no plate at all, rather than an empty one sitting in the corner.
   @ViewBuilder private var meters: some View {
-    HStack(spacing: 12) {
-      if chat.meter.turns > 0 {
-        reading(String(format: "%.1fs", chat.meter.averageSeconds), "per turn")
-        reading("\(chat.meter.averageTokens)", "tokens")
+    if chat.meter.turns > 0 || live != nil {
+      HStack(spacing: 12) {
+        if chat.meter.turns > 0 {
+          reading(String(format: "%.1fs", chat.meter.averageSeconds), "per turn")
+          reading("\(chat.meter.averageTokens)", "tokens")
+        }
+        if let request = live {
+          reading(
+            String(format: "%.0f/s", request.rate),
+            request.phase == .prefill ? "reading" : "writing")
+        }
       }
-      if let request = chat.inFlight, request.rate > 0 {
-        reading(
-          String(format: "%.0f/s", request.rate),
-          request.phase == .prefill ? "reading" : "writing")
-      }
+      .textPlate(radius: 9, horizontal: 9, vertical: 4)
     }
-    .textPlate(radius: 9, horizontal: 9, vertical: 4)
   }
 
   private func reading(_ value: String, _ label: String) -> some View {
