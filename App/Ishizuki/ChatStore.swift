@@ -100,6 +100,19 @@ final class ChatStore {
     try? data.write(to: url(for: chat.id), options: .atomic)
   }
 
+  /// A mid-turn checkpoint, written away from the main thread: encoding a long transcript is
+  /// not something the window should stop drawing tokens for. It carries its own encoder,
+  /// since the one above belongs to whoever is on the main thread.
+  static func write(_ chat: SavedChat, in directory: URL) {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    guard let data = try? encoder.encode(chat) else { return }
+    try? data.write(
+      to: directory.appending(path: "\(chat.id.uuidString).json"), options: .atomic)
+  }
+
+  var folder: URL { directory }
+
   func delete(_ id: UUID) {
     try? FileManager.default.removeItem(at: url(for: id))
   }

@@ -15,8 +15,8 @@ import SwiftUI
 @Observable
 final class ChatController {
   /// One row in the conversation. The transcript is the source of these, read as it fills.
-  struct Row: Identifiable {
-    enum Kind {
+  nonisolated struct Row: Identifiable, Equatable {
+    enum Kind: Equatable {
       case system
       case prompt
       case steer
@@ -111,6 +111,9 @@ final class ChatController {
   private var tokensAtTurnStart = 0
   private var turn: Task<Void, Never>?
   private var poller: Task<Void, Never>?
+  /// The rows folded so far, so a poll costs what has just arrived rather than the whole
+  /// conversation.
+  private var builder = RowBuilder()
   /// When a turn in flight last hit disk, so a crash or a forced quit loses at most a few
   /// seconds of it rather than the whole thing.
   private var lastCheckpoint = Date.distantPast
@@ -128,7 +131,7 @@ final class ChatController {
       self.workspace = URL(filePath: path)
     }
     if chats.isEmpty { chats = [current] }
-    self.transcriptRows = Self.rows(from: current.transcript)
+    self.transcriptRows = builder.rows(from: current.transcript)
 
     NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: nil
@@ -183,7 +186,8 @@ final class ChatController {
     meta.removeAll()
     effort = chat.effort
     if let path = chat.workspace { workspace = URL(filePath: path) }
-    transcriptRows = Self.rows(from: chat.transcript)
+    builder = RowBuilder()
+    transcriptRows = builder.rows(from: chat.transcript)
     if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
   }
 
@@ -383,6 +387,7 @@ final class ChatController {
     pendingSteers.removeAll()
     isResponding = true
     rowsThisTurn.removeAll()
+    builder = RowBuilder()
     turnStart = server?.readout?.totals
     tokensAtTurnStart = turnStart?.generatedTokens ?? 0
     startPolling(agent)
@@ -455,7 +460,7 @@ final class ChatController {
     lastCheckpoint = Date()
     poller = Task { [weak self] in
       while !Task.isCancelled {
-        self?.absorb(Self.rows(from: agent.transcript))
+        self?.absorbTranscript(of: agent)
         self?.checkpoint(agent)
         try? await Task.sleep(for: .milliseconds(50))
       }
@@ -476,13 +481,16 @@ final class ChatController {
     saved.workspace = workspace?.path
     saved.model = server?.settings.activeModelID
     saved.effort = effort
-    store.save(saved)
+    // Encoding a long transcript is not something a turn should stop for: the window is trying
+    // to draw tokens while this runs.
+    let directory = store.folder
+    Task.detached(priority: .utility) { ChatStore.write(saved, in: directory) }
   }
 
   private func finish(_ agent: CodingAgent, seconds: Double) {
     poller?.cancel()
     poller = nil
-    absorb(Self.rows(from: agent.transcript))
+    absorbTranscript(of: agent)
     isResponding = false
     recordTurnCost()
     persist()
@@ -496,9 +504,16 @@ final class ChatController {
     }
   }
 
+  private func absorbTranscript(of agent: CodingAgent) {
+    absorb(builder.rows(from: agent.transcript))
+  }
+
   /// A row's clock starts the first time it is seen, which is as close to when it happened as
   /// a transcript without timestamps allows.
   private func absorb(_ rows: [Row]) {
+    // Assigning an identical array would still be a change to everything watching it, and at
+    // twenty polls a second that is a re-render of the whole transcript for nothing.
+    guard rows != transcriptRows else { return }
     transcriptRows = rows
     for row in rows where meta[row.id] == nil {
       meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
@@ -558,8 +573,10 @@ final class ChatController {
   /// Read straight through, appending rather than replacing. The session is free to split a
   /// streamed reply across as many entries as it likes, so consecutive entries of the same
   /// kind are joined into one row: whatever was generated is shown, however it arrived.
-  private static func rows(from transcript: Transcript) -> [Row] {
-    var rows: [Row] = []
+  nonisolated private static func fold(
+    _ entries: some Sequence<Transcript.Entry>, into existing: [Row]
+  ) -> [Row] {
+    var rows = existing
 
     func add(_ id: String, _ kind: Row.Kind, _ text: String) {
       guard !text.isEmpty else { return }
@@ -570,7 +587,7 @@ final class ChatController {
       rows.append(Row(id: id, kind: kind, text: text))
     }
 
-    for entry in transcript {
+    for entry in entries {
       switch entry {
       case .instructions(let instructions):
         add(instructions.id, .system, text(instructions.segments))
@@ -596,7 +613,31 @@ final class ChatController {
     return rows
   }
 
-  private static func text(_ segments: [Transcript.Segment]) -> String {
+  /// A transcript only grows, and only its last entry is still being written into, so every
+  /// entry before that one can be folded once and kept. Reading the whole thing twenty times a
+  /// second was the transcript's own length being copied and re-joined on the main thread for
+  /// every fifty milliseconds of a turn, which is what made a long conversation stutter.
+  struct RowBuilder {
+    private var settled: [Row] = []
+    private var folded = 0
+
+    mutating func rows(from transcript: Transcript) -> [Row] {
+      let entries = Array(transcript)
+      if entries.count < folded {
+        settled = []
+        folded = 0
+      }
+      let stable = max(0, entries.count - 1)
+      if stable > folded {
+        settled = ChatController.fold(entries[folded..<stable], into: settled)
+        folded = stable
+      }
+      guard stable < entries.count else { return settled }
+      return ChatController.fold(entries[stable...], into: settled)
+    }
+  }
+
+  nonisolated private static func text(_ segments: [Transcript.Segment]) -> String {
     let joined =
       segments.compactMap { segment in
         switch segment {

@@ -205,7 +205,12 @@ struct ChatView: View {
 }
 
 @available(macOS 27.0, *)
-struct ChatRowView: View {
+struct ChatRowView: View, Equatable {
+  nonisolated static func == (a: ChatRowView, b: ChatRowView) -> Bool {
+    a.row == b.row && a.mono == b.mono && a.size == b.size && a.live == b.live
+      && a.caption == b.caption
+  }
+
   let row: ChatController.Row
   let mono: Font
   let size: Double
@@ -251,7 +256,7 @@ struct ChatRowView: View {
       EmptyView()
 
     case .answer:
-      MarkdownText(text: row.text, mono: mono, size: size)
+      StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
         .glassBubble()
         .padding(.leading, 10)
         .padding(.trailing, 44)
@@ -315,7 +320,7 @@ struct ChatRowView: View {
               .font(mono)
               .textSelection(.enabled)
           } else {
-            MarkdownText(text: body, mono: mono, size: size - 1)
+            StreamedMarkdown(text: body, mono: mono, size: size - 1, live: live)
           }
         }
         .foregroundStyle(.primary.opacity(0.85))

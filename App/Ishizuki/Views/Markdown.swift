@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Markdown as it arrives: prose with its inline marks, and fenced code highlighted from the
-// moment the fence opens rather than once it closes.
+// Markdown as it arrives: prose with its inline marks and a fading edge where it is still
+// being written, and fenced code shown from the moment the fence opens, highlighted once it
+// closes.
 
 import Highlightr
 import IshizukiKit
@@ -64,18 +65,47 @@ struct MarkdownText: View {
   let text: String
   let mono: Font
   let size: Double
+  /// How many characters at the very end are still arriving, drawn as a fading edge so prose
+  /// grows into the bubble rather than snapping into it. Only the last block can have one.
+  var fadeTail = 0
 
   var body: some View {
+    let blocks = MarkdownStream.blocks(in: text)
     VStack(alignment: .leading, spacing: 8) {
-      ForEach(Array(MarkdownStream.blocks(in: text).enumerated()), id: \.offset) { _, block in
+      ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+        let tail = index == blocks.count - 1 ? fadeTail : 0
         switch block {
         case .prose(let prose):
-          ProseText(text: prose, size: size)
+          ProseText(text: prose, size: size, fadeTail: tail)
         case .code(let language, let body, let closed):
           CodeBlock(language: language, code: body, closed: closed, mono: mono, size: size)
+            .transition(.opacity)
         }
       }
     }
+  }
+}
+
+/// The ramp that makes a streamed edge soft: the newest characters come in from nothing rather
+/// than appearing whole.
+@MainActor
+enum StreamFade {
+  static let window = 18
+
+  static func ramped(_ text: String, tail: Int) -> AttributedString {
+    let characters = Array(text)
+    let faded = min(tail, characters.count)
+    guard faded > 0 else { return AttributedString(text) }
+
+    var out = AttributedString(String(characters.prefix(characters.count - faded)))
+    for (step, character) in characters.suffix(faded).enumerated() {
+      var piece = AttributedString(String(character))
+      // Newest last, so the ramp runs from almost solid down to almost nothing.
+      let through = Double(step + 1) / Double(faded)
+      piece.foregroundColor = Color.primary.opacity(max(0.06, 1 - through * 0.94))
+      out += piece
+    }
+    return out
   }
 }
 
@@ -85,21 +115,37 @@ struct MarkdownText: View {
 struct ProseText: View {
   let text: String
   let size: Double
+  var fadeTail = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, raw in
-        rendered(raw)
+      ForEach(Array(fades.enumerated()), id: \.offset) { _, line in
+        rendered(line.text, fade: line.fade)
       }
     }
   }
 
-  @ViewBuilder private func rendered(_ raw: String) -> some View {
+  /// Each line with the number of its own trailing characters that fall inside the fading
+  /// edge, counted back from the end of the block.
+  private var fades: [(text: String, fade: Int)] {
+    let lines = text.components(separatedBy: "\n")
+    guard fadeTail > 0 else { return lines.map { ($0, 0) } }
+    var remaining = fadeTail
+    var out: [(String, Int)] = []
+    for line in lines.reversed() {
+      let share = min(remaining, line.count)
+      out.append((line, share))
+      remaining = max(0, remaining - line.count - 1)
+    }
+    return out.reversed().map { (text: $0.0, fade: $0.1) }
+  }
+
+  @ViewBuilder private func rendered(_ raw: String, fade: Int) -> some View {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
     if trimmed.isEmpty {
       Spacer().frame(height: 4)
     } else if let heading = heading(trimmed) {
-      Text(inline(heading.text))
+      Text(styled(heading.text, fade: fade))
         .font(.system(size: size + (heading.level == 1 ? 5 : 3), weight: .semibold))
         .padding(.top, 2)
     } else if let bullet = bullet(trimmed) {
@@ -107,14 +153,24 @@ struct ProseText: View {
         Text(bullet.marker)
           .font(.system(size: size, design: .monospaced))
           .foregroundStyle(.tertiary)
-        Text(inline(bullet.text))
+        Text(styled(bullet.text, fade: fade))
           .font(.system(size: size))
       }
       .padding(.leading, CGFloat(indent(raw)) * 12)
     } else {
-      Text(inline(raw))
+      Text(styled(raw, fade: fade))
         .font(.system(size: size))
     }
+  }
+
+  /// Marks are read from the settled part of a line; the fading edge is left plain, since half
+  /// an emphasis pair is not emphasis yet and would pop as the other half landed.
+  private func styled(_ source: String, fade: Int) -> AttributedString {
+    let faded = min(fade, source.count)
+    guard faded > 0 else { return inline(source) }
+    var out = inline(String(source.dropLast(faded)))
+    out += StreamFade.ramped(String(source.suffix(faded)), tail: faded)
+    return out
   }
 
   private func inline(_ source: String) -> AttributedString {
@@ -200,9 +256,13 @@ struct CodeBlock: View {
   }
 
   @ViewBuilder private var text: some View {
-    if let highlighted = SyntaxHighlighter.shared.highlight(
-      code, language: language, dark: scheme == .dark,
-      font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular))
+    // An open fence is being written into, and highlighting it means a run through
+    // JavaScriptCore for every token that lands, on the thread trying to draw them. It is
+    // highlighted the moment the fence closes instead.
+    if closed,
+      let highlighted = SyntaxHighlighter.shared.highlight(
+        code, language: language, dark: scheme == .dark,
+        font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular))
     {
       Text(highlighted)
     } else {
