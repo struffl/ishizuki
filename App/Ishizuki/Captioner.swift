@@ -63,7 +63,9 @@ final class Captioner {
   /// never a turn that fails. `onCaption` is for a caller that needs to know the moment it
   /// lands, rather than poll `caption(for:)`, since the request always returns before the
   /// model has answered.
-  func request(_ key: String, text: String, as subject: Subject, onCaption: ((String) -> Void)? = nil) {
+  func request(
+    _ key: String, text: String, as subject: Subject, onCaption: ((String) -> Void)? = nil
+  ) {
     guard model.isAvailable, captions[key] == nil, !inFlight.contains(key) else { return }
     let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard source.count > 40 else { return }

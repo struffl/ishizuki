@@ -537,7 +537,8 @@ final class ChatController {
       }
     }
     guard !current.titleIsCustom else { return }
-    let said = transcriptRows
+    let said =
+      transcriptRows
       .filter { if case .prompt = $0.kind { true } else { false } }
       .map(\.text)
       .joined(separator: " ")

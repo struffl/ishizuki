@@ -227,8 +227,9 @@ struct TurnStatus: View {
         ReadingBar(
           read: request.prefilled,
           total: request.prefillTotal,
-          instructions: chat.systemTokens)
-          .frame(width: 168)
+          instructions: chat.systemTokens
+        )
+        .frame(width: 168)
       }
     }
     .glassBubble()

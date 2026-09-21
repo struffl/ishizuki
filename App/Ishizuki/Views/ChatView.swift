@@ -78,9 +78,10 @@ struct ChatView: View {
               ChatRowView(
                 row: row, mono: mono, size: fontSize,
                 live: chat.isResponding && row.id == chat.rows.last?.id,
-                caption: chat.captioner.caption(for: row.id))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .offset(x: -reveal)
+                caption: chat.captioner.caption(for: row.id)
+              )
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .offset(x: -reveal)
               RowCost(meta: chat.meta(for: row))
                 .frame(width: gutter, alignment: .leading)
                 .opacity(reveal / gutter)
@@ -175,11 +176,12 @@ struct ChatView: View {
     HStack(alignment: .center, spacing: 8) {
       TextField(
         chat.isResponding ? "Steer the next turn…" : "What needs doing?",
-        text: $chat.draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .font(mono)
-        .lineLimit(1...6)
-        .onSubmit { chat.submit() }
+        text: $chat.draft, axis: .vertical
+      )
+      .textFieldStyle(.plain)
+      .font(mono)
+      .lineLimit(1...6)
+      .onSubmit { chat.submit() }
 
       if chat.isResponding {
         Button("Stop", systemImage: "stop.fill") { chat.stop() }
@@ -233,7 +235,7 @@ struct ChatRowView: View {
     case .system:
       disclosure(
         title: "instructions", icon: "list.bullet.rectangle", tint: .instructing,
-        body: row.text, monospaced: false)
+        rawBody: row.text, monospaced: false)
 
     case .prompt:
       Text(row.text)
@@ -258,25 +260,28 @@ struct ChatRowView: View {
     case .reasoning:
       disclosure(
         title: live ? "thinking…" : "thought", icon: "brain", tint: .secondary,
-        body: row.text, monospaced: false)
+        rawBody: row.text, monospaced: false)
 
     case .toolCall(let name):
       disclosure(
         title: name, icon: icon(for: name), tint: .accentSoft,
-        body: row.text, monospaced: true)
+        rawBody: Self.spelled(arguments: row.text), monospaced: true)
 
     case .toolOutput(let name):
       disclosure(
         title: "\(name) →", icon: "arrow.turn.down.right", tint: .secondary,
-        body: row.text, monospaced: true)
+        rawBody: row.text, monospaced: true)
     }
   }
 
   /// Collapsed by default: a coding turn is mostly tool traffic, and the answer is the part
   /// worth reading first.
   @ViewBuilder private func disclosure(
-    title: String, icon: String, tint: Color, body: String, monospaced: Bool
+    title: String, icon: String, tint: Color, rawBody: String, monospaced: Bool
   ) -> some View {
+    // Command output arrives with its trailing newlines, which a Text keeps as blank lines and
+    // the plate then paints around: a shell row sat on a band of empty space no other row had.
+    let body = rawBody.trimmingCharacters(in: .whitespacesAndNewlines)
     VStack(alignment: .leading, spacing: 2) {
       Button {
         expanded = !open
@@ -290,7 +295,8 @@ struct ChatRowView: View {
             Text(caption ?? summary(of: body))
               .font(
                 caption == nil
-                  ? .system(size: 10, design: .monospaced) : .system(size: 10))
+                  ? .system(size: 10, design: .monospaced) : .system(size: 10)
+              )
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
@@ -328,6 +334,35 @@ struct ChatRowView: View {
   private func summary(of body: String) -> String {
     let flat = body.replacingOccurrences(of: "\n", with: " ")
     return flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
+  }
+
+  /// The arguments as the model wrote them, spelled out rather than left as the JSON they
+  /// arrived in: a shell row should read as the command it ran. A single argument stands on
+  /// its own; several are labelled, longest last so the command keeps the first line.
+  static func spelled(arguments: String) -> String {
+    guard
+      let data = arguments.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      !object.isEmpty
+    else { return arguments }
+
+    func written(_ value: Any) -> String {
+      switch value {
+      case let string as String: string
+      case let bool as Bool: bool ? "true" : "false"
+      case let number as NSNumber: number.stringValue
+      default: String(describing: value)
+      }
+    }
+
+    if object.count == 1, let only = object.values.first {
+      return written(only)
+    }
+    return object.keys.sorted {
+      (object[$0].map { written($0).count } ?? 0) < (object[$1].map { written($0).count } ?? 0)
+    }
+    .map { "\($0): \(written(object[$0] ?? ""))" }
+    .joined(separator: "\n")
   }
 
   private func icon(for tool: String) -> String {
