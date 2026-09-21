@@ -57,6 +57,51 @@ struct SessionCacheTests {
     return lease
   }
 
+  /// The case an agentic harness lives in: a rendered prompt ends with the generation prompt,
+  /// and next turn that position holds the reply's first token instead, so the two prompts
+  /// agree on everything but the last token. A rewind point at the prompt boundary is one
+  /// token above the parting and cannot be used.
+  @Test("a prompt that parts ways one token early still reuses the prefix")
+  func partsWaysAtTheGenerationPrompt() {
+    let pool = pool()
+    let prompt = Array(1...64)
+    let reply = Array(200..<210)
+
+    let first = lease(pool, prompt)
+    run(first, to: 48)
+    pool.checkpointPrefill(first, at: 48)
+    run(first, to: prompt.count)
+    pool.checkpointPrompt(first)
+    run(first, to: prompt.count + reply.count)
+    pool.commit(first, generated: reply)
+
+    // Everything but the last token, which is where the generation prompt was.
+    var next = Array(prompt.dropLast())
+    next.append(999)
+    next += Array(300..<320)
+
+    let second = lease(pool, next)
+    #expect(second.reused == 48)
+    #expect(second.branched)
+  }
+
+  @Test("without a point below the parting there is nothing to rewind to")
+  func nothingBelowTheParting() {
+    let pool = pool()
+    let prompt = Array(1...64)
+
+    let first = lease(pool, prompt)
+    run(first, to: prompt.count)
+    pool.checkpointPrompt(first)
+    pool.commit(first, generated: [])
+
+    var next = Array(prompt.dropLast())
+    next.append(999)
+
+    let second = lease(pool, next)
+    #expect(second.reused == 0)
+  }
+
   @Test("a prompt that continues a cached one reuses all of it")
   func continuation() {
     let pool = pool()

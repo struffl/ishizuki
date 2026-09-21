@@ -341,6 +341,10 @@ public final class APIServer: @unchecked Sendable {
     var filter = StreamFilter(thinking: request.thinking)
 
     let promptLease = lease
+    // One point, at the last chunk boundary before the prompt ends: enough to be below where
+    // the next prompt parts ways, cheap enough to be a single snapshot rather than one per
+    // chunk, which would copy a growing cache all the way up the prompt.
+    var tookPrefillPoint = false
     let result = try withError { box in
       generator.generate(
         promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
@@ -351,13 +355,19 @@ public final class APIServer: @unchecked Sendable {
         onPrefilled: { [sessions = self.sessions] in
           if let promptLease { sessions.checkpointPrompt(promptLease) }
         },
-        onProgress: { [stats = self.stats] progress in
+        onProgress: { [stats = self.stats, sessions = self.sessions] progress in
           switch progress {
           case .prefill(let done, let total):
             stats.enter(id, phase: .prefill)
             stats.update(id) { record in
               record.prefilled = done
               record.prefillTotal = total
+            }
+            if !tookPrefillPoint, let promptLease, done > 0, done < total,
+              total - done <= generator.prefillChunkSize
+            {
+              tookPrefillPoint = true
+              sessions.checkpointPrefill(promptLease, at: reused + done)
             }
           case .decode(let count):
             stats.enter(id, phase: .decode)

@@ -257,16 +257,17 @@ public final class SessionCache: @unchecked Sendable {
 
   /// A turn boundary is where conversations branch — a retried, edited or forked last message
   /// shares everything before it — so that is where the rewind points are taken.
-  private func checkpoint(_ slot: Slot) {
-    guard checkpointLimit > 0, slot.tokens.count > 0,
-      slot.tokens.count == slot.cache.offset,
-      slot.checkpoints.last?.tokens != slot.tokens.count
+  private func checkpoint(_ slot: Slot, at count: Int? = nil) {
+    let position = count ?? slot.tokens.count
+    guard checkpointLimit > 0, position > 0,
+      position == slot.cache.offset,
+      slot.checkpoints.last?.tokens != position
     else { return }
 
     let state = slot.cache.snapshot()
     slot.checkpoints.append(
       Checkpoint(
-        tokens: slot.tokens.count, state: state,
+        tokens: position, state: state,
         byteCount: state.reduce(0) { $0 + $1.byteCount }))
     if slot.checkpoints.count > checkpointLimit {
       slot.checkpoints.removeFirst(slot.checkpoints.count - checkpointLimit)
@@ -281,6 +282,20 @@ public final class SessionCache: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     checkpoint(lease.slot)
+  }
+
+  /// A rewind point taken mid-prefill, strictly before the prompt ends.
+  ///
+  /// The prompt-boundary point is one token too late to be used. A rendered prompt ends with
+  /// the generation prompt — for a thinking template, the opener the model is meant to continue
+  /// from — and on the next turn that position holds the reply's first token instead. So the
+  /// two prompts agree on everything but the last token, and a rewind point at the boundary is
+  /// above the parting and cannot be restored. This one is below it, so there is always
+  /// somewhere to rewind to.
+  public func checkpointPrefill(_ lease: Lease, at count: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    checkpoint(lease.slot, at: count)
   }
 
   public func release(_ lease: Lease) {
