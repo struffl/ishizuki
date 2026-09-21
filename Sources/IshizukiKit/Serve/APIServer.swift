@@ -335,6 +335,7 @@ public final class APIServer: @unchecked Sendable {
 
     var filter = StreamFilter(thinking: request.thinking)
 
+    let promptLease = lease
     let result = try withError { box in
       generator.generate(
         promptTokens: promptTokens, options: options, maxTokens: request.maxTokens,
@@ -342,6 +343,9 @@ public final class APIServer: @unchecked Sendable {
         cachedPrefixLength: reused,
         constraint: constraint,
         isCancelled: { box.firstError != nil || isCancelled?() == true },
+        onPrefilled: { [sessions = self.sessions] in
+          if let promptLease { sessions.checkpointPrompt(promptLease) }
+        },
         onProgress: { [stats = self.stats] progress in
           switch progress {
           case .prefill(let done, let total):

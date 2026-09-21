@@ -86,7 +86,7 @@ public final class SessionCache: @unchecked Sendable {
   /// `checkpoints` is how many rewind points each slot keeps. On a hybrid model each one holds
   /// every recurrent layer's state, so the default is deliberately small: enough to rewind the
   /// last couple of turns, not enough to outweigh the cache it serves.
-  public init(capacity: Int = 1, checkpoints: Int = 2) {
+  public init(capacity: Int = 1, checkpoints: Int = 4) {
     self.slotCapacity = max(1, capacity)
     self.checkpointLimit = max(0, checkpoints)
   }
@@ -271,6 +271,16 @@ public final class SessionCache: @unchecked Sendable {
     if slot.checkpoints.count > checkpointLimit {
       slot.checkpoints.removeFirst(slot.checkpoints.count - checkpointLimit)
     }
+  }
+
+  /// Takes a rewind point at the prompt boundary, before any reply is decoded into the slot.
+  /// This is the one that matters across turns: a harness re-renders the assistant message
+  /// rather than replaying the tokens that were sampled, so the next prompt usually parts ways
+  /// right here, and without a checkpoint at this length the whole prefix is re-prefilled.
+  public func checkpointPrompt(_ lease: Lease) {
+    lock.lock()
+    defer { lock.unlock() }
+    checkpoint(lease.slot)
   }
 
   public func release(_ lease: Lease) {

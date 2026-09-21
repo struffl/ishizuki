@@ -13,7 +13,7 @@ struct SessionCacheTests {
   private let schedule = [false, false, false, true]
   private let kv = KVCacheConfig(bits: 3.5, residualWindow: 8)
 
-  private func pool(capacity: Int = 2, checkpoints: Int = 2) -> SessionCache {
+  private func pool(capacity: Int = 2, checkpoints: Int = 4) -> SessionCache {
     SessionCache(capacity: capacity, checkpoints: checkpoints)
   }
 
@@ -50,6 +50,8 @@ struct SessionCacheTests {
     _ pool: SessionCache, prompt: [Int], reply: [Int] = []
   ) -> SessionCache.Lease {
     let lease = lease(pool, prompt)
+    run(lease, to: prompt.count)
+    pool.checkpointPrompt(lease)
     run(lease, to: prompt.count + reply.count)
     pool.commit(lease, generated: reply)
     return lease
@@ -79,6 +81,18 @@ struct SessionCacheTests {
     #expect(branched.cache.offset == 6)
     #expect(pool.slotCount == 1)
     #expect(pool.branches == 1)
+  }
+
+  @Test("a re-rendered reply still reuses the prompt behind it")
+  func rerenderedReply() {
+    let pool = pool()
+    turn(pool, prompt: [1, 2, 3, 4], reply: [5, 6])
+
+    // What a harness sends next: the same prompt, then its own rendering of the reply, which
+    // is not the tokens that were sampled.
+    let second = lease(pool, [1, 2, 3, 4, 50, 60, 7, 8])
+    #expect(second.reused == 4)
+    #expect(second.branched == true)
   }
 
   @Test("a branch behind every checkpoint is a miss rather than a bad rewind")

@@ -63,6 +63,7 @@ public final class Generator: @unchecked Sendable {
     cachedPrefixLength: Int = 0,
     constraint: OutputConstraint? = nil,
     isCancelled: (@Sendable () -> Bool)? = nil,
+    onPrefilled: (() -> Void)? = nil,
     onProgress: ((GenerationProgress) -> Void)? = nil,
     onToken: ((String) -> Bool)? = nil
   ) -> GenerationResult {
@@ -117,6 +118,7 @@ public final class Generator: @unchecked Sendable {
       eval(logits)
     }
     let promptSeconds = -promptStart.timeIntervalSinceNow
+    onPrefilled?()
 
     var decodePosition: Int? = positions.map { $0.max().item(Int.self) + 1 }
 
