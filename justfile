@@ -22,17 +22,29 @@ build:
 app-project:
     cd App && xcodegen generate
 
+# build the menu bar app in Debug target
+app-debug: app-project
+    cd App && {{ xcodebuild }} -configuration Debug build
+
 # build the menu bar app
 app: app-project
-    cd App && {{ xcodebuild }} -configuration Debug build
+    cd App && {{ xcodebuild }} -configuration Release build
 
 # build and launch the menu bar app
 app-run: app
+    open App/.build/Build/Products/Release/Ishizuki.app
+
+# build and launch the menu bar app in Debug target
+app-run-debug: app-debug
     open App/.build/Build/Products/Debug/Ishizuki.app
 
 # archive and export a Mac App Store upload (needs Apple Distribution + installer identities)
 app-store: app-project
     ./Scripts/app-store.sh {{ version }}
+
+# signed, notarized drag-to-Applications DMG (needs a Developer ID Application cert)
+build-dmg: app-project
+    ./Scripts/build-dmg.sh {{ version }}
 
 # unit tests
 test:
