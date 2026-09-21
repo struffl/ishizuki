@@ -114,7 +114,6 @@ final class ChatController {
   /// When a turn in flight last hit disk, so a crash or a forced quit loses at most a few
   /// seconds of it rather than the whole thing.
   private var lastCheckpoint = Date.distantPast
-  private var terminationObserver: NSObjectProtocol?
 
   init(server: ServerController) {
     self.server = server
@@ -131,13 +130,9 @@ final class ChatController {
     if chats.isEmpty { chats = [current] }
     self.transcriptRows = Self.rows(from: current.transcript)
 
-    terminationObserver = NotificationCenter.default.addObserver(
+    NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: nil
     ) { [weak self] _ in self?.persist() }
-  }
-
-  deinit {
-    if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
   }
 
   // MARK: - Chats
