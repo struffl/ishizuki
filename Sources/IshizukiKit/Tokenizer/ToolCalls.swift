@@ -34,6 +34,23 @@ public enum ToolCallParser {
         .trimmingCharacters(in: .whitespacesAndNewlines)
       if !thought.isEmpty { reasoning = thought }
       text = String(text[end.upperBound...])
+    } else if let open = text.range(of: "<think>") {
+      // A thought that was never closed is still a thought. Generation can stop before the
+      // closing tag — a token budget runs out, or the model simply omits it — and treating the
+      // rest as the answer put the whole chain of reasoning in the reply, which is where a
+      // fifteen-kilobyte "answer" came from.
+      //
+      // The thought runs to the first tool call rather than to the end of the text: a call that
+      // followed an unclosed tag would otherwise be read as prose and never made. What sits
+      // before the tag is the answer proper and is kept.
+      let after = open.upperBound
+      let stop = text.range(of: "<tool_call>", range: after..<text.endIndex)?.lowerBound
+      let thought = String(text[after..<(stop ?? text.endIndex)])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !thought.isEmpty { reasoning = thought }
+      text =
+        String(text[text.startIndex..<open.lowerBound])
+        + (stop.map { String(text[$0...]) } ?? "")
     }
 
     var calls: [ToolCall] = []

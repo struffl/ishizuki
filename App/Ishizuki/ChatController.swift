@@ -791,7 +791,19 @@ final class ChatController {
       case .prompt(let prompt):
         add(prompt.id, .prompt, text(prompt.segments))
       case .response(let response):
-        add(response.id, .answer, text(response.segments))
+        let said = text(response.segments)
+        // A reply that is really an unclosed thought is shown as one. The parser keeps the two
+        // apart now, but conversations saved before it did still hold answers that are nothing
+        // but a chain of reasoning, and drawing that as prose put thousands of points of it in
+        // the transcript. Folded as reasoning it joins the thought beside it and stays shut.
+        if said.hasPrefix("<think>") {
+          add(
+            response.id, .reasoning,
+            String(said.dropFirst("<think>".count))
+              .trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+          add(response.id, .answer, said)
+        }
       case .reasoning(let reasoning):
         add(reasoning.id, .reasoning, text(reasoning.segments))
       case .toolCalls(let calls):
