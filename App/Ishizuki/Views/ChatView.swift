@@ -218,7 +218,13 @@ struct ChatRowView: View {
   /// open every frame.
   @State private var expanded: Bool?
 
-  private var open: Bool { expanded ?? live }
+  /// A thought stays collapsed even while live: reopening itself every time new text lands is
+  /// what left one stuck open, a frame behind the row it belonged to.
+  private var autoOpensLive: Bool {
+    if case .reasoning = row.kind { false } else { true }
+  }
+
+  private var open: Bool { expanded ?? (live && autoOpensLive) }
 
   var body: some View {
     switch row.kind {
@@ -251,7 +257,7 @@ struct ChatRowView: View {
 
     case .reasoning:
       disclosure(
-        title: "thought", icon: "brain", tint: .secondary,
+        title: live ? "thinking…" : "thought", icon: "brain", tint: .secondary,
         body: row.text, monospaced: false)
 
     case .toolCall(let name):
