@@ -27,26 +27,43 @@ extension Color {
     })
 }
 
+/// Dimming rather than frosting. The system draws glass inactive — greyer, more opaque — while
+/// a window is not key, and lets it sample the live backdrop once it is, so a clear window that
+/// reads beautifully over a dark neighbour turns unreadable the moment it comes forward over a
+/// white page. These two floors are what the glass composites onto, so what is behind the
+/// window changes how it looks without ever deciding whether it can be read.
+enum GlassTuning {
+  /// Under the whole window. Low enough to still see through, high enough that the tab bar and
+  /// the title do not have to fight a bright page behind them.
+  static let windowFloor = 0.2
+  /// Under anything carrying text, where guessing wrong costs legibility rather than looks.
+  static let plateFloor = 0.78
+}
+
 extension View {
-  /// The window itself stays clear: the glass is the point, and fogging the whole pane to make
-  /// text readable throws away the look to solve a problem the text can solve itself.
+  /// The window stays see-through: clear glass over a floor that only takes the edge off.
   func windowBackdrop() -> some View {
     containerBackground(for: .window) {
       Rectangle()
-        .fill(.clear)
+        .fill(.background.opacity(GlassTuning.windowFloor))
         .glassEffect(.clear, in: .rect(cornerRadius: 0))
         .ignoresSafeArea()
     }
   }
 
-  /// Anything carrying text sits on this. Regular glass is the opaque end of what the system
-  /// offers, so a line of code never has to compete with whatever is on the desktop behind it.
+  /// Anything carrying text sits on this: regular glass, the opaque end of what the system
+  /// offers, over a floor of the window's own colour. The floor is behind the glass rather than
+  /// over it, so the sheen survives and the desktop does not come through.
   func textPlate(
     radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
   ) -> some View {
     padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
       .glassEffect(.regular, in: .rect(cornerRadius: radius))
+      .background {
+        RoundedRectangle(cornerRadius: radius)
+          .fill(.background.opacity(GlassTuning.plateFloor))
+      }
   }
 }
 
@@ -63,9 +80,13 @@ struct GlassCard<Content: View>: View {
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
       .glassEffect(.regular, in: .rect(cornerRadius: radius))
+      .background {
+        RoundedRectangle(cornerRadius: radius)
+          .fill(.background.opacity(GlassTuning.plateFloor))
+      }
       .overlay {
         RoundedRectangle(cornerRadius: radius)
-          .strokeBorder(.white.opacity(focused ? 0.12 : 0.05), lineWidth: 0.5)
+          .strokeBorder(.white.opacity(focused ? 0.14 : 0.06), lineWidth: 0.5)
       }
       .shadow(
         color: .black.opacity(focused ? 0.12 : 0.04),
