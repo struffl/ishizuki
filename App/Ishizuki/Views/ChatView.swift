@@ -212,12 +212,12 @@ struct ChatRowView: View {
     case .prompt:
       Text(row.text)
         .font(.system(size: size))
+        .foregroundStyle(.white)
         .textSelection(.enabled)
-        .textPlate(radius: 12)
-        .overlay {
-          RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(Color.accentSoft.opacity(0.45), lineWidth: 1)
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.mine, in: Bubble(mine: true))
+        .padding(.leading, 40)
         .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .steer:
@@ -225,7 +225,8 @@ struct ChatRowView: View {
 
     case .answer:
       MarkdownText(text: row.text, mono: mono, size: size)
-        .textPlate(radius: 12, horizontal: 12, vertical: 9)
+        .textPlate(Bubble(mine: false))
+        .padding(.trailing, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
 
     case .reasoning:

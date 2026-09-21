@@ -38,7 +38,58 @@ extension Color {
     })
 }
 
+extension Color {
+  /// The person's own bubble. Fixed rather than the system accent, because white text has to
+  /// stay readable on it whatever accent someone has chosen.
+  static let mine = Color(
+    NSColor(name: nil) { appearance in
+      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        ? NSColor(red: 0.13, green: 0.47, blue: 0.96, alpha: 1)
+        : NSColor(red: 0.04, green: 0.42, blue: 0.94, alpha: 1)
+    })
+}
+
+/// A message bubble with a tail on the side it came from. Only the two ends of the
+/// conversation get one; a thought or a tool call is not something anybody said.
+struct Bubble: Shape {
+  var mine: Bool
+  var radius: CGFloat = 13
+  var tail: CGFloat = 7
+
+  func path(in rect: CGRect) -> Path {
+    let body =
+      mine
+      ? CGRect(x: rect.minX, y: rect.minY, width: rect.width - tail, height: rect.height)
+      : CGRect(x: rect.minX + tail, y: rect.minY, width: rect.width - tail, height: rect.height)
+
+    var path = Path(roundedRect: body, cornerRadius: radius)
+
+    // The tail hooks off the bottom corner, the way a spoken bubble does.
+    let edge = mine ? body.maxX : body.minX
+    let tip = mine ? rect.maxX : rect.minX
+    let base = body.maxY - radius * 0.7
+    path.move(to: CGPoint(x: edge, y: base))
+    path.addQuadCurve(
+      to: CGPoint(x: tip, y: body.maxY),
+      control: CGPoint(x: edge, y: body.maxY - radius * 0.1))
+    path.addQuadCurve(
+      to: CGPoint(x: edge, y: body.maxY - radius * 0.25),
+      control: CGPoint(x: edge + (mine ? -2 : 2), y: body.maxY))
+    path.closeSubpath()
+    return path
+  }
+}
+
 extension View {
+  /// A plate cut to a shape of its own, for the bubbles that are not rectangles.
+  func textPlate(
+    _ shape: some Shape, horizontal: CGFloat = 12, vertical: CGFloat = 8
+  ) -> some View {
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .glassEffect(.clear, in: shape)
+  }
+
   /// The window lays down a material, which is what makes the panels on it read as glass.
   func windowBackdrop() -> some View {
     containerBackground(.ultraThinMaterial, for: .window)
