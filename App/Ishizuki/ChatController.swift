@@ -98,6 +98,25 @@ final class ChatController {
 
   var isGenerating: Bool { inFlight?.phase == .decode }
 
+  /// What the turn is doing, taken from the phase rather than guessed at. Writing used to be
+  /// what the status line said whenever it knew nothing, which is how it came to say Writing
+  /// through an entire prefill.
+  enum Activity: Equatable {
+    case queued
+    case reading(Double?)
+    case writing
+    case unknown
+  }
+
+  var activity: Activity {
+    guard let request = inFlight else { return .unknown }
+    switch request.phase {
+    case .queued: return .queued
+    case .prefill: return .reading(prefillFraction)
+    case .decode, .finishing: return .writing
+    }
+  }
+
   /// What pressing return does. Nothing here is a dead end: if the pack is not up, return
   /// brings it up and sends what was typed once it is.
   enum Submission: Equatable {

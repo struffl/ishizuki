@@ -84,6 +84,10 @@ public final class AgentEngine: @unchecked Sendable {
       try await withCheckedThrowingContinuation { continuation in
         server.generationQueue.async { [self] in
           let started = Date()
+          // Registered with the same accounting the port uses, so the window's dial and the
+          // readout are reading one set of numbers rather than two.
+          let id = server.stats.enqueue(api: "chat")
+          defer { server.stats.end(id) }
           do {
             let request = APIServer.Request(
               messages: messages,
@@ -98,6 +102,7 @@ public final class AgentEngine: @unchecked Sendable {
               effort: effort)
             let outcome = try server.complete(
               request,
+              id: id,
               isCancelled: { cancel.isRaised },
               onText: onText.map { emit in { fragment in emit(fragment) } },
               onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } })

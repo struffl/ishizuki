@@ -207,8 +207,9 @@ struct TurnStatus: View {
           .foregroundStyle(.secondary)
       }
 
-      if let fraction = chat.prefillFraction {
-        ProgressView(value: fraction)
+      // Only reading has an end to fill towards; a bar that cannot finish is a lie.
+      if case .reading(let fraction) = chat.activity {
+        ProgressView(value: fraction ?? 0)
           .progressViewStyle(.linear)
           .tint(.accentSoft)
           .frame(height: 3)
@@ -218,18 +219,33 @@ struct TurnStatus: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private var reading: Bool { chat.prefillFraction != nil }
+  private var label: String {
+    switch chat.activity {
+    case .queued: "Queued"
+    case .reading: "Reading"
+    case .writing: "Writing"
+    case .unknown: "Working"
+    }
+  }
 
-  private var label: String { reading ? "Reading" : "Writing" }
-
-  private var tint: Color { reading ? .accentSoft : .generating }
+  private var tint: Color {
+    switch chat.activity {
+    case .reading: .accentSoft
+    case .writing: .generating
+    case .queued, .unknown: .secondary
+    }
+  }
 
   private var detail: String {
     guard let request = chat.inFlight else { return "" }
-    if reading {
+    switch chat.activity {
+    case .reading:
       return "\(ReadoutFormat.group(request.prefilled))"
         + " / \(ReadoutFormat.group(request.prefillTotal))"
+    case .writing:
+      return "\(ReadoutFormat.group(request.generated)) tokens"
+    case .queued, .unknown:
+      return ""
     }
-    return "\(ReadoutFormat.group(request.generated)) tokens"
   }
 }
