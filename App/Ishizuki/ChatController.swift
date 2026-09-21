@@ -76,6 +76,21 @@ final class ChatController {
 
   var readout: ServeReadout? { server?.readout }
 
+  /// The turn the engine is on, which is what the status line and the dial are both reading.
+  var inFlight: ServeStats.Request? {
+    readout?.inFlight.first { $0.phase == .prefill || $0.phase == .decode }
+  }
+
+  /// Nil once the prompt is in, which is how the status line knows to stop saying Reading.
+  var prefillFraction: Double? {
+    guard let request = inFlight, request.phase == .prefill, request.prefillTotal > 0 else {
+      return nil
+    }
+    return Double(request.prefilled) / Double(request.prefillTotal)
+  }
+
+  var isGenerating: Bool { inFlight?.phase == .decode }
+
   var canSend: Bool {
     !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && workspace != nil && engine != nil && !isResponding
@@ -214,15 +229,23 @@ final class ChatController {
     return rows
   }
 
+  /// Thinking arrives with runs of blank lines in it, which read as a hole in the row rather
+  /// than as breathing room. One blank line is a paragraph; more is an accident.
   private static func text(_ segments: [Transcript.Segment]) -> String {
-    segments.compactMap { segment in
-      switch segment {
-      case .text(let text): return text.content
-      case .structure(let structure): return structure.content.jsonString
-      case .attachment(let attachment): return attachment.label
-      @unknown default: return nil
+    let joined =
+      segments.compactMap { segment in
+        switch segment {
+        case .text(let text): return text.content
+        case .structure(let structure): return structure.content.jsonString
+        case .attachment(let attachment): return attachment.label
+        @unknown default: return nil
+        }
       }
-    }
-    .joined(separator: "\n")
+      .joined(separator: "\n")
+
+    return
+      joined
+      .replacing(/\n{3,}/, with: "\n\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }

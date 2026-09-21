@@ -9,6 +9,9 @@ options:
 packages:
   IshizukiKit:
     path: ..
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: 2.3.0
 
 targets:
   Ishizuki:
@@ -22,6 +25,8 @@ targets:
         product: IshizukiKit
       - package: IshizukiKit
         product: IshizukiAgent
+      - package: Highlightr
+        product: Highlightr
     info:
       path: Ishizuki/Info.plist
       properties:

@@ -50,8 +50,9 @@ struct ChatView: View {
           .lineLimit(1)
       }
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    .textPlate(radius: 8)
+    .padding(.horizontal, 10)
+    .padding(.top, 8)
   }
 
   @ViewBuilder private var transcript: some View {
@@ -62,21 +63,16 @@ struct ChatView: View {
             Text(chat.blocker ?? "Ask for a change and it will read before it writes.")
               .font(.system(size: 11))
               .foregroundStyle(.secondary)
+              .textPlate()
               .padding(.top, 24)
-              .frame(maxWidth: .infinity, alignment: .center)
           }
           ForEach(chat.rows) { row in
             ChatRowView(row: row, mono: mono, size: fontSize)
               .id(row.id)
           }
           if chat.isResponding {
-            HStack(spacing: 6) {
-              ProgressView().controlSize(.small).scaleEffect(0.6)
-              Text("working")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-            }
-            .id("tail")
+            TurnStatus(chat: chat)
+              .id("tail")
           }
         }
         .padding(14)
@@ -109,8 +105,9 @@ struct ChatView: View {
         .buttonStyle(.borderedProminent)
         .disabled(chat.isResponding ? chat.draft.isEmpty : !chat.canSend)
     }
-    .padding(12)
-    .background(.white.opacity(0.04))
+    .textPlate(radius: 10, horizontal: 12, vertical: 10)
+    .padding(.horizontal, 10)
+    .padding(.bottom, 10)
   }
 
   private var mono: Font {
@@ -141,15 +138,13 @@ struct ChatRowView: View {
     case .prompt:
       Text(row.text)
         .font(.system(size: size))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.white.opacity(0.07), in: .rect(cornerRadius: 10))
+        .textSelection(.enabled)
+        .textPlate(radius: 12)
         .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .answer:
-      Text(row.text)
-        .font(.system(size: size))
-        .textSelection(.enabled)
+      MarkdownText(text: row.text, mono: mono, size: size)
+        .textPlate(radius: 12, horizontal: 12, vertical: 9)
         .frame(maxWidth: .infinity, alignment: .leading)
 
     case .reasoning:
@@ -185,11 +180,11 @@ struct ChatRowView: View {
             .font(.system(size: 10, weight: .medium, design: .monospaced))
           Text(summary(of: body))
             .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .lineLimit(1)
           Image(systemName: expanded ? "chevron.down" : "chevron.right")
             .font(.system(size: 7))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
         }
         .foregroundStyle(tint)
       }
@@ -198,9 +193,9 @@ struct ChatRowView: View {
       if expanded {
         Text(body)
           .font(monospaced ? mono : .system(size: size - 1))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(.primary.opacity(0.85))
           .textSelection(.enabled)
-          .padding(.leading, 14)
+          .textPlate(radius: 8)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

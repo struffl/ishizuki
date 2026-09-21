@@ -192,7 +192,7 @@ private struct InstalledRow: View {
       .fixedSize()
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .glassEffect(.regular, in: .rect(cornerRadius: 12))
   }
 }
 
@@ -223,7 +223,7 @@ private struct CuratedRow: View {
         .disabled(library.downloads.contains { $0.repo == model.repo })
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .glassEffect(.regular, in: .rect(cornerRadius: 12))
   }
 }
 
@@ -259,7 +259,7 @@ private struct DownloadRow: View {
       }
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .glassEffect(.regular, in: .rect(cornerRadius: 12))
   }
 }
 
