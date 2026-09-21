@@ -266,7 +266,8 @@ public final class APIServer: @unchecked Sendable {
     id: Int? = nil,
     isCancelled: (@Sendable () -> Bool)? = nil,
     onText: ((String) -> Void)? = nil,
-    onReasoning: ((String) -> Void)? = nil
+    onReasoning: ((String) -> Void)? = nil,
+    onToolStanza: (() -> Void)? = nil
   ) throws -> (
     parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool
   ) {
@@ -367,6 +368,7 @@ public final class APIServer: @unchecked Sendable {
         let piece = filter.push(fragment)
         if let thought = piece.reasoning { onReasoning?(thought) }
         if let visible = piece.content { onText?(visible) }
+        if piece.startedToolCall { onToolStanza?() }
         return true
       }
     }
@@ -898,6 +900,9 @@ struct StreamFilter {
   struct Output {
     var reasoning: String?
     var content: String?
+    /// True on the one push where the model opens a tool call, so a caller can say the turn
+    /// has stopped answering and started writing a command.
+    var startedToolCall = false
 
     var isEmpty: Bool { reasoning == nil && content == nil }
   }
@@ -931,6 +936,7 @@ struct StreamFilter {
       let visible = String(buffer[buffer.startIndex..<call.lowerBound])
       buffer = ""
       stopped = true
+      out.startedToolCall = true
       if !visible.isEmpty { out.content = visible }
       return out
     }

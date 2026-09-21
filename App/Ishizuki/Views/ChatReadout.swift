@@ -224,6 +224,7 @@ struct TurnStatus: View {
     case .queued: "Queued"
     case .reading: "Reading"
     case .writing: "Writing"
+    case .writingCommand: "Writing command"
     case .unknown: "Working"
     }
   }
@@ -231,7 +232,7 @@ struct TurnStatus: View {
   private var tint: Color {
     switch chat.activity {
     case .reading: .accentSoft
-    case .writing: .generating
+    case .writing, .writingCommand: .generating
     case .queued, .unknown: .secondary
     }
   }
@@ -242,7 +243,7 @@ struct TurnStatus: View {
     case .reading:
       return "\(ReadoutFormat.group(request.prefilled))"
         + " / \(ReadoutFormat.group(request.prefillTotal))"
-    case .writing:
+    case .writing, .writingCommand:
       return "\(ReadoutFormat.group(request.generated)) tokens"
     case .queued, .unknown:
       return ""

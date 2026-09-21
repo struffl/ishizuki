@@ -14,6 +14,10 @@ struct ChatView: View {
   @AppStorage("chat.monoFont") private var monoFont = ""
   @AppStorage("chat.fontSize") private var fontSize = 12.0
 
+  /// How far the transcript is dragged aside to show what each row cost.
+  @State private var reveal: CGFloat = 0
+  private let gutter: CGFloat = 116
+
   var body: some View {
     VStack(spacing: 0) {
       header
@@ -21,6 +25,7 @@ struct ChatView: View {
       transcript
       Divider().opacity(0.3)
       ChatReadoutBar(chat: chat, controller: controller)
+      queued
       composer
     }
     .windowBackdrop()
@@ -60,8 +65,15 @@ struct ChatView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 10) {
           ForEach(chat.rows) { row in
-            ChatRowView(row: row, mono: mono, size: fontSize)
-              .id(row.id)
+            HStack(spacing: 8) {
+              ChatRowView(row: row, mono: mono, size: fontSize)
+              RowCost(meta: chat.meta(for: row))
+                .frame(width: gutter, alignment: .leading)
+                .opacity(reveal / gutter)
+            }
+            .padding(.trailing, -gutter)
+            .offset(x: -reveal)
+            .id(row.id)
           }
           if chat.isResponding {
             TurnStatus(chat: chat)
@@ -71,11 +83,74 @@ struct ChatView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
+      // Pulled aside and let go, the way a message list gives up its timestamps.
+      .gesture(
+        DragGesture(minimumDistance: 14)
+          .onChanged { value in
+            guard value.translation.width < 0 else { return }
+            reveal = min(gutter, -value.translation.width)
+          }
+          .onEnded { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { reveal = 0 }
+          }
+      )
       .onChange(of: chat.rows.count) {
         withAnimation(.easeOut(duration: 0.15)) {
           scroller.scrollTo(chat.isResponding ? "tail" : chat.rows.last?.id, anchor: .bottom)
         }
       }
+    }
+  }
+
+  /// What is waiting for the next turn, one line each, with the means to send it now. Sitting
+  /// above the composer rather than in the transcript, because it has not been said yet.
+  @ViewBuilder private var queued: some View {
+    if !chat.pendingSteers.isEmpty {
+      VStack(spacing: 4) {
+        ForEach(chat.pendingSteers) { row in
+          HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+              .font(.system(size: 9))
+              .foregroundStyle(.secondary)
+            Text(row.text)
+              .font(.system(size: 11))
+              .lineLimit(1)
+              .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Button {
+              chat.sendQueuedNow()
+            } label: {
+              HStack(spacing: 3) {
+                Text("Send now")
+                  .font(.system(size: 10, weight: .medium))
+                Image(systemName: "return")
+                  .font(.system(size: 9))
+              }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentSoft)
+            .help("Stop this turn and send it now")
+            Button {
+              chat.drop(row)
+            } label: {
+              Image(systemName: "xmark")
+                .font(.system(size: 9))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Drop it")
+          }
+          .textPlate(radius: 9, horizontal: 10, vertical: 6)
+          .overlay {
+            RoundedRectangle(cornerRadius: 9)
+              .strokeBorder(
+                Color.accentSoft.opacity(0.3),
+                style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+          }
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.top, 2)
     }
   }
 
@@ -120,34 +195,26 @@ struct ChatRowView: View {
 
   var body: some View {
     switch row.kind {
+    // Yellow for what the model was given, blue for what was asked of it: between them they
+    // account for the tokens someone is waiting on before a word comes back.
+    case .system:
+      disclosure(
+        title: "instructions", icon: "list.bullet.rectangle", tint: .instructing,
+        body: row.text, monospaced: false)
+
     case .prompt:
       Text(row.text)
         .font(.system(size: size))
         .textSelection(.enabled)
         .textPlate(radius: 12)
+        .overlay {
+          RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(Color.accentSoft.opacity(0.45), lineWidth: 1)
+        }
         .frame(maxWidth: .infinity, alignment: .trailing)
 
-    // Steering is not an interruption, and saying so is the difference between a message that
-    // looks ignored and one that is plainly waiting its turn.
     case .steer:
-      VStack(alignment: .trailing, spacing: 3) {
-        Text(row.text)
-          .font(.system(size: size))
-          .textSelection(.enabled)
-        HStack(spacing: 4) {
-          Image(systemName: "arrow.turn.down.right")
-            .font(.system(size: 8))
-          Text("queued for the next turn")
-            .font(.system(size: 9))
-        }
-        .foregroundStyle(.secondary)
-      }
-      .textPlate(radius: 12)
-      .overlay {
-        RoundedRectangle(cornerRadius: 12)
-          .strokeBorder(Color.accentSoft.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-      }
-      .frame(maxWidth: .infinity, alignment: .trailing)
+      EmptyView()
 
     case .answer:
       MarkdownText(text: row.text, mono: mono, size: size)
@@ -222,6 +289,32 @@ struct ChatRowView: View {
     case "glob": "folder.badge.questionmark"
     case "shell": "terminal"
     default: "wrench"
+    }
+  }
+}
+
+/// What a row cost, shown in the gutter: when it happened, how long that side of the turn
+/// took, and how many tokens it was.
+@available(macOS 27.0, *)
+struct RowCost: View {
+  let meta: ChatController.RowMeta?
+
+  var body: some View {
+    if let meta {
+      VStack(alignment: .leading, spacing: 1) {
+        Text(meta.at, format: .dateTime.hour().minute().second())
+          .foregroundStyle(.secondary)
+        if let seconds = meta.seconds, seconds > 0 {
+          Text(
+            (meta.wasRead ? "read " : "wrote ")
+              + String(format: seconds < 10 ? "%.1fs" : "%.0fs", seconds))
+        }
+        if let tokens = meta.tokens, tokens > 0 {
+          Text("\(ReadoutFormat.group(tokens)) tok")
+        }
+      }
+      .font(.system(size: 9, design: .monospaced))
+      .foregroundStyle(.tertiary)
     }
   }
 }

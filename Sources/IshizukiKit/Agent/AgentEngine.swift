@@ -54,9 +54,19 @@ public final class AgentEngine: @unchecked Sendable {
       raised = true
       lock.unlock()
     }
+    func lower() {
+      lock.lock()
+      raised = false
+      lock.unlock()
+    }
   }
 
   public let server: APIServer
+  /// Whether the generation running now has stopped answering and started writing a tool
+  /// call. Read by the window, which has no other way to tell the two apart mid-turn.
+  private let toolStanza = Flag()
+
+  public var isWritingToolCall: Bool { toolStanza.isRaised }
   /// Where generation stops when nothing else stops it first. Held high because an agent's
   /// turn is a tool call away from being long, and never shown to the model as a bound.
   public var maxTokens: Int
@@ -80,6 +90,7 @@ public final class AgentEngine: @unchecked Sendable {
     onReasoning: (@Sendable (String) -> Void)? = nil
   ) async throws -> AgentTurn {
     let cancel = Flag()
+    toolStanza.lower()
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         server.generationQueue.async { [self] in
@@ -105,7 +116,8 @@ public final class AgentEngine: @unchecked Sendable {
               id: id,
               isCancelled: { cancel.isRaised },
               onText: onText.map { emit in { fragment in emit(fragment) } },
-              onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } })
+              onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } },
+              onToolStanza: { [toolStanza] in toolStanza.raise() })
             continuation.resume(
               returning: AgentTurn(
                 reasoning: outcome.parsed.reasoning,

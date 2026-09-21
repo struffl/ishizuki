@@ -17,12 +17,22 @@ final class ChatController {
   /// One row in the conversation. The transcript is the source of these, read as it fills.
   struct Row: Identifiable {
     enum Kind {
+      case system
       case prompt
       case steer
       case reasoning
       case answer
       case toolCall(name: String)
       case toolOutput(name: String)
+
+      /// Everything the model had to read before it could answer, which is what the token
+      /// count on a prompt row is explaining.
+      var isInput: Bool {
+        switch self {
+        case .system, .prompt, .steer, .toolOutput: true
+        case .reasoning, .answer, .toolCall: false
+        }
+      }
     }
 
     var id: String
@@ -45,7 +55,23 @@ final class ChatController {
   /// here or the next poll would wipe it.
   private(set) var pendingSteers: [Row] = []
 
-  var rows: [Row] { transcriptRows + pendingSteers }
+  var rows: [Row] { transcriptRows }
+
+  /// What a row cost, kept beside the transcript because the transcript carries no clock and
+  /// no token counts of its own.
+  struct RowMeta: Equatable {
+    var at: Date
+    var seconds: Double?
+    var tokens: Int?
+    /// Reading for what went in, writing for what came out, which decides the wording.
+    var wasRead: Bool
+  }
+
+  private(set) var meta: [String: RowMeta] = [:]
+  private var rowsThisTurn: Set<String> = []
+  private var turnStart: ServeStats.Totals?
+
+  func meta(for row: Row) -> RowMeta? { meta[row.id] }
   private(set) var isResponding = false
   private(set) var failure: String?
   private(set) var meter = Meter()
@@ -105,6 +131,8 @@ final class ChatController {
     case queued
     case reading(Double?)
     case writing
+    /// Still generating, but into a tool call rather than into an answer.
+    case writingCommand
     case unknown
   }
 
@@ -113,7 +141,8 @@ final class ChatController {
     switch request.phase {
     case .queued: return .queued
     case .prefill: return .reading(prefillFraction)
-    case .decode, .finishing: return .writing
+    case .decode, .finishing:
+      return engine?.isWritingToolCall == true ? .writingCommand : .writing
     }
   }
 
@@ -133,7 +162,8 @@ final class ChatController {
     if isResponding { return .steer }
     if server?.phase.isBusy == true { return .loading }
     if engine == nil { return .load }
-    return typed.isEmpty ? .nothingToSay : .send
+    if !typed.isEmpty || !pendingSteers.isEmpty { return .send }
+    return .nothingToSay
   }
 
   var submissionLabel: String {
@@ -220,13 +250,18 @@ final class ChatController {
   }
 
   func send() {
-    let text = typed
+    // Whatever was queued while the last turn ran goes out ahead of what was just typed.
+    let text = (pendingSteers.map(\.text) + [typed])
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n\n")
     guard !text.isEmpty, !isResponding, let agent = resolveAgent() else { return }
     draft = ""
     failure = nil
     pendingSteers.removeAll()
     isResponding = true
-    tokensAtTurnStart = server?.readout?.totals.generatedTokens ?? 0
+    rowsThisTurn.removeAll()
+    turnStart = server?.readout?.totals
+    tokensAtTurnStart = turnStart?.generatedTokens ?? 0
     startPolling(agent)
 
     let started = Date()
@@ -247,13 +282,35 @@ final class ChatController {
     turn?.cancel()
   }
 
-  /// Guidance for the turn after this one, which is what the conversation folds it into.
+  /// Guidance for the turn after this one. Queued here rather than inside the conversation,
+  /// which has no way to hand a queued message back — and sending it early means taking it
+  /// out of the queue first.
   func steer() {
     let text = typed
-    guard !text.isEmpty, let agent else { return }
-    agent.steer(text)
+    guard !text.isEmpty else { return }
     draft = ""
     pendingSteers.append(Row(id: "steer-\(UUID().uuidString)", kind: .steer, text: text))
+  }
+
+  func drop(_ row: Row) {
+    pendingSteers.removeAll { $0.id == row.id }
+  }
+
+  /// Cut the turn in flight short and send what is queued now. Cancelling is not instant, so
+  /// this waits for the turn to unwind rather than sending into a busy engine.
+  func sendQueuedNow() {
+    guard !pendingSteers.isEmpty else { return }
+    guard isResponding else {
+      send()
+      return
+    }
+    turn?.cancel()
+    Task { [weak self] in
+      while self?.isResponding == true {
+        try? await Task.sleep(for: .milliseconds(60))
+      }
+      self?.send()
+    }
   }
 
   private func resolveAgent() -> CodingAgent? {
@@ -273,7 +330,7 @@ final class ChatController {
     poller?.cancel()
     poller = Task { [weak self] in
       while !Task.isCancelled {
-        self?.transcriptRows = Self.rows(from: agent.transcript)
+        self?.absorb(Self.rows(from: agent.transcript))
         try? await Task.sleep(for: .milliseconds(120))
       }
     }
@@ -282,8 +339,9 @@ final class ChatController {
   private func finish(_ agent: CodingAgent, seconds: Double) {
     poller?.cancel()
     poller = nil
-    transcriptRows = Self.rows(from: agent.transcript)
+    absorb(Self.rows(from: agent.transcript))
     isResponding = false
+    recordTurnCost()
 
     meter.turns += 1
     meter.seconds += seconds
@@ -294,6 +352,33 @@ final class ChatController {
     }
   }
 
+  /// A row's clock starts the first time it is seen, which is as close to when it happened as
+  /// a transcript without timestamps allows.
+  private func absorb(_ rows: [Row]) {
+    transcriptRows = rows
+    for row in rows where meta[row.id] == nil {
+      meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
+      if isResponding { rowsThisTurn.insert(row.id) }
+    }
+  }
+
+  /// The turn's cost, split the way the engine splits it and handed to the rows it produced.
+  private func recordTurnCost() {
+    guard let totals = server?.readout?.totals, let start = turnStart else { return }
+    let read = max(0, totals.prefillSeconds - start.prefillSeconds)
+    let wrote = max(0, totals.decodeSeconds - start.decodeSeconds)
+    let promptTokens = max(0, totals.promptTokens - start.promptTokens)
+    let generated = max(0, totals.generatedTokens - start.generatedTokens)
+
+    for id in rowsThisTurn {
+      guard var record = meta[id] else { continue }
+      record.seconds = record.wasRead ? read : wrote
+      record.tokens = record.wasRead ? promptTokens : generated
+      meta[id] = record
+    }
+    rowsThisTurn.removeAll()
+  }
+
   func saveEffort() {
     defaults.set(effort.rawValue, forKey: "chat.effort")
   }
@@ -302,8 +387,11 @@ final class ChatController {
     var rows: [Row] = []
     for entry in transcript {
       switch entry {
-      case .instructions:
-        continue
+      case .instructions(let instructions):
+        let body = text(instructions.segments)
+        if !body.isEmpty {
+          rows.append(Row(id: instructions.id, kind: .system, text: body))
+        }
       case .prompt(let prompt):
         rows.append(Row(id: prompt.id, kind: .prompt, text: text(prompt.segments)))
       case .response(let response):

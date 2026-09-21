@@ -27,6 +27,17 @@ extension Color {
     })
 }
 
+extension Color {
+  /// The instructions the model is handed every turn, which is most of what it reads before it
+  /// can say anything.
+  static let instructing = Color(
+    NSColor(name: nil) { appearance in
+      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        ? NSColor(red: 0.91, green: 0.74, blue: 0.35, alpha: 1)
+        : NSColor(red: 0.62, green: 0.45, blue: 0.05, alpha: 1)
+    })
+}
+
 extension View {
   /// The window lays down a material, which is what makes the panels on it read as glass.
   func windowBackdrop() -> some View {
