@@ -70,17 +70,23 @@ struct ChatView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 10) {
           ForEach(chat.rows) { row in
-            HStack(spacing: 8) {
+            // RowCost sits past the row's trailing edge rather than beside it, so the row
+            // never reports a width wider than the column actually is — the earlier version
+            // did that with negative padding, which left the true content wider than anything
+            // downstream believed, and that gap could paint past the window instead of hiding.
+            ZStack(alignment: .trailing) {
               ChatRowView(
                 row: row, mono: mono, size: fontSize,
                 live: chat.isResponding && row.id == chat.rows.last?.id,
                 caption: chat.captioner.caption(for: row.id))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .offset(x: -reveal)
               RowCost(meta: chat.meta(for: row))
                 .frame(width: gutter, alignment: .leading)
                 .opacity(reveal / gutter)
+                .offset(x: gutter - reveal)
             }
-            .padding(.trailing, -gutter)
-            .offset(x: -reveal)
+            .clipped()
             .id(row.id)
           }
           if chat.isResponding {
@@ -91,9 +97,6 @@ struct ChatView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
-      // The reveal trick leaves every row a `gutter` wider than it reports, so a switch that
-      // lands mid-drag needs this clip or the overflow shows past the edge instead of hiding.
-      .clipped()
       // Pulled aside and let go, the way a message list gives up its timestamps.
       .gesture(
         DragGesture(minimumDistance: 14)
