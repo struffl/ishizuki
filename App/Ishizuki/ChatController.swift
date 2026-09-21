@@ -63,6 +63,10 @@ final class ChatController {
     var id: String
     var kind: Kind
     var text: String
+
+    /// A tool output carries the id of the call it answers, so the two rows need telling apart
+    /// before anything keys on one: sharing an id, only the call survived the list's identity.
+    static func outputID(_ callID: String) -> String { callID + "\u{2192}" }
   }
 
   struct Meter {
@@ -814,7 +818,7 @@ final class ChatController {
               text: call.arguments.jsonString))
         }
       case .toolOutput(let output):
-        add(output.id, .toolOutput(name: output.toolName), text(output.segments))
+        add(Row.outputID(output.id), .toolOutput(name: output.toolName), text(output.segments))
       @unknown default:
         continue
       }
