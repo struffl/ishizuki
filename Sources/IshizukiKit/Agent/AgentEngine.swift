@@ -136,29 +136,32 @@ public final class AgentEngine: @unchecked Sendable {
               responseSchema: nil,
               model: nil,
               effort: effort)
-            let rendered = try server.template.render(
+            let rendered = try? server.template.render(
               messages: messages,
               addGenerationPrompt: true,
               enableThinking: thinking,
               reasoningEffort: effort,
               tools: tools.isEmpty ? nil : tools.map(\.templateValue))
-            let tokens = try server.model().tokenizer.encode(rendered)
+            let tokens = rendered.flatMap { try? server.model().tokenizer.encode($0) } ?? []
 
-            // Measured through the same template, so the boundary the bar draws is the
-            // boundary the model actually reads.
+            // Measured by difference rather than by rendering the instructions on their own:
+            // a template is entitled to refuse a conversation that is nothing but a system
+            // message, and measuring a bar is never worth failing a turn over.
             if systemCount.value == 0 {
-              let instructions = messages.filter { $0.role == "system" }
-              if !instructions.isEmpty {
-                let renderedSystem = try server.template.render(
-                  messages: instructions,
-                  addGenerationPrompt: false,
+              let withoutSystem = messages.filter { $0.role != "system" }
+              if withoutSystem.count < messages.count, !withoutSystem.isEmpty,
+                let rest = try? server.template.render(
+                  messages: withoutSystem,
+                  addGenerationPrompt: true,
                   enableThinking: thinking,
                   reasoningEffort: effort,
-                  tools: tools.isEmpty ? nil : tools.map(\.templateValue))
-                systemCount.set(try server.model().tokenizer.encode(renderedSystem).count)
+                  tools: tools.isEmpty ? nil : tools.map(\.templateValue)),
+                let restTokens = try? server.model().tokenizer.encode(rest)
+              {
+                systemCount.set(max(0, tokens.count - restTokens.count))
               }
             }
-            if !lastPromptTokens.isEmpty {
+            if !lastPromptTokens.isEmpty, !tokens.isEmpty {
               var shared = 0
               while shared < min(lastPromptTokens.count, tokens.count),
                 lastPromptTokens[shared] == tokens[shared]
@@ -169,7 +172,7 @@ public final class AgentEngine: @unchecked Sendable {
                 "prefix: \(shared) of \(lastPromptTokens.count) previous tokens still agree, "
                   + "prompt is \(tokens.count)")
             }
-            lastPromptTokens = tokens
+            if !tokens.isEmpty { lastPromptTokens = tokens }
 
             let outcome = try server.complete(
               request,
