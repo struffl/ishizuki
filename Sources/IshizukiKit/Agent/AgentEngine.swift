@@ -61,6 +61,21 @@ public final class AgentEngine: @unchecked Sendable {
     }
   }
 
+  private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+    var value: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return stored
+    }
+    func set(_ count: Int) {
+      lock.lock()
+      stored = count
+      lock.unlock()
+    }
+  }
+
   public let server: APIServer
   /// Whether the generation running now has stopped answering and started writing a tool
   /// call. Read by the window, which has no other way to tell the two apart mid-turn.
@@ -72,6 +87,11 @@ public final class AgentEngine: @unchecked Sendable {
   /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
   /// is not working, and the two look identical from the readout.
   private var lastPromptTokens: [Int] = []
+  private let systemCount = Counter()
+
+  /// How much of a prompt is the instructions and the tool schemas — the part that is the same
+  /// every turn, and the part someone waiting on a first answer is mostly waiting for.
+  public var systemTokens: Int { systemCount.value }
   /// Where generation stops when nothing else stops it first. Held high because an agent's
   /// turn is a tool call away from being long, and never shown to the model as a bound.
   public var maxTokens: Int
@@ -123,6 +143,21 @@ public final class AgentEngine: @unchecked Sendable {
               reasoningEffort: effort,
               tools: tools.isEmpty ? nil : tools.map(\.templateValue))
             let tokens = try server.model().tokenizer.encode(rendered)
+
+            // Measured through the same template, so the boundary the bar draws is the
+            // boundary the model actually reads.
+            if systemCount.value == 0 {
+              let instructions = messages.filter { $0.role == "system" }
+              if !instructions.isEmpty {
+                let renderedSystem = try server.template.render(
+                  messages: instructions,
+                  addGenerationPrompt: false,
+                  enableThinking: thinking,
+                  reasoningEffort: effort,
+                  tools: tools.isEmpty ? nil : tools.map(\.templateValue))
+                systemCount.set(try server.model().tokenizer.encode(renderedSystem).count)
+              }
+            }
             if !lastPromptTokens.isEmpty {
               var shared = 0
               while shared < min(lastPromptTokens.count, tokens.count),

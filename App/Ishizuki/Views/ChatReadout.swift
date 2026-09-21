@@ -209,11 +209,11 @@ struct TurnStatus: View {
       }
 
       // Only reading has an end to fill towards; a bar that cannot finish is a lie.
-      if case .reading(let fraction) = chat.activity {
-        ProgressView(value: fraction ?? 0)
-          .progressViewStyle(.linear)
-          .tint(.accentSoft)
-          .frame(height: 3)
+      if case .reading = chat.activity, let request = chat.inFlight {
+        ReadingBar(
+          read: request.prefilled,
+          total: request.prefillTotal,
+          instructions: chat.systemTokens)
       }
     }
     .textPlate(radius: 8)
@@ -249,5 +249,43 @@ struct TurnStatus: View {
     case .queued, .unknown:
       return ""
     }
+  }
+}
+
+/// The prefill, split where the instructions end. Yellow is the part that is the same every
+/// turn; blue is what this turn added. Seeing the two apart is the difference between a wait
+/// that looks arbitrary and one that explains itself.
+struct ReadingBar: View {
+  let read: Int
+  let total: Int
+  let instructions: Int
+
+  var body: some View {
+    GeometryReader { frame in
+      let width = frame.size.width
+      let scale = total > 0 ? width / CGFloat(total) : 0
+      let boundary = min(CGFloat(instructions), CGFloat(total)) * scale
+      let filled = min(CGFloat(read), CGFloat(total)) * scale
+
+      ZStack(alignment: .leading) {
+        Rectangle()
+          .fill(.primary.opacity(0.09))
+        // Where the instructions end, marked whether or not they have been read yet.
+        Rectangle()
+          .fill(Color.instructing.opacity(0.18))
+          .frame(width: boundary)
+        HStack(spacing: 0) {
+          Rectangle()
+            .fill(Color.instructing)
+            .frame(width: min(filled, boundary))
+          Rectangle()
+            .fill(Color.accentSoft)
+            .frame(width: max(0, filled - boundary))
+        }
+      }
+      .clipShape(.capsule)
+    }
+    .frame(height: 4)
+    .animation(.easeOut(duration: 0.15), value: read)
   }
 }

@@ -124,6 +124,10 @@ final class ChatController {
 
   var isGenerating: Bool { inFlight?.phase == .decode }
 
+  /// The instructions' share of the prompt, so the reading bar can show what is the same every
+  /// turn and what is this turn's own.
+  var systemTokens: Int { engine?.systemTokens ?? 0 }
+
   /// What the turn is doing, taken from the phase rather than guessed at. Writing used to be
   /// what the status line said whenever it knew nothing, which is how it came to say Writing
   /// through an entire prefill.
