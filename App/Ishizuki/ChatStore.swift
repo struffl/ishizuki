@@ -22,6 +22,8 @@ struct SavedChat: Codable, Identifiable, Equatable {
   /// The tokens of this conversation's last prompt. Kept so the archives holding its prefix
   /// can be found again: an archive belongs to a chat when the chat's prompt begins with it.
   var promptTokens: [Int] = []
+  /// A title someone typed is never overwritten by one that was written for them.
+  var titleIsCustom = false
 
   init(
     id: UUID = UUID(), title: String = "New chat", workspace: String? = nil,

@@ -73,7 +73,8 @@ struct ChatView: View {
             HStack(spacing: 8) {
               ChatRowView(
                 row: row, mono: mono, size: fontSize,
-                live: chat.isResponding && row.id == chat.rows.last?.id)
+                live: chat.isResponding && row.id == chat.rows.last?.id,
+                caption: chat.captioner.caption(for: row.id))
               RowCost(meta: chat.meta(for: row))
                 .frame(width: gutter, alignment: .leading)
                 .opacity(reveal / gutter)
@@ -200,6 +201,8 @@ struct ChatRowView: View {
   /// The row the model is writing into right now, which opens itself so the thinking can be
   /// watched rather than waited out.
   var live = false
+  /// What the system model made of this, when it has had a look.
+  var caption: String?
 
   @State private var expanded = false
 
@@ -266,8 +269,10 @@ struct ChatRowView: View {
           Text(title)
             .font(.system(size: 10, weight: .medium, design: .monospaced))
           if !open {
-            Text(summary(of: body))
-              .font(.system(size: 10, design: .monospaced))
+            Text(caption ?? summary(of: body))
+              .font(
+                caption == nil
+                  ? .system(size: 10, design: .monospaced) : .system(size: 10))
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }

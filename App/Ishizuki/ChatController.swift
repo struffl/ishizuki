@@ -102,6 +102,7 @@ final class ChatController {
   private(set) var chats: [SavedChat] = []
   private(set) var current: SavedChat
 
+  let captioner = Captioner()
   private let store = ChatStore()
   private let defaults = UserDefaults.standard
   private weak var server: ServerController?
@@ -147,7 +148,10 @@ final class ChatController {
   func rename(_ chat: SavedChat, to title: String) {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
-    update(chat.id) { $0.title = trimmed }
+    update(chat.id) {
+      $0.title = trimmed
+      $0.titleIsCustom = true
+    }
     store.save(chats.first { $0.id == chat.id } ?? current)
   }
 
@@ -195,9 +199,10 @@ final class ChatController {
     if let tokens = engine?.lastPromptTokens, !tokens.isEmpty {
       current.promptTokens = tokens
     }
-    if current.title == "New chat", let derived = SavedChat.title(from: transcript) {
+    if !current.titleIsCustom, let derived = SavedChat.title(from: transcript) {
       current.title = derived
     }
+    captionTurn()
     let saved = current
     update(saved.id) { $0 = saved }
     chats.sort { $0.updated > $1.updated }
@@ -490,6 +495,33 @@ final class ChatController {
       meta[id] = record
     }
     rowsThisTurn.removeAll()
+  }
+
+  /// Captions are asked for once the turn has settled, so the system model is not being asked
+  /// to describe a sentence that is still being written.
+  private func captionTurn() {
+    for row in transcriptRows {
+      switch row.kind {
+      case .reasoning:
+        captioner.request(row.id, text: row.text, as: .thought)
+      case .toolCall(let name):
+        captioner.request(row.id, text: row.text, as: .command(tool: name))
+      default:
+        continue
+      }
+    }
+    guard !current.titleIsCustom else { return }
+    let said = transcriptRows
+      .filter { if case .prompt = $0.kind { true } else { false } }
+      .map(\.text)
+      .joined(separator: " ")
+    let chatID = current.id
+    let key = "title-\(chatID.uuidString)"
+    captioner.request(key, text: said, as: .conversation) { [weak self] written in
+      guard let self, self.current.id == chatID, !self.current.titleIsCustom else { return }
+      self.update(chatID) { $0.title = written }
+      self.store.save(self.current)
+    }
   }
 
   func saveEffort() {
