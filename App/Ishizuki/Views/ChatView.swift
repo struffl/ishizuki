@@ -251,7 +251,7 @@ struct ChatRowView: View {
   @ViewBuilder private func disclosure(
     title: String, icon: String, tint: Color, body: String, monospaced: Bool
   ) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 2) {
       Button {
         expanded.toggle()
       } label: {
@@ -274,12 +274,14 @@ struct ChatRowView: View {
       }
       .buttonStyle(.plain)
 
-      if open {
+      if open, !body.isEmpty {
         Text(body)
           .font(monospaced ? mono : .system(size: size - 1))
           .foregroundStyle(.primary.opacity(0.85))
           .textSelection(.enabled)
-          .textPlate(radius: 8)
+          .textPlate(radius: 8, horizontal: 9, vertical: 5)
+          // Indented to sit under its own title rather than beside it.
+          .padding(.leading, 15)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

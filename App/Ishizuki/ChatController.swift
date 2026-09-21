@@ -416,10 +416,11 @@ final class ChatController {
               text: call.arguments.jsonString))
         }
       case .toolOutput(let output):
-        rows.append(
-          Row(
-            id: output.id, kind: .toolOutput(name: output.toolName),
-            text: text(output.segments)))
+        let body = text(output.segments)
+        if !body.isEmpty {
+          rows.append(
+            Row(id: output.id, kind: .toolOutput(name: output.toolName), text: body))
+        }
       @unknown default:
         continue
       }
