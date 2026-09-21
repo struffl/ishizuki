@@ -76,7 +76,6 @@ struct MarkdownText: View {
         }
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -93,7 +92,6 @@ struct ProseText: View {
         rendered(raw)
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder private func rendered(_ raw: String) -> some View {

@@ -27,6 +27,16 @@ final class ChatController {
 
       /// Everything the model had to read before it could answer, which is what the token
       /// count on a prompt row is explaining.
+      /// Whether a following entry of this kind is a continuation of the same row rather than
+      /// a new one. Only the streamed prose continues; a second tool call is its own row.
+      func joins(_ next: Kind) -> Bool {
+        switch (self, next) {
+        case (.reasoning, .reasoning), (.answer, .answer): true
+        case (.toolOutput(let a), .toolOutput(let b)): a == b
+        default: false
+        }
+      }
+
       var isInput: Bool {
         switch self {
         case .system, .prompt, .steer, .toolOutput: true
@@ -395,27 +405,31 @@ final class ChatController {
     defaults.set(effort.rawValue, forKey: "chat.effort")
   }
 
+  /// Read straight through, appending rather than replacing. The session is free to split a
+  /// streamed reply across as many entries as it likes, so consecutive entries of the same
+  /// kind are joined into one row: whatever was generated is shown, however it arrived.
   private static func rows(from transcript: Transcript) -> [Row] {
     var rows: [Row] = []
+
+    func add(_ id: String, _ kind: Row.Kind, _ text: String) {
+      guard !text.isEmpty else { return }
+      if let last = rows.last, last.kind.joins(kind) {
+        rows[rows.count - 1].text += text
+        return
+      }
+      rows.append(Row(id: id, kind: kind, text: text))
+    }
+
     for entry in transcript {
       switch entry {
       case .instructions(let instructions):
-        let body = text(instructions.segments)
-        if !body.isEmpty {
-          rows.append(Row(id: instructions.id, kind: .system, text: body))
-        }
+        add(instructions.id, .system, text(instructions.segments))
       case .prompt(let prompt):
-        rows.append(Row(id: prompt.id, kind: .prompt, text: text(prompt.segments)))
+        add(prompt.id, .prompt, text(prompt.segments))
       case .response(let response):
-        let body = text(response.segments)
-        if !body.isEmpty {
-          rows.append(Row(id: response.id, kind: .answer, text: body))
-        }
+        add(response.id, .answer, text(response.segments))
       case .reasoning(let reasoning):
-        let body = text(reasoning.segments)
-        if !body.isEmpty {
-          rows.append(Row(id: reasoning.id, kind: .reasoning, text: body))
-        }
+        add(reasoning.id, .reasoning, text(reasoning.segments))
       case .toolCalls(let calls):
         for call in calls {
           rows.append(
@@ -424,11 +438,7 @@ final class ChatController {
               text: call.arguments.jsonString))
         }
       case .toolOutput(let output):
-        let body = text(output.segments)
-        if !body.isEmpty {
-          rows.append(
-            Row(id: output.id, kind: .toolOutput(name: output.toolName), text: body))
-        }
+        add(output.id, .toolOutput(name: output.toolName), text(output.segments))
       @unknown default:
         continue
       }
@@ -436,8 +446,6 @@ final class ChatController {
     return rows
   }
 
-  /// Thinking arrives with runs of blank lines in it, which read as a hole in the row rather
-  /// than as breathing room. One blank line is a paragraph; more is an accident.
   private static func text(_ segments: [Transcript.Segment]) -> String {
     let joined =
       segments.compactMap { segment in
