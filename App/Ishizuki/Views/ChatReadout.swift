@@ -7,58 +7,64 @@
 import IshizukiKit
 import SwiftUI
 
-/// Two rings on a plate of glass. The empty part is the point as much as the full part, so the
-/// track is drawn to be seen at nothing per cent and the ring grows into it.
+/// Two rings on a disc of glass, veiled to the same lightness as the plates beside it: bare
+/// glass renders as the system's own grey, which next to a veiled pill reads as a dark blot.
+/// The empty part matters as much as the full part, so both tracks are drawn faintly at nought
+/// per cent and the rings grow into them.
 struct ContextDial: View {
   var used: Int
   var ceiling: Int
   var prefill: Double?
   var decoding: Bool
 
+  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
+
   private var fraction: Double {
     ceiling > 0 ? min(1, Double(used) / Double(ceiling)) : 0
   }
 
   private var spent: Color {
-    fraction > 0.9 ? .orange : .primary.opacity(0.65)
+    fraction > 0.9 ? .orange : .primary.opacity(0.4)
   }
 
   var body: some View {
     ZStack {
       Circle()
+        .fill(.clear)
         .glassEffect(.regular, in: .circle)
-        .frame(width: 52, height: 52)
+        .overlay { Circle().fill(.background.opacity(veil)) }
+        .frame(width: 46, height: 46)
 
       Circle()
-        .stroke(.primary.opacity(0.14), lineWidth: 5)
-        .frame(width: 38, height: 38)
+        .stroke(.primary.opacity(0.08), lineWidth: 4)
+        .frame(width: 32, height: 32)
       Circle()
         .trim(from: 0, to: fraction)
-        .stroke(spent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+        .stroke(spent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
         .rotationEffect(.degrees(-90))
-        .frame(width: 38, height: 38)
+        .frame(width: 32, height: 32)
 
       // The outer track is always there so the turn's progress has somewhere to appear.
       Circle()
-        .stroke(.primary.opacity(0.1), lineWidth: 2.5)
-        .frame(width: 50, height: 50)
+        .stroke(.primary.opacity(0.07), lineWidth: 2.5)
+        .frame(width: 43, height: 43)
       if let prefill {
         Circle()
           .trim(from: 0, to: max(0.015, min(1, prefill)))
           .stroke(Color.accentSoft, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
           .rotationEffect(.degrees(-90))
-          .frame(width: 50, height: 50)
+          .frame(width: 43, height: 43)
       } else if decoding {
         Circle()
           .stroke(Color.generating, lineWidth: 2.5)
-          .frame(width: 50, height: 50)
+          .frame(width: 43, height: 43)
       }
 
       Text(ReadoutFormat.percent(fraction))
-        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .foregroundStyle(.primary)
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .foregroundStyle(.secondary)
     }
-    .frame(width: 58, height: 58)
+    .frame(width: 50, height: 50)
     .animation(.easeOut(duration: 0.2), value: fraction)
     .animation(.easeOut(duration: 0.2), value: prefill)
     .help(helpText)
