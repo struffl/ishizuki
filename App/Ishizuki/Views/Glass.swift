@@ -51,32 +51,45 @@ extension Color {
 
 /// A message bubble with a tail on the side it came from. Only the two ends of the
 /// conversation get one; a thought or a tool call is not something anybody said.
+///
+/// Drawn as one continuous outline rather than a rounded rectangle with a tail added to it.
+/// The first attempt did the latter, and the body's own corner cut across the tail and left a
+/// spur hanging off the bottom of every bubble.
 struct Bubble: Shape {
   var mine: Bool
   var radius: CGFloat = 13
-  var tail: CGFloat = 7
+  var tail: CGFloat = 6
 
   func path(in rect: CGRect) -> Path {
-    let body =
-      mine
-      ? CGRect(x: rect.minX, y: rect.minY, width: rect.width - tail, height: rect.height)
-      : CGRect(x: rect.minX + tail, y: rect.minY, width: rect.width - tail, height: rect.height)
+    let r = min(radius, min(rect.width, rect.height) / 2)
+    let body = CGRect(
+      x: rect.minX, y: rect.minY, width: max(0, rect.width - tail), height: rect.height)
+    let (left, top, right, bottom) = (body.minX, body.minY, body.maxX, body.maxY)
 
-    var path = Path(roundedRect: body, cornerRadius: radius)
-
-    // The tail hooks off the bottom corner, the way a spoken bubble does.
-    let edge = mine ? body.maxX : body.minX
-    let tip = mine ? rect.maxX : rect.minX
-    let base = body.maxY - radius * 0.7
-    path.move(to: CGPoint(x: edge, y: base))
+    var path = Path()
+    path.move(to: CGPoint(x: left + r, y: top))
+    path.addLine(to: CGPoint(x: right - r, y: top))
     path.addQuadCurve(
-      to: CGPoint(x: tip, y: body.maxY),
-      control: CGPoint(x: edge, y: body.maxY - radius * 0.1))
+      to: CGPoint(x: right, y: top + r), control: CGPoint(x: right, y: top))
+    path.addLine(to: CGPoint(x: right, y: bottom - r * 0.85))
+    // Out to the tip and back in along the bottom edge, so the tail is part of the outline.
     path.addQuadCurve(
-      to: CGPoint(x: edge, y: body.maxY - radius * 0.25),
-      control: CGPoint(x: edge + (mine ? -2 : 2), y: body.maxY))
+      to: CGPoint(x: right + tail, y: bottom),
+      control: CGPoint(x: right, y: bottom - r * 0.15))
+    path.addQuadCurve(
+      to: CGPoint(x: right - r * 0.85, y: bottom),
+      control: CGPoint(x: right - r * 0.2, y: bottom))
+    path.addLine(to: CGPoint(x: left + r, y: bottom))
+    path.addQuadCurve(
+      to: CGPoint(x: left, y: bottom - r), control: CGPoint(x: left, y: bottom))
+    path.addLine(to: CGPoint(x: left, y: top + r))
+    path.addQuadCurve(to: CGPoint(x: left + r, y: top), control: CGPoint(x: left, y: top))
     path.closeSubpath()
-    return path
+
+    guard !mine else { return path }
+    // The model's side is the same shape seen in a mirror.
+    return path.applying(
+      CGAffineTransform(translationX: rect.width, y: 0).scaledBy(x: -1, y: 1))
   }
 }
 

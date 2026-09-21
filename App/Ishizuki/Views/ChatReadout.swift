@@ -195,17 +195,22 @@ struct ChatReadoutBar: View {
 struct TurnStatus: View {
   @Bindable var chat: ChatController
 
+  /// The model's own bubble, still being written into: a label, the dots that say it is going,
+  /// and for reading the bar it is filling. Sized to its contents rather than to the window,
+  /// so it reads as the next message arriving rather than as a banner.
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(spacing: 6) {
         Text(label)
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(tint)
-        AnimatedDots(size: 3.5, tint: tint)
-        Spacer()
-        Text(detail)
-          .font(.system(size: 10, design: .monospaced))
-          .foregroundStyle(.secondary)
+        AnimatedDots(size: 4, tint: tint)
+        if !detail.isEmpty {
+          Text(detail)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 2)
+        }
       }
 
       // Only reading has an end to fill towards; a bar that cannot finish is a lie.
@@ -214,9 +219,11 @@ struct TurnStatus: View {
           read: request.prefilled,
           total: request.prefillTotal,
           instructions: chat.systemTokens)
+          .frame(width: 168)
       }
     }
-    .textPlate(radius: 8)
+    .textPlate(Bubble(mine: false))
+    .padding(.trailing, 40)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
