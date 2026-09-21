@@ -267,7 +267,8 @@ public final class APIServer: @unchecked Sendable {
     isCancelled: (@Sendable () -> Bool)? = nil,
     onText: ((String) -> Void)? = nil,
     onReasoning: ((String) -> Void)? = nil,
-    onToolStanza: (() -> Void)? = nil
+    onToolStanza: (() -> Void)? = nil,
+    onToolText: ((String) -> Void)? = nil
   ) throws -> (
     parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool
   ) {
@@ -384,6 +385,7 @@ public final class APIServer: @unchecked Sendable {
         if let thought = piece.reasoning { onReasoning?(thought) }
         if let visible = piece.content { onText?(visible) }
         if piece.startedToolCall { onToolStanza?() }
+        if let command = piece.toolText { onToolText?(command) }
         return true
       }
     }
@@ -391,6 +393,7 @@ public final class APIServer: @unchecked Sendable {
       let tail = filter.flush()
       if let thought = tail.reasoning { onReasoning?(thought) }
       if let visible = tail.content { onText?(visible) }
+      if let command = tail.toolText { onToolText?(command) }
     }
     if let lease { sessions.commit(lease, generated: result.tokens) }
     applyBudget(budget.notePoolPressure(cacheMemory: Memory.cacheMemory))
@@ -915,28 +918,34 @@ struct StreamFilter {
   struct Output {
     var reasoning: String?
     var content: String?
-    /// True on the one push where the model opens a tool call, so a caller can say the turn
-    /// has stopped answering and started writing a command.
+    /// The tool call as it is being written. Kept rather than dropped so the wait between a
+    /// thought ending and a call landing has something in it.
+    var toolText: String?
+    /// True on the one push where the model opens a tool call.
     var startedToolCall = false
 
-    var isEmpty: Bool { reasoning == nil && content == nil }
+    var isEmpty: Bool { reasoning == nil && content == nil && toolText == nil }
+  }
+
+  private enum Phase {
+    case thinking
+    case answer
+    case tool
   }
 
   private var buffer = ""
-  private var inThinking: Bool
-  private var stopped = false
+  private var phase: Phase
   private let guardLength = 12
 
   init(thinking: Bool) {
-    self.inThinking = thinking
+    self.phase = thinking ? .thinking : .answer
   }
 
   mutating func push(_ fragment: String) -> Output {
-    guard !stopped else { return Output() }
     buffer += fragment
     var out = Output()
 
-    if inThinking {
+    if phase == .thinking {
       guard let end = buffer.range(of: "</think>") else {
         out.reasoning = takeGuarded()
         return out
@@ -944,26 +953,35 @@ struct StreamFilter {
       let thought = String(buffer[buffer.startIndex..<end.lowerBound])
       if !thought.isEmpty { out.reasoning = thought }
       buffer = String(buffer[end.upperBound...])
-      inThinking = false
+      phase = .answer
     }
 
-    if let call = buffer.range(of: "<tool_call>") {
-      let visible = String(buffer[buffer.startIndex..<call.lowerBound])
-      buffer = ""
-      stopped = true
-      out.startedToolCall = true
-      if !visible.isEmpty { out.content = visible }
-      return out
+    if phase == .answer {
+      if let call = buffer.range(of: "<tool_call>") {
+        let visible = String(buffer[buffer.startIndex..<call.lowerBound])
+        if !visible.isEmpty { out.content = visible }
+        buffer = String(buffer[call.upperBound...])
+        phase = .tool
+        out.startedToolCall = true
+      } else {
+        out.content = takeGuarded()
+        return out
+      }
     }
-    out.content = takeGuarded()
+
+    out.toolText = takeGuarded()
     return out
   }
 
   mutating func flush() -> Output {
-    guard !stopped, !buffer.isEmpty else { return Output() }
+    guard !buffer.isEmpty else { return Output() }
     let rest = buffer
     buffer = ""
-    return inThinking ? Output(reasoning: rest) : Output(content: rest)
+    switch phase {
+    case .thinking: return Output(reasoning: rest)
+    case .answer: return Output(content: rest)
+    case .tool: return Output(toolText: rest)
+    }
   }
 
   private mutating func takeGuarded() -> String? {

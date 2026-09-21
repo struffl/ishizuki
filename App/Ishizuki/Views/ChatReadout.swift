@@ -213,6 +213,15 @@ struct TurnStatus: View {
         }
       }
 
+      // The command as it is written, so the wait for it is not a blank one.
+      if case .writingCommand = chat.activity, !chat.writingCommand.isEmpty {
+        Text(chat.writingCommand)
+          .font(.system(size: 10, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+          .frame(maxWidth: 320, alignment: .leading)
+      }
+
       // Only reading has an end to fill towards; a bar that cannot finish is a lie.
       if case .reading = chat.activity, let request = chat.inFlight {
         ReadingBar(

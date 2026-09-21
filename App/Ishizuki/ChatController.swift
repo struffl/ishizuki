@@ -128,6 +128,14 @@ final class ChatController {
   /// turn and what is this turn's own.
   var systemTokens: Int { engine?.systemTokens ?? 0 }
 
+  /// The command being written, for the gap between a thought ending and a call landing.
+  var writingCommand: String {
+    (engine?.writingCommand ?? "")
+      .replacing(/<\/?(function|parameter)[^>]*>/, with: " ")
+      .replacing(/\s+/, with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   /// What the turn is doing, taken from the phase rather than guessed at. Writing used to be
   /// what the status line said whenever it knew nothing, which is how it came to say Writing
   /// through an entire prefill.

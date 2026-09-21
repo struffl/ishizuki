@@ -11,10 +11,12 @@ struct StreamFilterTests {
   private struct Drain {
     var reasoning = ""
     var content = ""
+    var tool = ""
 
     mutating func take(_ output: StreamFilter.Output) {
       if let thought = output.reasoning { reasoning += thought }
       if let visible = output.content { content += visible }
+      if let command = output.toolText { tool += command }
     }
   }
 
@@ -73,6 +75,22 @@ struct StreamFilterTests {
     let drain = run(thinking: true, ["Still working it out and never finishing"])
     #expect(drain.content.isEmpty)
     #expect(drain.reasoning == "Still working it out and never finishing")
+  }
+
+  /// The gap between a thought ending and a call landing used to be blank, because the call's
+  /// own text was thrown away rather than handed over.
+  @Test("a tool call's text arrives as it is written")
+  func toolTextStreams() {
+    let drain = run(
+      thinking: true,
+      [
+        "Checking the directory first.", "</think>", "<tool_call>",
+        "<function=shell><parameter=command>ls -la", " Documents</parameter>",
+        "</function></tool_call>",
+      ])
+    #expect(drain.reasoning == "Checking the directory first.")
+    #expect(drain.tool.contains("ls -la Documents"))
+    #expect(drain.content.isEmpty)
   }
 
   @Test("with thinking off, every fragment is the answer")

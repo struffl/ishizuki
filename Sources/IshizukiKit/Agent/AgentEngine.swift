@@ -61,6 +61,26 @@ public final class AgentEngine: @unchecked Sendable {
     }
   }
 
+  private final class Text: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = ""
+    var value: String {
+      lock.lock()
+      defer { lock.unlock() }
+      return stored
+    }
+    func append(_ more: String) {
+      lock.lock()
+      stored += more
+      lock.unlock()
+    }
+    func clear() {
+      lock.lock()
+      stored = ""
+      lock.unlock()
+    }
+  }
+
   private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var stored = 0
@@ -83,11 +103,16 @@ public final class AgentEngine: @unchecked Sendable {
 
   public var isWritingToolCall: Bool { toolStanza.isRaised }
 
+  /// The tool call as it is being written, so the window can show it arriving rather than
+  /// leaving a gap between the thought that preceded it and the call itself.
+  public var writingCommand: String { commandText.value }
+
   /// The last turn's prompt, kept only to say how much of it the next one still agrees with.
   /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
   /// is not working, and the two look identical from the readout.
   private var lastPromptTokens: [Int] = []
   private let systemCount = Counter()
+  private let commandText = Text()
 
   /// How much of a prompt is the instructions and the tool schemas — the part that is the same
   /// every turn, and the part someone waiting on a first answer is mostly waiting for.
@@ -116,6 +141,7 @@ public final class AgentEngine: @unchecked Sendable {
   ) async throws -> AgentTurn {
     let cancel = Flag()
     toolStanza.lower()
+    commandText.clear()
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         server.generationQueue.async { [self] in
@@ -182,7 +208,8 @@ public final class AgentEngine: @unchecked Sendable {
               isCancelled: { cancel.isRaised },
               onText: onText.map { emit in { fragment in emit(fragment) } },
               onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } },
-              onToolStanza: { [toolStanza] in toolStanza.raise() })
+              onToolStanza: { [toolStanza] in toolStanza.raise() },
+              onToolText: { [commandText] fragment in commandText.append(fragment) })
             continuation.resume(
               returning: AgentTurn(
                 reasoning: outcome.parsed.reasoning,
