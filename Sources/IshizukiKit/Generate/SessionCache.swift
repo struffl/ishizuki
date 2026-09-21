@@ -52,6 +52,10 @@ public final class SessionCache: @unchecked Sendable {
   public private(set) var lastTrace = ""
   /// Rewind points that were asked for and refused, which is silent otherwise.
   public private(set) var refusedCheckpoints = 0
+  /// And ones that were taken, so a lookup that finds none can tell a point never taken from
+  /// one taken and then shed to stay inside the budget.
+  public private(set) var takenCheckpoints = 0
+  public private(set) var shedCheckpoints = 0
   public private(set) var hits = 0
   public private(set) var misses = 0
   public private(set) var branches = 0
@@ -127,8 +131,20 @@ public final class SessionCache: @unchecked Sendable {
 
     let coldestFirst = slots.filter { !$0.busy }.sorted { $0.lastUsed < $1.lastUsed }
 
+    // Thin before shedding, and keep the lowest point rather than the newest. The useful one
+    // is the highest point at or below where the next prompt parts ways, and since a prompt
+    // parts ways near its own end, that is the earliest of a turn's points — not the one
+    // taken after the reply, which is past the parting and can never be restored.
+    for slot in coldestFirst where slot.checkpoints.count > 1 {
+      guard total() > byteLimit else { return }
+      let kept = slot.checkpoints.first!
+      shedCheckpoints += slot.checkpoints.count - 1
+      slot.checkpoints = [kept]
+    }
+
     for slot in coldestFirst where !slot.checkpoints.isEmpty {
       guard total() > byteLimit else { return }
+      shedCheckpoints += slot.checkpoints.count
       slot.clearCheckpoints()
     }
 
@@ -192,7 +208,9 @@ public final class SessionCache: @unchecked Sendable {
     }
     lastTrace =
       trace.isEmpty
-      ? "no slots" : trace.joined(separator: " ") + " refused \(refusedCheckpoints)"
+      ? "no slots"
+      : trace.joined(separator: " ")
+        + " taken \(takenCheckpoints) shed \(shedCheckpoints) refused \(refusedCheckpoints)"
 
     for slot in slots where !slot.busy && slot.cache.kvConfig == kvConfig {
       let common = min(commonPrefixLength(slot.tokens, promptTokens), promptTokens.count - 1)
@@ -290,6 +308,7 @@ public final class SessionCache: @unchecked Sendable {
       return
     }
 
+    takenCheckpoints += 1
     let state = slot.cache.snapshot()
     slot.checkpoints.append(
       Checkpoint(

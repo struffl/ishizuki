@@ -362,7 +362,9 @@ public final class APIServer: @unchecked Sendable {
           }
         },
         onPrefilled: { [sessions = self.sessions] in
-          if let promptLease { sessions.checkpointPrompt(promptLease) }
+          if let promptLease, checkpointAt == nil {
+            sessions.checkpointPrompt(promptLease)
+          }
         },
         onProgress: { [stats = self.stats] progress in
           switch progress {
