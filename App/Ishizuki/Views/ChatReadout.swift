@@ -222,7 +222,7 @@ struct TurnStatus: View {
           .frame(width: 168)
       }
     }
-    .textPlate(Bubble(mine: false))
+    .glassBubble()
     .padding(.leading, 10)
     .padding(.trailing, 44)
     .frame(maxWidth: .infinity, alignment: .leading)

@@ -47,6 +47,11 @@ public final class SessionCache: @unchecked Sendable {
   private var slotCapacity: Int
   private let checkpointLimit: Int
   public private(set) var lastReusedTokens = 0
+  /// What the last lookup saw, so a miss can be read rather than guessed at: the slots that
+  /// were there, how much of each agreed with the prompt, and where their rewind points were.
+  public private(set) var lastTrace = ""
+  /// Rewind points that were asked for and refused, which is silent otherwise.
+  public private(set) var refusedCheckpoints = 0
   public private(set) var hits = 0
   public private(set) var misses = 0
   public private(set) var branches = 0
@@ -175,6 +180,20 @@ public final class SessionCache: @unchecked Sendable {
     // A slot is reusable two ways: the prompt continues it, or the prompt branches off it and
     // the slot can be rewound to a checkpoint at or before where they part.
     var best: (slot: Slot, reuse: Int, rewind: Checkpoint?)?
+    var trace: [String] = []
+    for slot in slots {
+      trace.append(
+        "[held \(slot.tokens.count)"
+          + (slot.busy ? " busy" : "")
+          + (slot.cache.kvConfig == kvConfig ? "" : " other-kv")
+          + " offset \(slot.cache.offset)"
+          + " agrees \(min(commonPrefixLength(slot.tokens, promptTokens), promptTokens.count - 1))"
+          + " points \(slot.checkpoints.map(\.tokens))]")
+    }
+    lastTrace =
+      trace.isEmpty
+      ? "no slots" : trace.joined(separator: " ") + " refused \(refusedCheckpoints)"
+
     for slot in slots where !slot.busy && slot.cache.kvConfig == kvConfig {
       let common = min(commonPrefixLength(slot.tokens, promptTokens), promptTokens.count - 1)
       guard common > 0 else { continue }
@@ -262,7 +281,14 @@ public final class SessionCache: @unchecked Sendable {
     guard checkpointLimit > 0, position > 0,
       position == slot.cache.offset,
       slot.checkpoints.last?.tokens != position
-    else { return }
+    else {
+      // A point asked for and not taken is the difference between a cache that cannot help
+      // and a cache that was never given the chance.
+      if checkpointLimit > 0, position > 0, position != slot.cache.offset {
+        refusedCheckpoints += 1
+      }
+      return
+    }
 
     let state = slot.cache.snapshot()
     slot.checkpoints.append(

@@ -94,6 +94,26 @@ struct Bubble: Shape {
 }
 
 extension View {
+  /// A bubble's padding plus the tail's own width on the side it hangs off. The shape takes
+  /// the tail out of the rect it is given, so without this the text loses exactly as much room
+  /// as the tail occupies and its last letter ends up against the edge.
+  func bubble(mine: Bool, horizontal: CGFloat = 13, vertical: CGFloat = 8) -> some View {
+    let shape = Bubble(mine: mine)
+    return padding(.vertical, vertical)
+      .padding(mine ? .leading : .trailing, horizontal)
+      .padding(mine ? .trailing : .leading, horizontal + shape.tail)
+      .background(Color.mine.opacity(mine ? 1 : 0), in: shape)
+  }
+
+  /// The same, cut from glass, for the side that is not a solid colour.
+  func glassBubble(horizontal: CGFloat = 13, vertical: CGFloat = 8) -> some View {
+    let shape = Bubble(mine: false)
+    return padding(.vertical, vertical)
+      .padding(.trailing, horizontal)
+      .padding(.leading, horizontal + shape.tail)
+      .glassEffect(.clear, in: shape)
+  }
+
   /// A plate cut to a shape of its own, for the bubbles that are not rectangles.
   func textPlate(
     _ shape: some Shape, horizontal: CGFloat = 12, vertical: CGFloat = 8

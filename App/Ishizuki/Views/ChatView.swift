@@ -214,9 +214,7 @@ struct ChatRowView: View {
         .font(.system(size: size))
         .foregroundStyle(.white)
         .textSelection(.enabled)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.mine, in: Bubble(mine: true))
+        .bubble(mine: true)
         .padding(.trailing, 10)
         .padding(.leading, 44)
         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -226,7 +224,7 @@ struct ChatRowView: View {
 
     case .answer:
       MarkdownText(text: row.text, mono: mono, size: size)
-        .textPlate(Bubble(mine: false))
+        .glassBubble()
         .padding(.leading, 10)
         .padding(.trailing, 44)
         .frame(maxWidth: .infinity, alignment: .leading)

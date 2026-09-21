@@ -317,9 +317,9 @@ public final class APIServer: @unchecked Sendable {
       if prepared.recycled {
         applyBudget(budget.notePrefixEviction())
       }
-      if reused > 0 {
-        log?("cache: reused \(reused) of \(promptTokens.count) prompt tokens")
-      }
+      log?(
+        "cache: reused \(reused) of \(promptTokens.count) prompt tokens "
+          + sessions.lastTrace)
     }
     defer { if let lease { sessions.release(lease) } }
     stats.update(id) { record in
