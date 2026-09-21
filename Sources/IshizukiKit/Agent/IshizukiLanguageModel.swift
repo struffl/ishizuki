@@ -80,15 +80,38 @@ public struct IshizukiExecutor: LanguageModelExecutor {
     }
 
     var streamedReasoning = false
-    for await piece in pieces {
-      switch piece {
-      case .content(let text):
-        await channel.send(.response(action: .appendText(text, tokenCount: 0)))
-      case .reasoning(let text):
+    var content = ""
+    var reasoning = ""
+    var lastFlush = ContinuousClock.now
+
+    // Every send crosses into the session and has it rebuild its transcript, which at thirty
+    // fragments a second it cannot keep up with — the window ends up showing four characters
+    // of an answer that is a hundred tokens along. Fragments are gathered and handed over in
+    // batches instead, which is the same text at a tenth of the traffic.
+    func flush() async {
+      if !reasoning.isEmpty {
         streamedReasoning = true
-        await channel.send(.reasoning(action: .appendText(text, tokenCount: 0)))
+        await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
+        reasoning = ""
+      }
+      if !content.isEmpty {
+        await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+        content = ""
       }
     }
+
+    for await piece in pieces {
+      switch piece {
+      case .content(let text): content += text
+      case .reasoning(let text): reasoning += text
+      }
+      let now = ContinuousClock.now
+      if lastFlush.duration(to: now) > .milliseconds(60) {
+        await flush()
+        lastFlush = now
+      }
+    }
+    await flush()
 
     let outcome = try await turn.value
 
