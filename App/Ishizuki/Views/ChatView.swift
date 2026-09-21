@@ -23,7 +23,7 @@ struct ChatView: View {
       ChatReadoutBar(chat: chat, controller: controller)
       composer
     }
-    .containerBackground(.ultraThinMaterial, for: .window)
+    .windowBackdrop()
   }
 
   @ViewBuilder private var header: some View {
@@ -110,7 +110,7 @@ struct ChatView: View {
         .disabled(chat.isResponding ? chat.draft.isEmpty : !chat.canSend)
     }
     .padding(12)
-    .glassEffect(.clear, in: .rect(cornerRadius: 0))
+    .background(.white.opacity(0.04))
   }
 
   private var mono: Font {

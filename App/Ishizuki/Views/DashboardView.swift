@@ -42,7 +42,7 @@ struct DashboardView: View {
     }
     .frame(minWidth: 680, minHeight: 560)
     .scrollContentBackground(.hidden)
-    .containerBackground(.ultraThinMaterial, for: .window)
+    .windowBackdrop()
   }
 
   @ViewBuilder private var readout: some View {

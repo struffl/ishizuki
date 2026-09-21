@@ -16,6 +16,20 @@ extension Color {
     })
 }
 
+extension View {
+  /// The window's own backdrop, in one place so the dashboard and the chat cannot drift and so
+  /// how clear the app reads is a single value to turn. Clear glass rather than a material:
+  /// a material's blur is what reads as frost.
+  func windowBackdrop() -> some View {
+    containerBackground(for: .window) {
+      Rectangle()
+        .fill(.clear)
+        .glassEffect(.clear, in: .rect(cornerRadius: 0))
+        .ignoresSafeArea()
+    }
+  }
+}
+
 struct GlassCard<Content: View>: View {
   var padding: CGFloat = 12
   var radius: CGFloat = 14
@@ -31,14 +45,14 @@ struct GlassCard<Content: View>: View {
       .glassEffect(.clear, in: .rect(cornerRadius: radius))
       .overlay {
         RoundedRectangle(cornerRadius: radius)
-          .strokeBorder(.white.opacity(focused ? 0.18 : 0.06), lineWidth: 1)
+          .strokeBorder(.white.opacity(focused ? 0.12 : 0.05), lineWidth: 0.5)
       }
       .shadow(
-        color: .black.opacity(focused ? 0.16 : 0.05),
-        radius: focused ? 10 : 4,
-        y: focused ? 3 : 1
+        color: .black.opacity(focused ? 0.12 : 0.04),
+        radius: focused ? 8 : 3,
+        y: focused ? 2 : 1
       )
-      .opacity(focused ? 1 : 0.82)
+      .opacity(focused ? 1 : 0.94)
       .animation(.easeOut(duration: 0.18), value: focused)
   }
 }
