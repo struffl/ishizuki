@@ -82,6 +82,7 @@ public struct IshizukiExecutor: LanguageModelExecutor {
     var streamedReasoning = false
     var content = ""
     var reasoning = ""
+    var streamed = 0
     var lastFlush = ContinuousClock.now
 
     // Every send crosses into the session and has it rebuild its transcript, which at thirty
@@ -95,6 +96,7 @@ public struct IshizukiExecutor: LanguageModelExecutor {
         reasoning = ""
       }
       if !content.isEmpty {
+        streamed += content.count
         await channel.send(.response(action: .appendText(content, tokenCount: 0)))
         content = ""
       }
@@ -115,9 +117,25 @@ public struct IshizukiExecutor: LanguageModelExecutor {
 
     let outcome = try await turn.value
 
-    // Only when nothing arrived live, so a stream and the final parse cannot both land.
-    if !streamedReasoning, let reasoning = outcome.reasoning, !reasoning.isEmpty {
-      await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
+    // Whatever the stream did or did not manage to deliver, the parsed result is the whole of
+    // what was generated, so the turn ends by replacing the streamed text with it. Streaming
+    // is for watching; this is what makes the transcript right.
+    if !outcome.content.isEmpty {
+      await channel.send(
+        .response(action: .replaceTextSegment(outcome.content, tokenCount: 0)))
+    }
+    if let reasoning = outcome.reasoning, !reasoning.isEmpty {
+      let action: LanguageModelExecutorGenerationChannel.Reasoning.Action =
+        streamedReasoning
+        ? .replaceTextSegment(reasoning, tokenCount: 0)
+        : .appendText(reasoning, tokenCount: 0)
+      await channel.send(.reasoning(action: action))
+    }
+
+    if streamed != outcome.content.count {
+      engine.server.log?(
+        "stream: delivered \(streamed) of \(outcome.content.count) characters, "
+          + "replaced with the parsed reply")
     }
 
     for call in outcome.toolCalls {
