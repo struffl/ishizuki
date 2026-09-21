@@ -29,6 +29,8 @@ final class ServerController {
   let library = ModelLibrary()
 
   private var server: APIServer?
+  /// Made once per loaded server, so the chat borrows the same weights the port is serving.
+  private(set) var engine: AgentEngine?
   private var idleStore: PrefixStore?
   private var ticker: Task<Void, Never>?
   private let logLimit = 200
@@ -118,6 +120,7 @@ final class ServerController {
         }
         try server.listen(port: port)
         self.server = server
+        self.engine = AgentEngine(server: server)
         self.phase = .running
         self.startTicking()
       } catch {
@@ -131,6 +134,7 @@ final class ServerController {
     ticker = nil
     server?.stop()
     server = nil
+    engine = nil
     readout = nil
     phase = .stopped
   }

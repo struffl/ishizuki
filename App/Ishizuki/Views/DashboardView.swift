@@ -7,21 +7,26 @@ import IshizukiKit
 import SwiftUI
 
 struct DashboardView: View {
-  enum Tab: String { case server, models, tools, settings }
+  enum Tab: String { case chat, server, models, tools, settings }
 
   @Bindable var controller: ServerController
   @State private var runner = JobRunner()
   @State private var quantize = QuantizeController()
   @State private var bench = BenchController()
   @State private var tab: Tab
+  var chat: ChatController
 
-  init(controller: ServerController) {
+  init(controller: ServerController, chat: ChatController) {
     self.controller = controller
-    _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .server)
+    self.chat = chat
+    _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .chat)
   }
 
   var body: some View {
     TabView(selection: $tab) {
+      ChatView(chat: chat, controller: controller)
+        .tabItem { Label("Chat", systemImage: "bubble.left.and.text.bubble.right") }
+        .tag(Tab.chat)
       ScrollView { readout.padding(16) }
         .tabItem { Label("Server", systemImage: "gauge.with.dots.needle.33percent") }
         .tag(Tab.server)

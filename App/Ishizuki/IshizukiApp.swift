@@ -8,7 +8,14 @@ import SwiftUI
 
 @main
 struct IshizukiApp: App {
-  @State private var controller = ServerController()
+  @State private var controller: ServerController
+  @State private var chat: ChatController
+
+  init() {
+    let controller = ServerController()
+    _controller = State(initialValue: controller)
+    _chat = State(initialValue: ChatController(server: controller))
+  }
 
   var body: some Scene {
     MenuBarExtra {
@@ -20,7 +27,7 @@ struct IshizukiApp: App {
     .menuBarExtraStyle(.window)
 
     Window("Ishizuki", id: "dashboard") {
-      DashboardView(controller: controller)
+      DashboardView(controller: controller, chat: chat)
         .tint(.accentSoft)
         .task { controller.bootstrap() }
         .onAppear { NSApp.setActivationPolicy(.regular) }
@@ -28,5 +35,15 @@ struct IshizukiApp: App {
     }
     .defaultSize(width: 760, height: 640)
     .defaultLaunchBehavior(.presented)
+
+    // The same conversation, given room: a coding session wants more than a tab.
+    Window("Chat", id: "chat") {
+      ChatView(chat: chat, controller: controller)
+        .tint(.accentSoft)
+        .task { controller.bootstrap() }
+        .onAppear { NSApp.setActivationPolicy(.regular) }
+    }
+    .defaultSize(width: 720, height: 780)
+    .keyboardShortcut("j", modifiers: [.command, .shift])
   }
 }
