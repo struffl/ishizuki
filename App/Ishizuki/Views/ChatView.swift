@@ -127,6 +127,28 @@ struct ChatRowView: View {
         .textPlate(radius: 12)
         .frame(maxWidth: .infinity, alignment: .trailing)
 
+    // Steering is not an interruption, and saying so is the difference between a message that
+    // looks ignored and one that is plainly waiting its turn.
+    case .steer:
+      VStack(alignment: .trailing, spacing: 3) {
+        Text(row.text)
+          .font(.system(size: size))
+          .textSelection(.enabled)
+        HStack(spacing: 4) {
+          Image(systemName: "arrow.turn.down.right")
+            .font(.system(size: 8))
+          Text("queued for the next turn")
+            .font(.system(size: 9))
+        }
+        .foregroundStyle(.secondary)
+      }
+      .textPlate(radius: 12)
+      .overlay {
+        RoundedRectangle(cornerRadius: 12)
+          .strokeBorder(Color.accentSoft.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+      }
+      .frame(maxWidth: .infinity, alignment: .trailing)
+
     case .answer:
       MarkdownText(text: row.text, mono: mono, size: size)
         .textPlate(radius: 12, horizontal: 12, vertical: 9)

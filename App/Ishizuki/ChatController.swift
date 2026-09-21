@@ -18,6 +18,7 @@ final class ChatController {
   struct Row: Identifiable {
     enum Kind {
       case prompt
+      case steer
       case reasoning
       case answer
       case toolCall(name: String)
@@ -38,7 +39,13 @@ final class ChatController {
     var averageTokens: Int { turns > 0 ? tokens / turns : 0 }
   }
 
-  private(set) var rows: [Row] = []
+  /// The transcript's own rows, replaced wholesale as it fills.
+  private(set) var transcriptRows: [Row] = []
+  /// Steering waits for the next turn, so it is not in the transcript yet and has to be held
+  /// here or the next poll would wipe it.
+  private(set) var pendingSteers: [Row] = []
+
+  var rows: [Row] { transcriptRows + pendingSteers }
   private(set) var isResponding = false
   private(set) var failure: String?
   private(set) var meter = Meter()
@@ -198,6 +205,7 @@ final class ChatController {
     guard !text.isEmpty, !isResponding, let agent = resolveAgent() else { return }
     draft = ""
     failure = nil
+    pendingSteers.removeAll()
     isResponding = true
     tokensAtTurnStart = server?.readout?.totals.generatedTokens ?? 0
     startPolling(agent)
@@ -222,11 +230,11 @@ final class ChatController {
 
   /// Guidance for the turn after this one, which is what the conversation folds it into.
   func steer() {
-    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text = typed
     guard !text.isEmpty, let agent else { return }
     agent.steer(text)
     draft = ""
-    rows.append(Row(id: "steer-\(UUID().uuidString)", kind: .prompt, text: text))
+    pendingSteers.append(Row(id: "steer-\(UUID().uuidString)", kind: .steer, text: text))
   }
 
   private func resolveAgent() -> CodingAgent? {
@@ -246,7 +254,7 @@ final class ChatController {
     poller?.cancel()
     poller = Task { [weak self] in
       while !Task.isCancelled {
-        self?.rows = Self.rows(from: agent.transcript)
+        self?.transcriptRows = Self.rows(from: agent.transcript)
         try? await Task.sleep(for: .milliseconds(120))
       }
     }
@@ -255,7 +263,7 @@ final class ChatController {
   private func finish(_ agent: CodingAgent, seconds: Double) {
     poller?.cancel()
     poller = nil
-    rows = Self.rows(from: agent.transcript)
+    transcriptRows = Self.rows(from: agent.transcript)
     isResponding = false
 
     meter.turns += 1
