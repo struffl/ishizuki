@@ -32,9 +32,12 @@ extension Color {
   /// can say anything.
   static let instructing = Color(
     NSColor(name: nil) { appearance in
+      // The disclosure title sits directly on the window's own translucent backdrop, not a
+      // plate, so it has to hold up against whatever is behind the glass, not just a plain
+      // background — the original gold read as a dull olive on that mix.
       appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.91, green: 0.74, blue: 0.35, alpha: 1)
-        : NSColor(red: 0.62, green: 0.45, blue: 0.05, alpha: 1)
+        ? NSColor(red: 1.0, green: 0.82, blue: 0.40, alpha: 1)
+        : NSColor(red: 0.55, green: 0.36, blue: 0.0, alpha: 1)
     })
 }
 
