@@ -161,7 +161,8 @@ struct ChatReadoutBar: View {
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
-    .disabled(controller.catalog.entries.isEmpty)
+    .disabled(controller.catalog.entries.isEmpty || chat.isResponding)
+    .help(chat.isResponding ? "Finish or stop the turn before switching packs" : "")
   }
 
   @ViewBuilder private var effortDial: some View {

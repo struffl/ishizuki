@@ -331,7 +331,7 @@ final class ChatController {
     poller = Task { [weak self] in
       while !Task.isCancelled {
         self?.absorb(Self.rows(from: agent.transcript))
-        try? await Task.sleep(for: .milliseconds(120))
+        try? await Task.sleep(for: .milliseconds(50))
       }
     }
   }

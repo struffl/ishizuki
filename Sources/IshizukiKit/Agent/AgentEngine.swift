@@ -67,6 +67,11 @@ public final class AgentEngine: @unchecked Sendable {
   private let toolStanza = Flag()
 
   public var isWritingToolCall: Bool { toolStanza.isRaised }
+
+  /// The last turn's prompt, kept only to say how much of it the next one still agrees with.
+  /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
+  /// is not working, and the two look identical from the readout.
+  private var lastPromptTokens: [Int] = []
   /// Where generation stops when nothing else stops it first. Held high because an agent's
   /// turn is a tool call away from being long, and never shown to the model as a bound.
   public var maxTokens: Int
@@ -111,6 +116,26 @@ public final class AgentEngine: @unchecked Sendable {
               responseSchema: nil,
               model: nil,
               effort: effort)
+            let rendered = try server.template.render(
+              messages: messages,
+              addGenerationPrompt: true,
+              enableThinking: thinking,
+              reasoningEffort: effort,
+              tools: tools.isEmpty ? nil : tools.map(\.templateValue))
+            let tokens = try server.model().tokenizer.encode(rendered)
+            if !lastPromptTokens.isEmpty {
+              var shared = 0
+              while shared < min(lastPromptTokens.count, tokens.count),
+                lastPromptTokens[shared] == tokens[shared]
+              {
+                shared += 1
+              }
+              server.log?(
+                "prefix: \(shared) of \(lastPromptTokens.count) previous tokens still agree, "
+                  + "prompt is \(tokens.count)")
+            }
+            lastPromptTokens = tokens
+
             let outcome = try server.complete(
               request,
               id: id,

@@ -66,7 +66,9 @@ struct ChatView: View {
         LazyVStack(alignment: .leading, spacing: 10) {
           ForEach(chat.rows) { row in
             HStack(spacing: 8) {
-              ChatRowView(row: row, mono: mono, size: fontSize)
+              ChatRowView(
+                row: row, mono: mono, size: fontSize,
+                live: chat.isResponding && row.id == chat.rows.last?.id)
               RowCost(meta: chat.meta(for: row))
                 .frame(width: gutter, alignment: .leading)
                 .opacity(reveal / gutter)
@@ -190,8 +192,13 @@ struct ChatRowView: View {
   let row: ChatController.Row
   let mono: Font
   let size: Double
+  /// The row the model is writing into right now, which opens itself so the thinking can be
+  /// watched rather than waited out.
+  var live = false
 
   @State private var expanded = false
+
+  private var open: Bool { expanded || live }
 
   var body: some View {
     switch row.kind {
@@ -252,11 +259,13 @@ struct ChatRowView: View {
             .font(.system(size: 9))
           Text(title)
             .font(.system(size: 10, weight: .medium, design: .monospaced))
-          Text(summary(of: body))
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-          Image(systemName: expanded ? "chevron.down" : "chevron.right")
+          if !open {
+            Text(summary(of: body))
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+          Image(systemName: open ? "chevron.down" : "chevron.right")
             .font(.system(size: 7))
             .foregroundStyle(.secondary)
         }
@@ -264,7 +273,7 @@ struct ChatRowView: View {
       }
       .buttonStyle(.plain)
 
-      if expanded {
+      if open {
         Text(body)
           .font(monospaced ? mono : .system(size: size - 1))
           .foregroundStyle(.primary.opacity(0.85))
