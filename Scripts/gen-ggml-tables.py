@@ -9,15 +9,15 @@ import sys
 from pathlib import Path
 
 TABLES = [
-    ("kmask_iq2xs", "UInt8"),
-    ("ksigns_iq2xs", "UInt8"),
-    ("iq2xxs_grid", "UInt64"),
-    ("iq2xs_grid", "UInt64"),
-    ("iq2s_grid", "UInt64"),
-    ("iq3xxs_grid", "UInt32"),
-    ("iq3s_grid", "UInt32"),
-    ("iq1s_grid", "UInt64"),
-    ("kvalues_iq4nl", "Int8"),
+    ("kmaskIq2xs", "UInt8"),
+    ("ksignsIq2xs", "UInt8"),
+    ("iq2xxsGrid", "UInt64"),
+    ("iq2xsGrid", "UInt64"),
+    ("iq2sGrid", "UInt64"),
+    ("iq3xxsGrid", "UInt32"),
+    ("iq3sGrid", "UInt32"),
+    ("iq1sGrid", "UInt64"),
+    ("kvaluesIq4nl", "Int8"),
 ]
 
 PER_LINE = {"UInt64": 4, "UInt32": 6, "UInt8": 16, "Int8": 16}

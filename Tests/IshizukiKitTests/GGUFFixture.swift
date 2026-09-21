@@ -215,7 +215,7 @@ enum GGUFFixture {
       func blocks(_ name: String, _ dims: [Int]) {
         seed += 1
         tensors.append(
-          (name, dims, .iq4_xs, payload(.iq4_xs, elements: dims.reduce(1, *), seed: seed)))
+          (name, dims, .iq4Xs, payload(.iq4Xs, elements: dims.reduce(1, *), seed: seed)))
       }
       func dense(_ name: String, _ dims: [Int]) {
         seed += 1
@@ -385,22 +385,22 @@ enum GGUFFixture {
       ("tokenizer.chat_template", 8, Builder.string("{{ messages }}")),
     ]
     builder.tensors = [
-      ("token_embd.weight", [vocab, 5120], .iq1_m),
-      ("output.weight", [vocab, 5120], .iq4_xs),
+      ("token_embd.weight", [vocab, 5120], .iq1M),
+      ("output.weight", [vocab, 5120], .iq4Xs),
       ("output_norm.weight", [5120], .f32),
     ]
     for layer in 0..<layers {
       if (layer + 1) % 4 == 0 {
         builder.tensors += [
-          ("blk.\(layer).attn_q.weight", [12288, 5120], .iq2_xs),
-          ("blk.\(layer).attn_k.weight", [1024, 5120], .iq2_xs),
-          ("blk.\(layer).attn_v.weight", [1024, 5120], .iq2_xs),
-          ("blk.\(layer).attn_output.weight", [5120, 6144], .iq2_xs),
+          ("blk.\(layer).attn_q.weight", [12288, 5120], .iq2Xs),
+          ("blk.\(layer).attn_k.weight", [1024, 5120], .iq2Xs),
+          ("blk.\(layer).attn_v.weight", [1024, 5120], .iq2Xs),
+          ("blk.\(layer).attn_output.weight", [5120, 6144], .iq2Xs),
         ]
       } else {
         builder.tensors += [
-          ("blk.\(layer).attn_qkv.weight", [10240, 5120], .iq3_s),
-          ("blk.\(layer).attn_gate.weight", [6144, 5120], .iq3_s),
+          ("blk.\(layer).attn_qkv.weight", [10240, 5120], .iq3S),
+          ("blk.\(layer).attn_gate.weight", [6144, 5120], .iq3S),
           ("blk.\(layer).ssm_a", [48], .f32),
         ]
       }

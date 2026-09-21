@@ -10,14 +10,14 @@ import MLX
 ///
 /// `ggml-common.h` packs each entry into a 64- or 32-bit word and casts it to a byte pointer;
 /// unpacking once here means a kernel indexes `grid[width * entry + j]` rather than shifting.
-/// `iq1s_grid` is the one read signed upstream, and the wrap that gives is the format.
+/// `iq1sGrid` is the one read signed upstream, and the wrap that gives is the format.
 enum GGMLGrids {
-  static let iq2xxs = expand(GGMLTables.iq2xxs_grid, width: 8)
-  static let iq2xs = expand(GGMLTables.iq2xs_grid, width: 8)
-  static let iq2s = expand(GGMLTables.iq2s_grid, width: 8)
-  static let iq1s = expand(GGMLTables.iq1s_grid, width: 8)
-  static let iq3xxs = expand(GGMLTables.iq3xxs_grid, width: 4)
-  static let iq3s = expand(GGMLTables.iq3s_grid, width: 4)
+  static let iq2xxs = expand(GGMLTables.iq2xxsGrid, width: 8)
+  static let iq2xs = expand(GGMLTables.iq2xsGrid, width: 8)
+  static let iq2s = expand(GGMLTables.iq2sGrid, width: 8)
+  static let iq1s = expand(GGMLTables.iq1sGrid, width: 8)
+  static let iq3xxs = expand(GGMLTables.iq3xxsGrid, width: 4)
+  static let iq3s = expand(GGMLTables.iq3sGrid, width: 4)
 
   private static func expand(_ entries: [UInt64], width: Int) -> [Int8] {
     var out = [Int8](repeating: 0, count: entries.count * width)
@@ -37,7 +37,7 @@ enum GGMLGrids {
     nonisolated(unsafe) static let buffers: [MLXArray] = [
       MLXArray(iq2xxs), MLXArray(iq2xs), MLXArray(iq2s), MLXArray(iq1s),
       MLXArray(iq3xxs), MLXArray(iq3s),
-      MLXArray(GGMLTables.ksigns_iq2xs), MLXArray(GGMLTables.kvalues_iq4nl),
+      MLXArray(GGMLTables.ksignsIq2xs), MLXArray(GGMLTables.kvaluesIq4nl),
     ]
   #endif
 }
@@ -149,7 +149,7 @@ public enum GGMLKernels {
   /// nibble's four masks, sixteen nibbles, so a vector's are one aligned read.
   static func signWords(_ type: GGMLType) -> Int {
     switch type {
-    case .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s: 64
+    case .iq2Xxs, .iq2Xs, .iq2S, .iq3Xxs, .iq3S: 64
     default: 0
     }
   }
@@ -163,12 +163,12 @@ public enum GGMLKernels {
   /// The matvec stages this much into threadgroup memory before any row starts.
   static func gridBytes(_ type: GGMLType) -> Int {
     switch type {
-    case .iq2_xxs: 2048
-    case .iq2_xs: 4096
-    case .iq2_s: 8192
-    case .iq1_s, .iq1_m: 16384
-    case .iq3_xxs: 1024
-    case .iq3_s: 2048
+    case .iq2Xxs: 2048
+    case .iq2Xs: 4096
+    case .iq2S: 8192
+    case .iq1S, .iq1M: 16384
+    case .iq3Xxs: 1024
+    case .iq3S: 2048
     default: 0
     }
   }
@@ -633,10 +633,10 @@ public enum GGMLKernels {
     /// built kernel holds exactly one of these.
     private static let blockChain: String = {
       let bodies: [(GGMLType, String)] = [
-        (.q2_K, blockQ2K), (.q4_K, blockQ4K), (.q6_K, blockQ6K), (.iq4_xs, blockIQ4XS),
-        (.iq2_xxs, blockIQ2XXS), (.iq2_xs, blockIQ2XS), (.iq2_s, blockIQ2S),
-        (.iq3_xxs, blockIQ3XXS), (.iq3_s, blockIQ3S), (.iq1_s, blockIQ1S),
-        (.iq1_m, blockIQ1M),
+        (.q2K, blockQ2K), (.q4K, blockQ4K), (.q6K, blockQ6K), (.iq4Xs, blockIQ4XS),
+        (.iq2Xxs, blockIQ2XXS), (.iq2Xs, blockIQ2XS), (.iq2S, blockIQ2S),
+        (.iq3Xxs, blockIQ3XXS), (.iq3S, blockIQ3S), (.iq1S, blockIQ1S),
+        (.iq1M, blockIQ1M),
       ]
       return bodies.enumerated().map { i, entry in
         (i == 0 ? "if" : "} else if") + " (qtype == \(entry.0.rawValue)) {" + entry.1

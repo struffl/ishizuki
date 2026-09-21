@@ -444,10 +444,11 @@ public final class APIServer: @unchecked Sendable {
         chunk(["role": "assistant", "content": ""])
 
         let completion = try complete(
-          parsed, id: id, isCancelled: { writer.isCancelled }
-        ) { text in
-          chunk(["content": text])
-        }
+          parsed, id: id, isCancelled: { writer.isCancelled },
+          onText: { text in
+            chunk(["content": text])
+          }
+        )
         if completion.cancelled {
           writer.finish()
           return
@@ -642,15 +643,16 @@ public final class APIServer: @unchecked Sendable {
           ])
 
         let completion = try complete(
-          parsed, id: id, isCancelled: { writer.isCancelled }
-        ) { text in
-          writer.sendEvent(
-            name: "content_block_delta",
-            data: [
-              "type": "content_block_delta", "index": 0,
-              "delta": ["type": "text_delta", "text": text],
-            ])
-        }
+          parsed, id: id, isCancelled: { writer.isCancelled },
+          onText: { text in
+            writer.sendEvent(
+              name: "content_block_delta",
+              data: [
+                "type": "content_block_delta", "index": 0,
+                "delta": ["type": "text_delta", "text": text],
+              ])
+          }
+        )
         if completion.cancelled {
           writer.finish()
           return

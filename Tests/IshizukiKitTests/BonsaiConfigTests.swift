@@ -17,7 +17,7 @@ struct BonsaiConfigTests {
     return try BonsaiConfig.load(directory: dir)
   }
 
-  private let ternary1_7B = """
+  private let ternary17B = """
     {
       "model_type": "qwen3",
       "hidden_size": 2048,
@@ -78,7 +78,7 @@ struct BonsaiConfigTests {
 
   @Test("a standard MLX ternary pack loads, translates, and validates")
   func legacyLoads() throws {
-    let config = try load(ternary1_7B)
+    let config = try load(ternary17B)
     try config.validate()
     #expect(config.modelType == "qwen3")
     #expect(config.quantization.bits == 2)
@@ -123,7 +123,7 @@ struct BonsaiConfigTests {
   func widthsWiden() throws {
     // An affine pack is no longer pinned to the ternary width; 4-bit is a pack, not an error.
     #expect(throws: Never.self) {
-      try load(ternary1_7B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 4"))
+      try load(ternary17B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 4"))
         .validate()
     }
   }
@@ -131,16 +131,16 @@ struct BonsaiConfigTests {
   @Test("unsupported bit widths and model types are refused")
   func rejections() {
     #expect(throws: BonsaiError.self) {
-      try load(ternary1_7B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 7"))
+      try load(ternary17B.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 7"))
         .validate()
     }
     #expect(throws: BonsaiError.self) {
       try load(
-        ternary1_7B.replacingOccurrences(of: "\"group_size\": 128", with: "\"group_size\": 96")
+        ternary17B.replacingOccurrences(of: "\"group_size\": 128", with: "\"group_size\": 96")
       ).validate()
     }
     #expect(throws: BonsaiError.self) {
-      try load(ternary1_7B.replacingOccurrences(of: "\"qwen3\"", with: "\"llama\""))
+      try load(ternary17B.replacingOccurrences(of: "\"qwen3\"", with: "\"llama\""))
         .validate()
     }
   }

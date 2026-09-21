@@ -88,19 +88,19 @@ struct GGMLDequantTests {
   func refusesUnsupported() {
     let bytes = Data(repeating: 0, count: 1024)
     #expect(throws: BonsaiError.self) {
-      _ = try GGMLDequant.dequantize(bytes, type: .q3_K, count: 256)
+      _ = try GGMLDequant.dequantize(bytes, type: .q3K, count: 256)
     }
   }
 
   @Test("a short buffer is refused rather than read past its end")
   func refusesShortBuffer() {
-    let bytes = Data(repeating: 0, count: GGMLType.iq2_xs.typeSize - 1)
+    let bytes = Data(repeating: 0, count: GGMLType.iq2Xs.typeSize - 1)
     #expect(throws: BonsaiError.self) {
-      _ = try GGMLDequant.dequantize(bytes, type: .iq2_xs, count: 256)
+      _ = try GGMLDequant.dequantize(bytes, type: .iq2Xs, count: 256)
     }
     #expect(throws: BonsaiError.self) {
       _ = try GGMLDequant.dequantize(
-        Data(repeating: 0, count: 1024), type: .iq2_xs, count: 100)
+        Data(repeating: 0, count: 1024), type: .iq2Xs, count: 100)
     }
   }
 }

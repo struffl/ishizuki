@@ -18,8 +18,8 @@ public enum GGMLDequant {
   /// Every type this runtime can read. A GGUF naming anything else is refused at load.
   public static let supported: Set<GGMLType> = [
     .f32, .f16, .bf16,
-    .q2_K, .q4_K, .q6_K,
-    .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+    .q2K, .q4K, .q6K,
+    .iq1S, .iq1M, .iq2Xxs, .iq2Xs, .iq2S, .iq3Xxs, .iq3S, .iq4Xs,
   ]
 
   public static func dequantize(
@@ -48,17 +48,17 @@ public enum GGMLDequant {
         scalar(bytes, y, blocks, 2) {
           Float(bitPattern: UInt32($0.loadUnaligned(as: UInt16.self)) << 16)
         }
-      case .q2_K: blockwise(bytes, y, blocks, type, q2K)
-      case .q4_K: blockwise(bytes, y, blocks, type, q4K)
-      case .q6_K: blockwise(bytes, y, blocks, type, q6K)
-      case .iq1_s: blockwise(bytes, y, blocks, type, iq1S)
-      case .iq1_m: blockwise(bytes, y, blocks, type, iq1M)
-      case .iq2_xxs: blockwise(bytes, y, blocks, type, iq2XXS)
-      case .iq2_xs: blockwise(bytes, y, blocks, type, iq2XS)
-      case .iq2_s: blockwise(bytes, y, blocks, type, iq2S)
-      case .iq3_xxs: blockwise(bytes, y, blocks, type, iq3XXS)
-      case .iq3_s: blockwise(bytes, y, blocks, type, iq3S)
-      case .iq4_xs: blockwise(bytes, y, blocks, type, iq4XS)
+      case .q2K: blockwise(bytes, y, blocks, type, q2K)
+      case .q4K: blockwise(bytes, y, blocks, type, q4K)
+      case .q6K: blockwise(bytes, y, blocks, type, q6K)
+      case .iq1S: blockwise(bytes, y, blocks, type, iq1S)
+      case .iq1M: blockwise(bytes, y, blocks, type, iq1M)
+      case .iq2Xxs: blockwise(bytes, y, blocks, type, iq2XXS)
+      case .iq2Xs: blockwise(bytes, y, blocks, type, iq2XS)
+      case .iq2S: blockwise(bytes, y, blocks, type, iq2S)
+      case .iq3Xxs: blockwise(bytes, y, blocks, type, iq3XXS)
+      case .iq3S: blockwise(bytes, y, blocks, type, iq3S)
+      case .iq4Xs: blockwise(bytes, y, blocks, type, iq4XS)
       default: break
       }
     }
@@ -119,7 +119,7 @@ public enum GGMLDequant {
   }
 
   private static func signFlip(_ signs: UInt8, _ j: Int) -> Float {
-    signs & GGMLTables.kmask_iq2xs[j] != 0 ? -1 : 1
+    signs & GGMLTables.kmaskIq2xs[j] != 0 ? -1 : 1
   }
 
   private static func q2K(
@@ -232,8 +232,8 @@ public enum GGMLDequant {
       let qs = 8 + 16 * ib
       for j in 0..<16 {
         let q = u8(p, qs + j)
-        y[out + j] = dl * Float(GGMLTables.kvalues_iq4nl[Int(q & 0xf)])
-        y[out + 16 + j] = dl * Float(GGMLTables.kvalues_iq4nl[Int(q >> 4)])
+        y[out + j] = dl * Float(GGMLTables.kvaluesIq4nl[Int(q & 0xf)])
+        y[out + 16 + j] = dl * Float(GGMLTables.kvaluesIq4nl[Int(q >> 4)])
       }
       out += 32
     }
@@ -251,8 +251,8 @@ public enum GGMLDequant {
       let db = d * (0.5 + Float(aux2 >> 28)) * 0.25
       for l in 0..<4 {
         let index = Int((aux1 >> (8 * UInt32(l))) & 0xff)
-        let entry = GGMLTables.iq2xxs_grid[index]
-        let signs = GGMLTables.ksigns_iq2xs[Int((aux2 >> (7 * UInt32(l))) & 127)]
+        let entry = GGMLTables.iq2xxsGrid[index]
+        let signs = GGMLTables.ksignsIq2xs[Int((aux2 >> (7 * UInt32(l))) & 127)]
         for j in 0..<8 {
           y[out + j] = db * Float(byte(entry, j)) * signFlip(signs, j)
         }
@@ -274,8 +274,8 @@ public enum GGMLDequant {
       ]
       for l in 0..<4 {
         let q = u16(p, 2 + 2 * (4 * ib32 + l))
-        let entry = GGMLTables.iq2xs_grid[Int(q & 511)]
-        let signs = GGMLTables.ksigns_iq2xs[Int(q >> 9)]
+        let entry = GGMLTables.iq2xsGrid[Int(q & 511)]
+        let signs = GGMLTables.ksignsIq2xs[Int(q >> 9)]
         for j in 0..<8 {
           y[out + j] = db[l / 2] * Float(byte(entry, j)) * signFlip(signs, j)
         }
@@ -299,7 +299,7 @@ public enum GGMLDequant {
       for l in 0..<4 {
         let low = Int(u8(p, 2 + 4 * ib32 + l))
         let high = (Int(qh) << (8 - 2 * l)) & 0x300
-        let entry = GGMLTables.iq2s_grid[low | high]
+        let entry = GGMLTables.iq2sGrid[low | high]
         let signs = u8(p, 34 + 4 * ib32 + l)
         for j in 0..<8 {
           y[out + j] = db[l / 2] * Float(byte(entry, j)) * signFlip(signs, j)
@@ -318,9 +318,9 @@ public enum GGMLDequant {
       let aux = u32(p, 2 + 64 + 4 * ib32)
       let db = d * (0.5 + Float(aux >> 28)) * 0.5
       for l in 0..<4 {
-        let signs = GGMLTables.ksigns_iq2xs[Int((aux >> (7 * UInt32(l))) & 127)]
-        let grid1 = GGMLTables.iq3xxs_grid[Int(u8(p, 2 + 8 * ib32 + 2 * l))]
-        let grid2 = GGMLTables.iq3xxs_grid[Int(u8(p, 2 + 8 * ib32 + 2 * l + 1))]
+        let signs = GGMLTables.ksignsIq2xs[Int((aux >> (7 * UInt32(l))) & 127)]
+        let grid1 = GGMLTables.iq3xxsGrid[Int(u8(p, 2 + 8 * ib32 + 2 * l))]
+        let grid2 = GGMLTables.iq3xxsGrid[Int(u8(p, 2 + 8 * ib32 + 2 * l + 1))]
         for j in 0..<4 {
           y[out + j] = db * Float(byte(grid1, j)) * signFlip(signs, j)
           y[out + 4 + j] = db * Float(byte(grid2, j)) * signFlip(signs, j + 4)
@@ -351,9 +351,9 @@ public enum GGMLDequant {
         let qs = qsBase + 8 * (pair + group)
         let signs = signBase + 4 * (pair + group)
         for l in 0..<4 {
-          let grid1 = GGMLTables.iq3s_grid[
+          let grid1 = GGMLTables.iq3sGrid[
             Int(u8(p, qs + 2 * l)) | ((qh << (8 - 2 * l)) & 256)]
-          let grid2 = GGMLTables.iq3s_grid[
+          let grid2 = GGMLTables.iq3sGrid[
             Int(u8(p, qs + 2 * l + 1)) | ((qh << (7 - 2 * l)) & 256)]
           let sign = u8(p, signs + l)
           for j in 0..<4 {
@@ -377,7 +377,7 @@ public enum GGMLDequant {
       let delta: Float = qh & 0x8000 != 0 ? -iq1Delta : iq1Delta
       for l in 0..<4 {
         let index = Int(u8(p, 2 + 4 * ib + l)) | ((Int(qh >> (3 * l)) & 7) << 8)
-        let entry = GGMLTables.iq1s_grid[index]
+        let entry = GGMLTables.iq1sGrid[index]
         for j in 0..<8 {
           y[out + j] = dl * (Float(signedByte(entry, j)) + delta)
         }
@@ -418,7 +418,7 @@ public enum GGMLDequant {
       ]
       for l in 0..<4 {
         let dl = l < 2 ? dl1 : dl2
-        let entry = GGMLTables.iq1s_grid[index[l]]
+        let entry = GGMLTables.iq1sGrid[index[l]]
         for j in 0..<8 {
           y[out + j] = dl * (Float(signedByte(entry, j)) + delta[l])
         }

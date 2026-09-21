@@ -51,7 +51,9 @@ public actor LinkCache {
         try FileManager.default.removeItem(at: entry.0)
         total -= entry.1
       }
-    } catch { /* A cache failure must not prevent a network request. */  }
+    } catch {
+      // A cache failure must not prevent a network request.
+    }
   }
 
   public func remove(_ key: String) { try? FileManager.default.removeItem(at: file(key)) }

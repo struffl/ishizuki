@@ -13,38 +13,38 @@ import Foundation
 public enum GGMLType: UInt32, Sendable {
   case f32 = 0
   case f16 = 1
-  case q4_0 = 2
-  case q4_1 = 3
-  case q5_0 = 6
-  case q5_1 = 7
-  case q8_0 = 8
-  case q8_1 = 9
-  case q2_K = 10
-  case q3_K = 11
-  case q4_K = 12
-  case q5_K = 13
-  case q6_K = 14
-  case q8_K = 15
-  case iq2_xxs = 16
-  case iq2_xs = 17
-  case iq3_xxs = 18
-  case iq1_s = 19
-  case iq4_nl = 20
-  case iq3_s = 21
-  case iq2_s = 22
-  case iq4_xs = 23
+  case q40 = 2
+  case q41 = 3
+  case q50 = 6
+  case q51 = 7
+  case q80 = 8
+  case q81 = 9
+  case q2K = 10
+  case q3K = 11
+  case q4K = 12
+  case q5K = 13
+  case q6K = 14
+  case q8K = 15
+  case iq2Xxs = 16
+  case iq2Xs = 17
+  case iq3Xxs = 18
+  case iq1S = 19
+  case iq4Nl = 20
+  case iq3S = 21
+  case iq2S = 22
+  case iq4Xs = 23
   case i8 = 24
   case i16 = 25
   case i32 = 26
   case i64 = 27
   case f64 = 28
-  case iq1_m = 29
+  case iq1M = 29
   case bf16 = 30
 
   public var blockSize: Int {
     switch self {
     case .f32, .f16, .bf16, .f64, .i8, .i16, .i32, .i64: 1
-    case .q4_0, .q4_1, .q5_0, .q5_1, .q8_0, .q8_1, .iq4_nl: 32
+    case .q40, .q41, .q50, .q51, .q80, .q81, .iq4Nl: 32
     default: 256
     }
   }
@@ -55,27 +55,27 @@ public enum GGMLType: UInt32, Sendable {
     case .f16, .bf16, .i16: 2
     case .f64, .i64: 8
     case .i8: 1
-    case .q4_0: 18
-    case .q4_1: 20
-    case .q5_0: 22
-    case .q5_1: 24
-    case .q8_0: 34
-    case .q8_1: 36
-    case .q2_K: 84
-    case .q3_K: 110
-    case .q4_K: 144
-    case .q5_K: 176
-    case .q6_K: 210
-    case .q8_K: 292
-    case .iq2_xxs: 66
-    case .iq2_xs: 74
-    case .iq3_xxs: 98
-    case .iq1_s: 50
-    case .iq4_nl: 18
-    case .iq3_s: 110
-    case .iq2_s: 82
-    case .iq4_xs: 136
-    case .iq1_m: 56
+    case .q40: 18
+    case .q41: 20
+    case .q50: 22
+    case .q51: 24
+    case .q80: 34
+    case .q81: 36
+    case .q2K: 84
+    case .q3K: 110
+    case .q4K: 144
+    case .q5K: 176
+    case .q6K: 210
+    case .q8K: 292
+    case .iq2Xxs: 66
+    case .iq2Xs: 74
+    case .iq3Xxs: 98
+    case .iq1S: 50
+    case .iq4Nl: 18
+    case .iq3S: 110
+    case .iq2S: 82
+    case .iq4Xs: 136
+    case .iq1M: 56
     }
   }
 
@@ -91,27 +91,27 @@ public enum GGMLType: UInt32, Sendable {
     case .i16: "I16"
     case .i32: "I32"
     case .i64: "I64"
-    case .q4_0: "Q4_0"
-    case .q4_1: "Q4_1"
-    case .q5_0: "Q5_0"
-    case .q5_1: "Q5_1"
-    case .q8_0: "Q8_0"
-    case .q8_1: "Q8_1"
-    case .q2_K: "Q2_K"
-    case .q3_K: "Q3_K"
-    case .q4_K: "Q4_K"
-    case .q5_K: "Q5_K"
-    case .q6_K: "Q6_K"
-    case .q8_K: "Q8_K"
-    case .iq2_xxs: "IQ2_XXS"
-    case .iq2_xs: "IQ2_XS"
-    case .iq3_xxs: "IQ3_XXS"
-    case .iq1_s: "IQ1_S"
-    case .iq4_nl: "IQ4_NL"
-    case .iq3_s: "IQ3_S"
-    case .iq2_s: "IQ2_S"
-    case .iq4_xs: "IQ4_XS"
-    case .iq1_m: "IQ1_M"
+    case .q40: "Q4_0"
+    case .q41: "Q4_1"
+    case .q50: "Q5_0"
+    case .q51: "Q5_1"
+    case .q80: "Q8_0"
+    case .q81: "Q8_1"
+    case .q2K: "Q2_K"
+    case .q3K: "Q3_K"
+    case .q4K: "Q4_K"
+    case .q5K: "Q5_K"
+    case .q6K: "Q6_K"
+    case .q8K: "Q8_K"
+    case .iq2Xxs: "IQ2_XXS"
+    case .iq2Xs: "IQ2_XS"
+    case .iq3Xxs: "IQ3_XXS"
+    case .iq1S: "IQ1_S"
+    case .iq4Nl: "IQ4_NL"
+    case .iq3S: "IQ3_S"
+    case .iq2S: "IQ2_S"
+    case .iq4Xs: "IQ4_XS"
+    case .iq1M: "IQ1_M"
     }
   }
 

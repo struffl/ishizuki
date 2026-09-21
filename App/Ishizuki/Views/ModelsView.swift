@@ -152,8 +152,6 @@ struct ModelsView: View {
   }
 }
 
-extension ModelCatalog.Entry: @retroactive Identifiable {}
-
 private struct InstalledRow: View {
   let entry: ModelCatalog.Entry
   @Bindable var controller: ServerController

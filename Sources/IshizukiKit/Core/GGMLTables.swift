@@ -8,11 +8,11 @@
 /// Lookup tables the GGML i-quants index into. A block stores grid indices and sign
 /// bits rather than quantized values, so these are part of the format, not a cache.
 public enum GGMLTables {
-  public static let kmask_iq2xs: [UInt8] = [
+  public static let kmaskIq2xs: [UInt8] = [
     1, 2, 4, 8, 16, 32, 64, 128,
   ]
 
-  public static let ksigns_iq2xs: [UInt8] = [
+  public static let ksignsIq2xs: [UInt8] = [
     0, 129, 130, 3, 132, 5, 6, 135, 136, 9, 10, 139, 12, 141, 142, 15,
     144, 17, 18, 147, 20, 149, 150, 23, 24, 153, 154, 27, 156, 29, 30, 159,
     160, 33, 34, 163, 36, 165, 166, 39, 40, 169, 170, 43, 172, 45, 46, 175,
@@ -23,7 +23,7 @@ public enum GGMLTables {
     240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255,
   ]
 
-  public static let iq2xxs_grid: [UInt64] = [
+  public static let iq2xxsGrid: [UInt64] = [
     0x0808_0808_0808_0808, 0x0808_0808_0808_082b, 0x0808_0808_0808_1919, 0x0808_0808_0808_2b08,
     0x0808_0808_0808_2b2b, 0x0808_0808_0819_0819, 0x0808_0808_0819_1908, 0x0808_0808_082b_0808,
     0x0808_0808_082b_082b, 0x0808_0808_082b_2b08, 0x0808_0808_082b_2b2b, 0x0808_0808_1908_0819,
@@ -90,7 +90,7 @@ public enum GGMLTables {
     0x2b2b_082b_0808_0808, 0x2b2b_1908_0819_2b08, 0x2b2b_2b08_1919_0808, 0x2b2b_2b19_0808_1908,
   ]
 
-  public static let iq2xs_grid: [UInt64] = [
+  public static let iq2xsGrid: [UInt64] = [
     0x0808_0808_0808_0808, 0x0808_0808_0808_082b, 0x0808_0808_0808_1919, 0x0808_0808_0808_2b08,
     0x0808_0808_0808_2b2b, 0x0808_0808_0819_0819, 0x0808_0808_0819_1908, 0x0808_0808_0819_192b,
     0x0808_0808_0819_2b19, 0x0808_0808_082b_0808, 0x0808_0808_082b_082b, 0x0808_0808_082b_1919,
@@ -221,7 +221,7 @@ public enum GGMLTables {
     0x2b2b_2b2b_082b_2b08, 0x2b2b_2b2b_082b_2b2b, 0x2b2b_2b2b_2b19_0819, 0x2b2b_2b2b_2b2b_2b2b,
   ]
 
-  public static let iq2s_grid: [UInt64] = [
+  public static let iq2sGrid: [UInt64] = [
     0x0808_0808_0808_0808, 0x0808_0808_0808_082b, 0x0808_0808_0808_1919, 0x0808_0808_0808_2b08,
     0x0808_0808_0808_2b2b, 0x0808_0808_0819_0819, 0x0808_0808_0819_1908, 0x0808_0808_0819_192b,
     0x0808_0808_0819_2b19, 0x0808_0808_082b_0808, 0x0808_0808_082b_082b, 0x0808_0808_082b_1919,
@@ -480,7 +480,7 @@ public enum GGMLTables {
     0x2b2b_2b2b_082b_082b, 0x2b2b_2b2b_082b_2b08, 0x2b2b_2b2b_2b08_2b08, 0x2b2b_2b2b_2b2b_2b2b,
   ]
 
-  public static let iq3xxs_grid: [UInt32] = [
+  public static let iq3xxsGrid: [UInt32] = [
     0x0404_0404, 0x0404_0414, 0x0404_0424, 0x0404_0c0c, 0x0404_0c1c, 0x0404_0c3e,
     0x0404_1404, 0x0404_1414, 0x0404_1c0c, 0x0404_2414, 0x0404_3e1c, 0x0404_3e2c,
     0x040c_040c, 0x040c_041c, 0x040c_0c04, 0x040c_0c14, 0x040c_140c, 0x040c_142c,
@@ -526,7 +526,7 @@ public enum GGMLTables {
     0x3e2c_0404, 0x3e2c_0414, 0x3e2c_1424, 0x3e34_1c04,
   ]
 
-  public static let iq3s_grid: [UInt32] = [
+  public static let iq3sGrid: [UInt32] = [
     0x0101_0101, 0x0101_0103, 0x0101_0105, 0x0101_010b, 0x0101_010f, 0x0101_0301,
     0x0101_0303, 0x0101_0305, 0x0101_0309, 0x0101_030d, 0x0101_0501, 0x0101_0503,
     0x0101_050b, 0x0101_0707, 0x0101_0901, 0x0101_0905, 0x0101_090b, 0x0101_090f,
@@ -615,7 +615,7 @@ public enum GGMLTables {
     0x0f0d_0703, 0x0f0f_0101,
   ]
 
-  public static let iq1s_grid: [UInt64] = [
+  public static let iq1sGrid: [UInt64] = [
     0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ff01, 0xffff_ffff_ffff_0000, 0xffff_ffff_ffff_01ff,
     0xffff_ffff_ffff_0101, 0xffff_ffff_ff00_ff00, 0xffff_ffff_ff00_0000, 0xffff_ffff_ff01_ffff,
     0xffff_ffff_ff01_ff01, 0xffff_ffff_ff01_01ff, 0xffff_ffff_ff01_0101, 0xffff_ffff_00ff_0000,
@@ -1130,7 +1130,7 @@ public enum GGMLTables {
     0x0101_0101_0101_ffff, 0x0101_0101_0101_ff01, 0x0101_0101_0101_01ff, 0x0101_0101_0101_0101,
   ]
 
-  public static let kvalues_iq4nl: [Int8] = [
+  public static let kvaluesIq4nl: [Int8] = [
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
   ]
 

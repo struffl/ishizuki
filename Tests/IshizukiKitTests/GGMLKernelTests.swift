@@ -86,7 +86,7 @@ struct GGMLKernelTests {
   func scalarTypesFallBack() {
     let blocks = MLXArray([UInt8](repeating: 0, count: 64))
     #expect(GGMLKernels.dequantize(blocks: blocks, type: .f32, shape: [16]) == nil)
-    #expect(GGMLKernels.dequantize(blocks: blocks, type: .q3_K, shape: [256]) == nil)
+    #expect(GGMLKernels.dequantize(blocks: blocks, type: .q3K, shape: [256]) == nil)
   }
 }
 
@@ -111,7 +111,7 @@ struct GGMLMatvecTests {
   @Test("the fused matvec matches expanding the weight and multiplying")
   func matchesExpandedMatmul() throws {
     let types: [GGMLType] = [
-      .q2_K, .q4_K, .q6_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+      .q2K, .q4K, .q6K, .iq1S, .iq1M, .iq2Xxs, .iq2Xs, .iq2S, .iq3Xxs, .iq3S, .iq4Xs,
     ]
     let k = 512
     let rows = 17
@@ -145,7 +145,7 @@ struct GGMLMatvecTests {
   @Test("gathering rows matches indexing the expanded table")
   func gatherMatchesIndexing() throws {
     let types: [GGMLType] = [
-      .q2_K, .q4_K, .q6_K, .iq1_s, .iq1_m, .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq4_xs,
+      .q2K, .q4K, .q6K, .iq1S, .iq1M, .iq2Xxs, .iq2Xs, .iq2S, .iq3Xxs, .iq3S, .iq4Xs,
     ]
     let k = 512
     let rows = 40
@@ -168,7 +168,7 @@ struct GGMLMatvecTests {
 
   @Test("a batch the fused path does not cover falls back")
   func refusesWideBatch() {
-    let type = GGMLType.iq2_xs
+    let type = GGMLType.iq2Xs
     let raw = MLXArray(blocks(type, rows: 4, k: 256, seed: 1))
     let wide = MLXRandom.normal([GGMLKernels.matvecBatch.upperBound + 1, 256])
     #expect(GGMLKernels.matvec(wide, blocks: raw, type: type, outputDim: 4) == nil)

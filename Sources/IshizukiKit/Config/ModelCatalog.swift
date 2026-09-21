@@ -17,7 +17,7 @@ public struct ModelCatalog: Sendable {
     case gguf
   }
 
-  public struct Entry: Sendable, Equatable {
+  public struct Entry: Identifiable, Sendable, Equatable {
     public let id: String
     public let format: Format
     /// The pack's directory, or the `.gguf` file itself.

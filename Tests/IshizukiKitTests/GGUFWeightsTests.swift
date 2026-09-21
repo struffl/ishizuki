@@ -46,12 +46,12 @@ struct GGUFWeightsTests {
     writer.metadata = [("general.architecture", 8, Writer.string("qwen35"))]
     writer.tensors = [
       (
-        "token_embd.weight", [vocab, hidden], .iq2_xs,
-        payload(.iq2_xs, elements: vocab * hidden, seed: 11)
+        "token_embd.weight", [vocab, hidden], .iq2Xs,
+        payload(.iq2Xs, elements: vocab * hidden, seed: 11)
       ),
       (
-        "blk.0.ffn_down.weight", [hidden, hidden], .iq3_s,
-        payload(.iq3_s, elements: hidden * hidden, seed: 22)
+        "blk.0.ffn_down.weight", [hidden, hidden], .iq3S,
+        payload(.iq3S, elements: hidden * hidden, seed: 22)
       ),
       ("output_norm.weight", [hidden], .f32, floats((0..<hidden).map { Float($0) * 0.01 })),
       (
@@ -65,8 +65,8 @@ struct GGUFWeightsTests {
     let store = try GGUFWeights.load(file: file)
 
     let prefix = GGUFTensorNaming.prefix
-    #expect(store.ggml(prefix + "embed_tokens.weight")?.type == .iq2_xs)
-    #expect(store.ggml(prefix + "layers.0.mlp.down_proj.weight")?.type == .iq3_s)
+    #expect(store.ggml(prefix + "embed_tokens.weight")?.type == .iq2Xs)
+    #expect(store.ggml(prefix + "layers.0.mlp.down_proj.weight")?.type == .iq3S)
     #expect(store.ggml(prefix + "norm.weight") == nil)
     #expect(store.has(prefix + "norm.weight"))
 
@@ -129,12 +129,12 @@ struct GGUFWeightsTests {
     writer.metadata = [("general.architecture", 8, Writer.string("qwen35"))]
     writer.tensors = [
       (
-        "token_embd.weight", [vocab, hidden], .iq1_m,
-        payload(.iq1_m, elements: vocab * hidden, seed: 33)
+        "token_embd.weight", [vocab, hidden], .iq1M,
+        payload(.iq1M, elements: vocab * hidden, seed: 33)
       ),
       (
-        "blk.0.ffn_up.weight", [hidden, hidden], .iq2_s,
-        payload(.iq2_s, elements: hidden * hidden, seed: 44)
+        "blk.0.ffn_up.weight", [hidden, hidden], .iq2S,
+        payload(.iq2S, elements: hidden * hidden, seed: 44)
       ),
     ]
     try writer.write(to: url)

@@ -18,11 +18,11 @@ struct GGUFTests {
   func blockGeometry() {
     let expected: [(GGMLType, Int, Int)] = [
       (.f32, 1, 4), (.f16, 1, 2), (.bf16, 1, 2),
-      (.q2_K, 256, 84), (.q4_K, 256, 144), (.q6_K, 256, 210),
-      (.iq1_s, 256, 50), (.iq1_m, 256, 56),
-      (.iq2_xxs, 256, 66), (.iq2_xs, 256, 74), (.iq2_s, 256, 82),
-      (.iq3_xxs, 256, 98), (.iq3_s, 256, 110),
-      (.iq4_nl, 32, 18), (.iq4_xs, 256, 136),
+      (.q2K, 256, 84), (.q4K, 256, 144), (.q6K, 256, 210),
+      (.iq1S, 256, 50), (.iq1M, 256, 56),
+      (.iq2Xxs, 256, 66), (.iq2Xs, 256, 74), (.iq2S, 256, 82),
+      (.iq3Xxs, 256, 98), (.iq3S, 256, 110),
+      (.iq4Nl, 32, 18), (.iq4Xs, 256, 136),
     ]
     for (type, blockSize, typeSize) in expected {
       #expect(type.blockSize == blockSize, "\(type.name) block size")
@@ -30,7 +30,7 @@ struct GGUFTests {
     }
 
     // The smallest published GSQ-RCO build: 5120 x 248320 at IQ1_M is 278,118,400 bytes.
-    #expect(GGMLType.iq1_m.byteCount(elements: 5120 * 248_320) == 278_118_400)
+    #expect(GGMLType.iq1M.byteCount(elements: 5120 * 248_320) == 278_118_400)
   }
 
   @Test("reads header, metadata and the tensor table")
@@ -47,9 +47,9 @@ struct GGUFTests {
       ("tokenizer.ggml.tokens", 9, Builder.stringArray(["a", "b", "c"])),
     ]
     builder.tensors = [
-      ("token_embd.weight", [3, 256], .iq1_m),
+      ("token_embd.weight", [3, 256], .iq1M),
       ("output_norm.weight", [256], .f32),
-      ("blk.0.attn_qkv.weight", [512, 256], .iq2_xs),
+      ("blk.0.attn_qkv.weight", [512, 256], .iq2Xs),
     ]
     try builder.write(to: url)
 
@@ -64,7 +64,7 @@ struct GGUFTests {
     #expect(file.tensors.count == 3)
     let qkv = try #require(file[tensor: "blk.0.attn_qkv.weight"])
     #expect(qkv.shape == [512, 256])
-    #expect(qkv.type == .iq2_xs)
+    #expect(qkv.type == .iq2Xs)
     #expect(qkv.byteCount == 512 * 256 / 256 * 74)
 
     let embedding = try #require(file[tensor: "token_embd.weight"])
@@ -79,7 +79,7 @@ struct GGUFTests {
 
     var builder = Builder()
     builder.metadata = [("general.architecture", 8, Builder.string("qwen35"))]
-    builder.tensors = [("blk.0.ffn_up.weight", [4, 100], .iq2_xs)]
+    builder.tensors = [("blk.0.ffn_up.weight", [4, 100], .iq2Xs)]
     try builder.write(to: url)
 
     #expect(throws: BonsaiError.self) { _ = try GGUFFile(url: url) }
@@ -150,22 +150,22 @@ struct GGUFTests {
       ("tokenizer.chat_template", 8, Builder.string("{{ messages }}")),
     ]
     builder.tensors = [
-      ("token_embd.weight", [256, 5120], .iq1_m),
-      ("output.weight", [256, 5120], .iq4_xs),
+      ("token_embd.weight", [256, 5120], .iq1M),
+      ("output.weight", [256, 5120], .iq4Xs),
       ("output_norm.weight", [5120], .f32),
     ]
     for layer in 0..<4 {
       if (layer + 1) % 4 == 0 {
         builder.tensors += [
-          ("blk.\(layer).attn_q.weight", [12288, 5120], .iq2_xs),
-          ("blk.\(layer).attn_k.weight", [1024, 5120], .iq2_xs),
-          ("blk.\(layer).attn_v.weight", [1024, 5120], .iq2_xs),
-          ("blk.\(layer).attn_output.weight", [5120, 6144], .iq2_xs),
+          ("blk.\(layer).attn_q.weight", [12288, 5120], .iq2Xs),
+          ("blk.\(layer).attn_k.weight", [1024, 5120], .iq2Xs),
+          ("blk.\(layer).attn_v.weight", [1024, 5120], .iq2Xs),
+          ("blk.\(layer).attn_output.weight", [5120, 6144], .iq2Xs),
         ]
       } else {
         builder.tensors += [
-          ("blk.\(layer).attn_qkv.weight", [10240, 5120], .iq3_s),
-          ("blk.\(layer).attn_gate.weight", [6144, 5120], .iq3_s),
+          ("blk.\(layer).attn_qkv.weight", [10240, 5120], .iq3S),
+          ("blk.\(layer).attn_gate.weight", [6144, 5120], .iq3S),
           ("blk.\(layer).ssm_a", [48], .f32),
         ]
       }
@@ -221,9 +221,9 @@ struct GGUFTests {
       ("tokenizer.ggml.tokens", 9, Builder.stringArray((0..<256).map { "t\($0)" })),
     ]
     builder.tensors = [
-      ("token_embd.weight", [256, 5120], .iq1_m),
-      ("blk.0.attn_qkv.weight", [8192, 5120], .iq3_s),
-      ("blk.0.attn_gate.weight", [6144, 5120], .iq3_s),
+      ("token_embd.weight", [256, 5120], .iq1M),
+      ("blk.0.attn_qkv.weight", [8192, 5120], .iq3S),
+      ("blk.0.attn_gate.weight", [6144, 5120], .iq3S),
     ]
     try builder.write(to: url)
 
