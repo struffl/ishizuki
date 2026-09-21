@@ -62,7 +62,11 @@ public final class Generator: @unchecked Sendable {
     positions: MLXArray? = nil,
     cachedPrefixLength: Int = 0,
     constraint: OutputConstraint? = nil,
+    /// A token index to stop the prefill on exactly, so a caller can take a rewind point
+    /// somewhere other than a chunk boundary. The chunk is cut short to land on it.
+    checkpointAt: Int? = nil,
     isCancelled: (@Sendable () -> Bool)? = nil,
+    onCheckpoint: (() -> Void)? = nil,
     onPrefilled: (() -> Void)? = nil,
     onProgress: ((GenerationProgress) -> Void)? = nil,
     onToken: ((String) -> Bool)? = nil
@@ -105,7 +109,8 @@ public final class Generator: @unchecked Sendable {
       var last: MLXArray?
       while index < promptTokens.count {
         if isCancelled?() == true { return abandoned() }
-        let end = min(index + prefillChunkSize, promptTokens.count)
+        var end = min(index + prefillChunkSize, promptTokens.count)
+        if let stop = checkpointAt, index < stop, stop < end { end = stop }
         let chunk = MLXArray(promptTokens[index..<end].map { Int32($0) })
           .reshaped([1, end - index])
         last = model.text.hidden(inputs: chunk, cache: cache)
@@ -113,6 +118,7 @@ public final class Generator: @unchecked Sendable {
         index = end
         prefilled = index - cachedPrefixLength
         onProgress?(.prefill(done: prefilled, total: prefillTotal))
+        if index == checkpointAt { onCheckpoint?() }
       }
       logits = model.text.lastLogits(last!)
       eval(logits)
