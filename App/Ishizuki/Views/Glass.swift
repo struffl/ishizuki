@@ -27,70 +27,20 @@ extension Color {
     })
 }
 
-/// Dimming rather than frosting. The system draws glass inactive — greyer, more opaque — while
-/// a window is not key, and lets it sample the live backdrop once it is, so a clear window that
-/// read beautifully over a dark neighbour turned unreadable the moment it came forward over a
-/// white page. A veil sits over the glass, because glass samples what is behind the whole
-/// window and never sees a fill placed under it. What is behind still changes how the app
-/// looks; it no longer decides whether it can be read.
-enum GlassTuning {
-  static let windowKey = "glass.windowVeil"
-  static let plateKey = "glass.plateVeil"
-  static let windowDefault = 0.72
-  static let plateDefault = 0.88
-}
-
-/// Clear glass under a veil. Both veils are settings rather than constants, because how much
-/// of the desktop is too much is a matter of the desktop and of taste.
-private struct WindowVeil: View {
-  @AppStorage(GlassTuning.windowKey) private var veil = GlassTuning.windowDefault
-
-  var body: some View {
-    ZStack {
-      Rectangle()
-        .fill(.clear)
-        .glassEffect(.clear, in: .rect(cornerRadius: 0))
-      Rectangle()
-        .fill(.background.opacity(veil))
-    }
-    .ignoresSafeArea()
-  }
-}
-
-/// The veil goes over the glass rather than under it: glass samples what is behind the whole
-/// window, so a fill underneath is a fill it never sees.
-private struct TextPlate: ViewModifier {
-  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
-  let radius: CGFloat
-  let horizontal: CGFloat
-  let vertical: CGFloat
-
-  func body(content: Content) -> some View {
-    content
-      .padding(.horizontal, horizontal)
-      .padding(.vertical, vertical)
-      .background {
-        ZStack {
-          RoundedRectangle(cornerRadius: radius)
-            .fill(.clear)
-            .glassEffect(.regular, in: .rect(cornerRadius: radius))
-          RoundedRectangle(cornerRadius: radius)
-            .fill(.background.opacity(veil))
-        }
-      }
-  }
-}
-
 extension View {
+  /// The window lays down a material, which is what makes the panels on it read as glass.
   func windowBackdrop() -> some View {
-    containerBackground(for: .window) { WindowVeil() }
+    containerBackground(.ultraThinMaterial, for: .window)
   }
 
-  /// Anything carrying text sits on this.
+  /// Anything carrying text sits on this: clear glass, since the window's material is already
+  /// doing the work of separating it from whatever is behind the window.
   func textPlate(
     radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
   ) -> some View {
-    modifier(TextPlate(radius: radius, horizontal: horizontal, vertical: vertical))
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .glassEffect(.clear, in: .rect(cornerRadius: radius))
   }
 }
 
@@ -99,7 +49,6 @@ struct GlassCard<Content: View>: View {
   var radius: CGFloat = 14
   @ViewBuilder var content: Content
 
-  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
   @Environment(\.controlActiveState) private var activeState
   private var focused: Bool { activeState == .key }
 
@@ -107,25 +56,17 @@ struct GlassCard<Content: View>: View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background {
-        ZStack {
-          RoundedRectangle(cornerRadius: radius)
-            .fill(.clear)
-            .glassEffect(.regular, in: .rect(cornerRadius: radius))
-          RoundedRectangle(cornerRadius: radius)
-            .fill(.background.opacity(veil))
-        }
-      }
+      .glassEffect(.clear, in: .rect(cornerRadius: radius))
       .overlay {
         RoundedRectangle(cornerRadius: radius)
-          .strokeBorder(.white.opacity(focused ? 0.14 : 0.06), lineWidth: 0.5)
+          .strokeBorder(.white.opacity(focused ? 0.18 : 0.06), lineWidth: 1)
       }
       .shadow(
-        color: .black.opacity(focused ? 0.12 : 0.04),
-        radius: focused ? 8 : 3,
-        y: focused ? 2 : 1
+        color: .black.opacity(focused ? 0.16 : 0.05),
+        radius: focused ? 10 : 4,
+        y: focused ? 3 : 1
       )
-      .opacity(focused ? 1 : 0.97)
+      .opacity(focused ? 1 : 0.82)
       .animation(.easeOut(duration: 0.18), value: focused)
   }
 }

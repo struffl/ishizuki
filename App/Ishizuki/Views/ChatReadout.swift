@@ -7,36 +7,30 @@
 import IshizukiKit
 import SwiftUI
 
-/// Two rings on a disc of glass, veiled to the same lightness as the plates beside it: bare
-/// glass renders as the system's own grey, which next to a veiled pill reads as a dark blot.
-/// The empty part matters as much as the full part, so both tracks are drawn faintly at nought
-/// per cent and the rings grow into them.
+/// Two rings on a disc of glass. The empty part matters as much as the full part, so both
+/// tracks are drawn faintly at nought per cent and the rings grow into them.
 struct ContextDial: View {
   var used: Int
   var ceiling: Int
   var prefill: Double?
   var decoding: Bool
 
-  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
-
   private var fraction: Double {
     ceiling > 0 ? min(1, Double(used) / Double(ceiling)) : 0
   }
 
   private var spent: Color {
-    fraction > 0.9 ? .orange : .primary.opacity(0.4)
+    fraction > 0.9 ? .orange : .accentSoft
   }
 
   var body: some View {
     ZStack {
       Circle()
-        .fill(.clear)
-        .glassEffect(.regular, in: .circle)
-        .overlay { Circle().fill(.background.opacity(veil)) }
+        .glassEffect(.clear, in: .circle)
         .frame(width: 46, height: 46)
 
       Circle()
-        .stroke(.primary.opacity(0.08), lineWidth: 4)
+        .stroke(.white.opacity(0.1), lineWidth: 4)
         .frame(width: 32, height: 32)
       Circle()
         .trim(from: 0, to: fraction)
@@ -46,7 +40,7 @@ struct ContextDial: View {
 
       // The outer track is always there so the turn's progress has somewhere to appear.
       Circle()
-        .stroke(.primary.opacity(0.07), lineWidth: 2.5)
+        .stroke(.white.opacity(0.09), lineWidth: 2.5)
         .frame(width: 43, height: 43)
       if let prefill {
         Circle()
