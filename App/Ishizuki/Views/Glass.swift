@@ -35,7 +35,7 @@ extension Color {
 /// looks; it no longer decides whether it can be read.
 enum GlassTuning {
   /// Over the whole window. Enough to see through and no more.
-  static let windowVeil = 0.34
+  static let windowVeil = 0.5
   /// Over anything carrying text, where guessing wrong costs legibility rather than looks.
   static let plateVeil = 0.88
 }
