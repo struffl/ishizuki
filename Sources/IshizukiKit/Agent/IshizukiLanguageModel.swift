@@ -79,6 +79,12 @@ public struct IshizukiExecutor: LanguageModelExecutor {
         onReasoning: { emit.yield(.reasoning($0)) })
     }
 
+    // One id per kind for the whole turn, so every append and the replacement that ends it
+    // land in the same entry. Left to itself the channel opens a new entry each time, which
+    // is how a thought came to appear twice with the answer in between.
+    let responseID = UUID().uuidString
+    let reasoningID = UUID().uuidString
+
     var streamedReasoning = false
     var content = ""
     var reasoning = ""
@@ -92,12 +98,14 @@ public struct IshizukiExecutor: LanguageModelExecutor {
     func flush() async {
       if !reasoning.isEmpty {
         streamedReasoning = true
-        await channel.send(.reasoning(action: .appendText(reasoning, tokenCount: 0)))
+        await channel.send(
+          .reasoning(entryID: reasoningID, action: .appendText(reasoning, tokenCount: 0)))
         reasoning = ""
       }
       if !content.isEmpty {
         streamed += content.count
-        await channel.send(.response(action: .appendText(content, tokenCount: 0)))
+        await channel.send(
+          .response(entryID: responseID, action: .appendText(content, tokenCount: 0)))
         content = ""
       }
     }
@@ -120,16 +128,19 @@ public struct IshizukiExecutor: LanguageModelExecutor {
     // Whatever the stream did or did not manage to deliver, the parsed result is the whole of
     // what was generated, so the turn ends by replacing the streamed text with it. Streaming
     // is for watching; this is what makes the transcript right.
-    if !outcome.content.isEmpty {
-      await channel.send(
-        .response(action: .replaceTextSegment(outcome.content, tokenCount: 0)))
-    }
+    // Thinking first, so a turn that never streamed still reads in the order it happened.
     if let reasoning = outcome.reasoning, !reasoning.isEmpty {
       let action: LanguageModelExecutorGenerationChannel.Reasoning.Action =
         streamedReasoning
         ? .replaceTextSegment(reasoning, tokenCount: 0)
         : .appendText(reasoning, tokenCount: 0)
-      await channel.send(.reasoning(action: action))
+      await channel.send(.reasoning(entryID: reasoningID, action: action))
+    }
+    if !outcome.content.isEmpty {
+      await channel.send(
+        .response(
+          entryID: responseID,
+          action: .replaceTextSegment(outcome.content, tokenCount: 0)))
     }
 
     if streamed != outcome.content.count {

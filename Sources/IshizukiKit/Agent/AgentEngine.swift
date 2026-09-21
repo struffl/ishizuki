@@ -107,6 +107,11 @@ public final class AgentEngine: @unchecked Sendable {
   /// leaving a gap between the thought that preceded it and the call itself.
   public var writingCommand: String { commandText.value }
 
+  /// What this turn has generated so far, held here because it is the one place that has it
+  /// the moment it exists. The session's transcript catches up on its own schedule.
+  public var liveReasoning: String { reasoningText.value }
+  public var liveAnswer: String { answerText.value }
+
   /// The last turn's prompt, kept only to say how much of it the next one still agrees with.
   /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
   /// is not working, and the two look identical from the readout.
@@ -117,6 +122,8 @@ public final class AgentEngine: @unchecked Sendable {
   public var lastPromptTokens: [Int] { promptTokens }
   private let systemCount = Counter()
   private let commandText = Text()
+  private let reasoningText = Text()
+  private let answerText = Text()
 
   /// How much of a prompt is the instructions and the tool schemas — the part that is the same
   /// every turn, and the part someone waiting on a first answer is mostly waiting for.
@@ -146,6 +153,8 @@ public final class AgentEngine: @unchecked Sendable {
     let cancel = Flag()
     toolStanza.lower()
     commandText.clear()
+    reasoningText.clear()
+    answerText.clear()
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         server.generationQueue.async { [self] in
@@ -210,8 +219,14 @@ public final class AgentEngine: @unchecked Sendable {
               request,
               id: id,
               isCancelled: { cancel.isRaised },
-              onText: onText.map { emit in { fragment in emit(fragment) } },
-              onReasoning: onReasoning.map { emit in { fragment in emit(fragment) } },
+              onText: { [answerText] fragment in
+                answerText.append(fragment)
+                onText?(fragment)
+              },
+              onReasoning: { [reasoningText] fragment in
+                reasoningText.append(fragment)
+                onReasoning?(fragment)
+              },
               onToolStanza: { [toolStanza] in toolStanza.raise() },
               onToolText: { [commandText] fragment in commandText.append(fragment) })
             continuation.resume(
