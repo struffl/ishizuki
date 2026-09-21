@@ -279,6 +279,10 @@ struct ChatRowView: View {
           .font(monospaced ? mono : .system(size: size - 1))
           .foregroundStyle(.primary.opacity(0.85))
           .textSelection(.enabled)
+          // Once there is more than one line the block takes the width rather than sizing
+          // itself to whichever line happens to be longest, which left a ragged right edge
+          // that moved as the text streamed in.
+          .frame(maxWidth: body.contains("\n") ? .infinity : nil, alignment: .leading)
           .textPlate(radius: 8, horizontal: 9, vertical: 5)
           // Indented to sit under its own title rather than beside it.
           .padding(.leading, 15)
