@@ -87,23 +87,23 @@ struct ChatView: View {
   }
 
   @ViewBuilder private var composer: some View {
-    HStack(alignment: .bottom, spacing: 8) {
+    HStack(alignment: .center, spacing: 8) {
       TextField(
         chat.isResponding ? "Steer the next turn…" : "What needs doing?",
         text: $chat.draft, axis: .vertical)
         .textFieldStyle(.plain)
         .font(mono)
         .lineLimit(1...6)
-        .onSubmit { submit() }
+        .onSubmit { chat.submit() }
 
       if chat.isResponding {
         Button("Stop", systemImage: "stop.fill") { chat.stop() }
           .labelStyle(.iconOnly)
           .help("Stop this turn")
       }
-      Button(chat.isResponding ? "Steer" : "Send") { submit() }
+      Button(chat.submissionLabel) { chat.submit() }
         .buttonStyle(.borderedProminent)
-        .disabled(chat.isResponding ? chat.draft.isEmpty : !chat.canSend)
+        .disabled(!chat.canSubmit)
     }
     .textPlate(radius: 10, horizontal: 12, vertical: 10)
     .padding(.horizontal, 10)
@@ -114,14 +114,6 @@ struct ChatView: View {
     monoFont.isEmpty
       ? .system(size: fontSize, design: .monospaced)
       : .custom(monoFont, size: fontSize)
-  }
-
-  private func submit() {
-    if chat.isResponding {
-      chat.steer()
-    } else {
-      chat.send()
-    }
   }
 }
 

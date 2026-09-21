@@ -91,16 +91,95 @@ final class ChatController {
 
   var isGenerating: Bool { inFlight?.phase == .decode }
 
-  var canSend: Bool {
-    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && workspace != nil && engine != nil && !isResponding
+  /// What pressing return does. Nothing here is a dead end: if the pack is not up, return
+  /// brings it up and sends what was typed once it is.
+  enum Submission: Equatable {
+    case chooseFolder
+    case load
+    case loading
+    case send
+    case steer
+    case nothingToSay
   }
 
-  /// Why the composer is closed, said plainly rather than left to be guessed at.
+  var submission: Submission {
+    if workspace == nil { return .chooseFolder }
+    if isResponding { return .steer }
+    if server?.phase.isBusy == true { return .loading }
+    if engine == nil { return .load }
+    return typed.isEmpty ? .nothingToSay : .send
+  }
+
+  var submissionLabel: String {
+    switch submission {
+    case .chooseFolder: "Choose"
+    case .load: "Load"
+    case .loading: "Loading"
+    case .steer: "Steer"
+    case .send, .nothingToSay: "Send"
+    }
+  }
+
+  var canSubmit: Bool {
+    switch submission {
+    case .loading, .nothingToSay: false
+    case .steer: !typed.isEmpty
+    case .chooseFolder, .load, .send: true
+    }
+  }
+
+  func submit() {
+    switch submission {
+    case .chooseFolder: chooseWorkspace()
+    case .load: load()
+    case .send: send()
+    case .steer: steer()
+    case .loading, .nothingToSay: break
+    }
+  }
+
+  private var typed: String {
+    draft.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Why the transcript is empty, said plainly rather than left to be guessed at.
   var blocker: String? {
-    if workspace == nil { return "Choose a folder to work in." }
-    if engine == nil { return "Start the server to load a pack." }
-    return nil
+    switch submission {
+    case .chooseFolder: "Choose a folder to work in."
+    case .load: "Press Load to bring the pack up."
+    case .loading: "Bringing the pack up…"
+    default: nil
+    }
+  }
+
+  private func load() {
+    guard let server else { return }
+    failure = nil
+    server.start()
+    Task { await self.sendOnceLoaded() }
+  }
+
+  /// Pressing Load with something already typed should send it, rather than asking for the
+  /// same keystroke twice.
+  private func sendOnceLoaded() async {
+    while !Task.isCancelled {
+      guard let server else { return }
+      switch server.phase {
+      case .failed(let message):
+        failure = message
+        return
+      case .running:
+        if engine != nil {
+          if !typed.isEmpty { send() }
+          return
+        }
+      case .stopped:
+        return
+      case .starting:
+        break
+      }
+      try? await Task.sleep(for: .milliseconds(150))
+    }
   }
 
   func chooseWorkspace() {
@@ -115,8 +194,8 @@ final class ChatController {
   }
 
   func send() {
-    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard canSend, let agent = resolveAgent() else { return }
+    let text = typed
+    guard !text.isEmpty, !isResponding, let agent = resolveAgent() else { return }
     draft = ""
     failure = nil
     isResponding = true

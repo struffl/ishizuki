@@ -29,40 +29,48 @@ extension Color {
 
 /// Dimming rather than frosting. The system draws glass inactive — greyer, more opaque — while
 /// a window is not key, and lets it sample the live backdrop once it is, so a clear window that
-/// reads beautifully over a dark neighbour turns unreadable the moment it comes forward over a
-/// white page. These two floors are what the glass composites onto, so what is behind the
-/// window changes how it looks without ever deciding whether it can be read.
+/// read beautifully over a dark neighbour turned unreadable the moment it came forward over a
+/// white page. A veil sits over the glass, because glass samples what is behind the whole
+/// window and never sees a fill placed under it. What is behind still changes how the app
+/// looks; it no longer decides whether it can be read.
 enum GlassTuning {
-  /// Under the whole window. Low enough to still see through, high enough that the tab bar and
-  /// the title do not have to fight a bright page behind them.
-  static let windowFloor = 0.2
-  /// Under anything carrying text, where guessing wrong costs legibility rather than looks.
-  static let plateFloor = 0.78
+  /// Over the whole window. Enough to see through and no more.
+  static let windowVeil = 0.34
+  /// Over anything carrying text, where guessing wrong costs legibility rather than looks.
+  static let plateVeil = 0.88
 }
 
 extension View {
-  /// The window stays see-through: clear glass over a floor that only takes the edge off.
+  /// The window stays see-through: clear glass under a veil that only takes the edge off.
   func windowBackdrop() -> some View {
     containerBackground(for: .window) {
-      Rectangle()
-        .fill(.background.opacity(GlassTuning.windowFloor))
-        .glassEffect(.clear, in: .rect(cornerRadius: 0))
-        .ignoresSafeArea()
+      ZStack {
+        Rectangle()
+          .fill(.clear)
+          .glassEffect(.clear, in: .rect(cornerRadius: 0))
+        Rectangle()
+          .fill(.background.opacity(GlassTuning.windowVeil))
+      }
+      .ignoresSafeArea()
     }
   }
 
-  /// Anything carrying text sits on this: regular glass, the opaque end of what the system
-  /// offers, over a floor of the window's own colour. The floor is behind the glass rather than
-  /// over it, so the sheen survives and the desktop does not come through.
+  /// Anything carrying text sits on this. The veil goes over the glass rather than under it:
+  /// glass samples what is behind the whole window, so a fill underneath is a fill it never
+  /// sees, and the desktop comes through regardless of what was put there.
   func textPlate(
     radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
   ) -> some View {
     padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
-      .glassEffect(.regular, in: .rect(cornerRadius: radius))
       .background {
-        RoundedRectangle(cornerRadius: radius)
-          .fill(.background.opacity(GlassTuning.plateFloor))
+        ZStack {
+          RoundedRectangle(cornerRadius: radius)
+            .fill(.clear)
+            .glassEffect(.regular, in: .rect(cornerRadius: radius))
+          RoundedRectangle(cornerRadius: radius)
+            .fill(.background.opacity(GlassTuning.plateVeil))
+        }
       }
   }
 }
@@ -79,10 +87,14 @@ struct GlassCard<Content: View>: View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .glassEffect(.regular, in: .rect(cornerRadius: radius))
       .background {
-        RoundedRectangle(cornerRadius: radius)
-          .fill(.background.opacity(GlassTuning.plateFloor))
+        ZStack {
+          RoundedRectangle(cornerRadius: radius)
+            .fill(.clear)
+            .glassEffect(.regular, in: .rect(cornerRadius: radius))
+          RoundedRectangle(cornerRadius: radius)
+            .fill(.background.opacity(GlassTuning.plateVeil))
+        }
       }
       .overlay {
         RoundedRectangle(cornerRadius: radius)

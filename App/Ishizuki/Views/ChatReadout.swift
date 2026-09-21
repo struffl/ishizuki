@@ -89,8 +89,12 @@ struct ChatReadoutBar: View {
           .controlSize(.small)
           .scaleEffect(0.7)
       }
-      modelSwitcher
-      effortDial
+      HStack(spacing: 8) {
+        modelSwitcher
+        Divider().frame(height: 12)
+        effortDial
+      }
+      .textPlate(radius: 9, horizontal: 9, vertical: 5)
       ContextDial(
         used: chat.readout?.context.peakTokens ?? 0,
         ceiling: chat.readout?.context.ceilingTokens ?? 0,
@@ -114,7 +118,7 @@ struct ChatReadoutBar: View {
           request.phase == .prefill ? "reading" : "writing")
       }
     }
-    .padding(.horizontal, 4)
+    .textPlate(radius: 9, horizontal: 9, vertical: 4)
   }
 
   private func reading(_ value: String, _ label: String) -> some View {
