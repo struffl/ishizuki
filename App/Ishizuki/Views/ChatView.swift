@@ -217,7 +217,8 @@ struct ChatRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.mine, in: Bubble(mine: true))
-        .padding(.leading, 40)
+        .padding(.trailing, 10)
+        .padding(.leading, 44)
         .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .steer:
@@ -226,7 +227,8 @@ struct ChatRowView: View {
     case .answer:
       MarkdownText(text: row.text, mono: mono, size: size)
         .textPlate(Bubble(mine: false))
-        .padding(.trailing, 40)
+        .padding(.leading, 10)
+        .padding(.trailing, 44)
         .frame(maxWidth: .infinity, alignment: .leading)
 
     case .reasoning:
