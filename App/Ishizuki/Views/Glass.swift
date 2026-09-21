@@ -34,34 +34,40 @@ extension Color {
 /// window and never sees a fill placed under it. What is behind still changes how the app
 /// looks; it no longer decides whether it can be read.
 enum GlassTuning {
-  /// Over the whole window. Enough to see through and no more.
-  static let windowVeil = 0.5
-  /// Over anything carrying text, where guessing wrong costs legibility rather than looks.
-  static let plateVeil = 0.88
+  static let windowKey = "glass.windowVeil"
+  static let plateKey = "glass.plateVeil"
+  static let windowDefault = 0.72
+  static let plateDefault = 0.88
 }
 
-extension View {
-  /// The window stays see-through: clear glass under a veil that only takes the edge off.
-  func windowBackdrop() -> some View {
-    containerBackground(for: .window) {
-      ZStack {
-        Rectangle()
-          .fill(.clear)
-          .glassEffect(.clear, in: .rect(cornerRadius: 0))
-        Rectangle()
-          .fill(.background.opacity(GlassTuning.windowVeil))
-      }
-      .ignoresSafeArea()
-    }
-  }
+/// Clear glass under a veil. Both veils are settings rather than constants, because how much
+/// of the desktop is too much is a matter of the desktop and of taste.
+private struct WindowVeil: View {
+  @AppStorage(GlassTuning.windowKey) private var veil = GlassTuning.windowDefault
 
-  /// Anything carrying text sits on this. The veil goes over the glass rather than under it:
-  /// glass samples what is behind the whole window, so a fill underneath is a fill it never
-  /// sees, and the desktop comes through regardless of what was put there.
-  func textPlate(
-    radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
-  ) -> some View {
-    padding(.horizontal, horizontal)
+  var body: some View {
+    ZStack {
+      Rectangle()
+        .fill(.clear)
+        .glassEffect(.clear, in: .rect(cornerRadius: 0))
+      Rectangle()
+        .fill(.background.opacity(veil))
+    }
+    .ignoresSafeArea()
+  }
+}
+
+/// The veil goes over the glass rather than under it: glass samples what is behind the whole
+/// window, so a fill underneath is a fill it never sees.
+private struct TextPlate: ViewModifier {
+  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
+  let radius: CGFloat
+  let horizontal: CGFloat
+  let vertical: CGFloat
+
+  func body(content: Content) -> some View {
+    content
+      .padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
       .background {
         ZStack {
@@ -69,9 +75,22 @@ extension View {
             .fill(.clear)
             .glassEffect(.regular, in: .rect(cornerRadius: radius))
           RoundedRectangle(cornerRadius: radius)
-            .fill(.background.opacity(GlassTuning.plateVeil))
+            .fill(.background.opacity(veil))
         }
       }
+  }
+}
+
+extension View {
+  func windowBackdrop() -> some View {
+    containerBackground(for: .window) { WindowVeil() }
+  }
+
+  /// Anything carrying text sits on this.
+  func textPlate(
+    radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
+  ) -> some View {
+    modifier(TextPlate(radius: radius, horizontal: horizontal, vertical: vertical))
   }
 }
 
@@ -80,6 +99,7 @@ struct GlassCard<Content: View>: View {
   var radius: CGFloat = 14
   @ViewBuilder var content: Content
 
+  @AppStorage(GlassTuning.plateKey) private var veil = GlassTuning.plateDefault
   @Environment(\.controlActiveState) private var activeState
   private var focused: Bool { activeState == .key }
 
@@ -93,7 +113,7 @@ struct GlassCard<Content: View>: View {
             .fill(.clear)
             .glassEffect(.regular, in: .rect(cornerRadius: radius))
           RoundedRectangle(cornerRadius: radius)
-            .fill(.background.opacity(GlassTuning.plateVeil))
+            .fill(.background.opacity(veil))
         }
       }
       .overlay {

@@ -59,13 +59,6 @@ struct ChatView: View {
     ScrollViewReader { scroller in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 10) {
-          if chat.rows.isEmpty {
-            Text(chat.blocker ?? "Ask for a change and it will read before it writes.")
-              .font(.system(size: 11))
-              .foregroundStyle(.secondary)
-              .textPlate()
-              .padding(.top, 24)
-          }
           ForEach(chat.rows) { row in
             ChatRowView(row: row, mono: mono, size: fontSize)
               .id(row.id)

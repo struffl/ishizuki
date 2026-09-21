@@ -32,6 +32,15 @@ struct SettingsView: View {
         }
       }
 
+      Section("Glass") {
+        LabeledContent("Window") {
+          VeilSlider(key: GlassTuning.windowKey, fallback: GlassTuning.windowDefault)
+        }
+        LabeledContent("Behind text") {
+          VeilSlider(key: GlassTuning.plateKey, fallback: GlassTuning.plateDefault)
+        }
+      }
+
       Section("Cache") {
         Picker("KV cache", selection: Bindable(settings).kvBits) {
           Text("3.5-bit (default)").tag(3.5)
@@ -122,6 +131,30 @@ private struct TimeoutField: View {
       Text(seconds == 0 ? "never" : ReadoutFormat.duration(seconds))
         .font(.system(size: 11, design: .monospaced))
         .frame(width: 60, alignment: .trailing)
+    }
+  }
+}
+
+/// How much of what is behind the window comes through. Kept as a slider because the right
+/// answer depends on the wallpaper it is sitting on.
+private struct VeilSlider: View {
+  let key: String
+  let fallback: Double
+
+  @AppStorage private var veil: Double
+
+  init(key: String, fallback: Double) {
+    self.key = key
+    self.fallback = fallback
+    _veil = AppStorage(wrappedValue: fallback, key)
+  }
+
+  var body: some View {
+    HStack {
+      Slider(value: $veil, in: 0...1)
+      Text(ReadoutFormat.percent(veil))
+        .font(.system(size: 11, design: .monospaced))
+        .frame(width: 44, alignment: .trailing)
     }
   }
 }
