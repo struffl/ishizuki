@@ -87,123 +87,123 @@ extension ShellHost {
 
 #if os(macOS)
 
-/// Runs commands in this process. Correct for a Developer ID build; under the App Sandbox the
-/// child inherits the sandbox and only the container is reachable. There is no process to spawn
-/// on iOS, where a workspace is reached over the link instead.
-public final class LocalShellHost: ShellHost {
-  public let workspace: URL
-  public let shell: String
-  public let extraPaths: [String]
+  /// Runs commands in this process. Correct for a Developer ID build; under the App Sandbox the
+  /// child inherits the sandbox and only the container is reachable. There is no process to spawn
+  /// on iOS, where a workspace is reached over the link instead.
+  public final class LocalShellHost: ShellHost {
+    public let workspace: URL
+    public let shell: String
+    public let extraPaths: [String]
 
-  public init(
-    workspace: URL, shell: String = "/bin/zsh",
-    extraPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]
-  ) {
-    self.workspace = workspace
-    self.shell = shell
-    self.extraPaths = extraPaths
-  }
-
-  public var isAvailable: Bool { FileManager.default.isExecutableFile(atPath: shell) }
-
-  public func run(
-    _ command: String, cwd: URL?, timeout: Double, byteLimit: Int
-  ) async throws -> ShellResult {
-    guard isAvailable else { throw ShellError.missingProgram(shell) }
-    let directory = try cwd.map { try resolve($0.path) } ?? workspace
-
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: shell)
-    process.arguments = ["-l", "-c", command]
-    process.currentDirectoryURL = directory
-
-    var environment = ProcessInfo.processInfo.environment
-    let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-    environment["PATH"] = (extraPaths + [path]).joined(separator: ":")
-    environment["TERM"] = "dumb"
-    process.environment = environment
-
-    let out = Pipe()
-    let err = Pipe()
-    process.standardOutput = out
-    process.standardError = err
-
-    let expiry = Expiry()
-    try process.run()
-
-    // Both pipes drain at once: draining one to completion first lets the child block on the
-    // other's full buffer, and neither of us would ever move again.
-    async let stdout = Self.drain(out, limit: byteLimit)
-    async let stderr = Self.drain(err, limit: byteLimit)
-
-    let deadline = Task {
-      try await Task.sleep(for: .seconds(timeout))
-      expiry.expire()
-      process.terminate()
+    public init(
+      workspace: URL, shell: String = "/bin/zsh",
+      extraPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]
+    ) {
+      self.workspace = workspace
+      self.shell = shell
+      self.extraPaths = extraPaths
     }
 
-    let captured = await (stdout, stderr)
-    process.waitUntilExit()
-    deadline.cancel()
+    public var isAvailable: Bool { FileManager.default.isExecutableFile(atPath: shell) }
 
-    if expiry.hasExpired { throw ShellError.timedOut(timeout) }
+    public func run(
+      _ command: String, cwd: URL?, timeout: Double, byteLimit: Int
+    ) async throws -> ShellResult {
+      guard isAvailable else { throw ShellError.missingProgram(shell) }
+      let directory = try cwd.map { try resolve($0.path) } ?? workspace
 
-    return ShellResult(
-      stdout: captured.0.text,
-      stderr: captured.1.text,
-      exitCode: process.terminationStatus,
-      truncated: captured.0.truncated || captured.1.truncated)
-  }
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: shell)
+      process.arguments = ["-l", "-c", command]
+      process.currentDirectoryURL = directory
 
-  private struct Capture: Sendable {
-    var text: String
-    var truncated: Bool
-  }
+      var environment = ProcessInfo.processInfo.environment
+      let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+      environment["PATH"] = (extraPaths + [path]).joined(separator: ":")
+      environment["TERM"] = "dumb"
+      process.environment = environment
 
-  /// Reads a pipe to a ceiling, because a runaway build log is not something a 27B model on a
-  /// laptop should be made to read. Reading continues past the ceiling and is thrown away, so
-  /// a chatty command is never left blocked on a pipe nobody is emptying.
-  private static func drain(_ pipe: Pipe, limit: Int) async -> Capture {
-    await withCheckedContinuation { continuation in
-      DispatchQueue.global(qos: .userInitiated).async {
-        var data = Data()
-        var truncated = false
-        let handle = pipe.fileHandleForReading
-        while let chunk = try? handle.read(upToCount: 16 * 1024), !chunk.isEmpty {
-          if data.count < limit {
-            data.append(chunk)
-          } else {
+      let out = Pipe()
+      let err = Pipe()
+      process.standardOutput = out
+      process.standardError = err
+
+      let expiry = Expiry()
+      try process.run()
+
+      // Both pipes drain at once: draining one to completion first lets the child block on the
+      // other's full buffer, and neither of us would ever move again.
+      async let stdout = Self.drain(out, limit: byteLimit)
+      async let stderr = Self.drain(err, limit: byteLimit)
+
+      let deadline = Task {
+        try await Task.sleep(for: .seconds(timeout))
+        expiry.expire()
+        process.terminate()
+      }
+
+      let captured = await (stdout, stderr)
+      process.waitUntilExit()
+      deadline.cancel()
+
+      if expiry.hasExpired { throw ShellError.timedOut(timeout) }
+
+      return ShellResult(
+        stdout: captured.0.text,
+        stderr: captured.1.text,
+        exitCode: process.terminationStatus,
+        truncated: captured.0.truncated || captured.1.truncated)
+    }
+
+    private struct Capture: Sendable {
+      var text: String
+      var truncated: Bool
+    }
+
+    /// Reads a pipe to a ceiling, because a runaway build log is not something a 27B model on a
+    /// laptop should be made to read. Reading continues past the ceiling and is thrown away, so
+    /// a chatty command is never left blocked on a pipe nobody is emptying.
+    private static func drain(_ pipe: Pipe, limit: Int) async -> Capture {
+      await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+          var data = Data()
+          var truncated = false
+          let handle = pipe.fileHandleForReading
+          while let chunk = try? handle.read(upToCount: 16 * 1024), !chunk.isEmpty {
+            if data.count < limit {
+              data.append(chunk)
+            } else {
+              truncated = true
+            }
+          }
+          if data.count > limit {
+            data = data.prefix(limit)
             truncated = true
           }
+          continuation.resume(
+            returning: Capture(
+              text: String(decoding: data, as: UTF8.self), truncated: truncated))
         }
-        if data.count > limit {
-          data = data.prefix(limit)
-          truncated = true
-        }
-        continuation.resume(
-          returning: Capture(
-            text: String(decoding: data, as: UTF8.self), truncated: truncated))
       }
     }
   }
-}
 
-/// One bit, shared between the command and the clock that may cut it short.
-private final class Expiry: @unchecked Sendable {
-  private let lock = NSLock()
-  private var expired = false
+  /// One bit, shared between the command and the clock that may cut it short.
+  private final class Expiry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var expired = false
 
-  var hasExpired: Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return expired
+    var hasExpired: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return expired
+    }
+
+    func expire() {
+      lock.lock()
+      expired = true
+      lock.unlock()
+    }
   }
-
-  func expire() {
-    lock.lock()
-    expired = true
-    lock.unlock()
-  }
-}
 
 #endif

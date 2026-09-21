@@ -33,29 +33,29 @@ public enum GPUMeter {
     #if !os(macOS)
       return nil
     #else
-    var iterator: io_iterator_t = 0
-    guard
-      IOServiceGetMatchingServices(
-        kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS
-    else { return nil }
-    defer { IOObjectRelease(iterator) }
-
-    while case let service = IOIteratorNext(iterator), service != 0 {
-      defer { IOObjectRelease(service) }
-      var properties: Unmanaged<CFMutableDictionary>?
+      var iterator: io_iterator_t = 0
       guard
-        IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0)
-          == KERN_SUCCESS,
-        let dictionary = properties?.takeRetainedValue() as? [String: Any],
-        let statistics = dictionary["PerformanceStatistics"] as? [String: Any]
-      else { continue }
-      for key in ["Device Utilization %", "GPU Activity(%)", "Renderer Utilization %"] {
-        if let value = statistics[key] as? NSNumber {
-          return min(max(Double(value.doubleValue) / 100, 0), 1)
+        IOServiceGetMatchingServices(
+          kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS
+      else { return nil }
+      defer { IOObjectRelease(iterator) }
+
+      while case let service = IOIteratorNext(iterator), service != 0 {
+        defer { IOObjectRelease(service) }
+        var properties: Unmanaged<CFMutableDictionary>?
+        guard
+          IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0)
+            == KERN_SUCCESS,
+          let dictionary = properties?.takeRetainedValue() as? [String: Any],
+          let statistics = dictionary["PerformanceStatistics"] as? [String: Any]
+        else { continue }
+        for key in ["Device Utilization %", "GPU Activity(%)", "Renderer Utilization %"] {
+          if let value = statistics[key] as? NSNumber {
+            return min(max(Double(value.doubleValue) / 100, 0), 1)
+          }
         }
       }
-    }
-    return nil
+      return nil
     #endif
   }
 }

@@ -61,8 +61,7 @@ struct StreamFilterTests {
   }
 
   @Test("a tool call ends the visible text and nothing after it is shown")
-  func stopsAtAToolCall()
-  {
+  func stopsAtAToolCall() {
     let drain = run(
       thinking: false,
       ["Let me read that file.", "<tool_call><function=read>", "trailing noise"])

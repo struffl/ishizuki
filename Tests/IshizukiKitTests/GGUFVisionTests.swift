@@ -78,7 +78,8 @@ struct GGUFVisionTests {
 
     let built = try VisionTower(config: vision.config, store: store)
     let grid = (t: 1, h: 4, w: 4)
-    let patches = MLXRandom.normal([grid.h * grid.w, 3 * 2 * tower.patch * tower.patch]).asType(.float32)
+    let patches = MLXRandom.normal([grid.h * grid.w, 3 * 2 * tower.patch * tower.patch]).asType(
+      .float32)
     let out = built(patches: patches, grid: grid)
     eval(out)
 

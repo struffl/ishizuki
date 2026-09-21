@@ -33,7 +33,8 @@ struct ReferenceDivergenceProbe {
       defer { off += 4 }
       return Int(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off, as: UInt32.self) })
     }
-    let count = u32(), tokens = u32()
+    let count = u32()
+    let tokens = u32()
     off += 4 * tokens
 
     var reference: [String: MLXArray] = [:]
@@ -42,11 +43,13 @@ struct ReferenceDivergenceProbe {
       let name = String(
         data: data[data.startIndex + off..<data.startIndex + off + n], encoding: .utf8)!
       off += n
-      let rows = u32(), cols = u32()
+      let rows = u32()
+      let cols = u32()
       var values = [Float]()
       values.reserveCapacity(rows * cols)
       for _ in 0..<(rows * cols) {
-        values.append(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off, as: Float.self) })
+        values.append(
+          data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off, as: Float.self) })
         off += 4
       }
       reference[name] = MLXArray(values, [1, rows, cols])
@@ -58,7 +61,8 @@ struct ReferenceDivergenceProbe {
     let mask = causalMask(length: tokens, offset: 0, dtype: .bfloat16)
 
     func agreement(_ got: MLXArray, _ want: MLXArray) -> Float {
-      let a = got.asType(.float32), b = want.asType(.float32)
+      let a = got.asType(.float32)
+      let b = want.asType(.float32)
       eval(a, b)
       let covariance = ((a - a.mean()) * (b - b.mean())).mean().item(Float.self)
       let deviation = (a.variance().sqrt() * b.variance().sqrt()).item(Float.self)
