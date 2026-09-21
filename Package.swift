@@ -13,6 +13,7 @@ let package = Package(
   products: [
     .library(name: "IshizukiKit", targets: ["IshizukiKit"]),
     .library(name: "IshizukiAgent", targets: ["IshizukiAgent"]),
+    .library(name: "IshizukiLink", targets: ["IshizukiLink"]),
   ],
   dependencies: [
     .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.6"),
@@ -38,6 +39,16 @@ let package = Package(
         "IshizukiKit",
         .product(name: "SwiftAgent", package: "SwiftAgent"),
       ]
+    ),
+    // The companion protocol, which both the Mac serving a conversation and the phone borrowing
+    // one are written against. Carries no model code, so the phone links it without MLX.
+    .target(
+      name: "IshizukiLink",
+      dependencies: ["IshizukiKit"]
+    ),
+    .testTarget(
+      name: "IshizukiLinkTests",
+      dependencies: ["IshizukiLink"]
     ),
     .testTarget(
       name: "IshizukiKitTests",

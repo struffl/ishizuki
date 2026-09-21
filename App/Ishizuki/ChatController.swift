@@ -168,6 +168,9 @@ final class ChatController {
 
   @ObservationIgnored private var run: Run?
   @ObservationIgnored private var parked: [UUID: Parked] = [:]
+  /// Steering sent from the companion for a conversation with no turn in flight and no parked
+  /// copy: held here until one of its turns goes out.
+  @ObservationIgnored private var queuedSteers: [UUID: [Row]] = [:]
   /// Bumped whenever a turn starts or ends, so the window notices a run it cannot otherwise
   /// see: the run itself is deliberately unobserved.
   private var runToken = 0
@@ -309,7 +312,7 @@ final class ChatController {
       transcriptRows = builder.rows(from: agents[chat.id]?.transcript ?? chat.transcript)
       meta.removeAll()
       display.removeAll()
-      pendingSteers.removeAll()
+      pendingSteers = queuedSteers.removeValue(forKey: chat.id) ?? []
       failure = nil
     }
     if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
@@ -539,13 +542,35 @@ final class ChatController {
     let text = (pendingSteers.map(\.text) + [typed])
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
-    guard !text.isEmpty, !isRunningTurn, let agent = resolveAgent() else { return }
+    guard !text.isEmpty, !isRunningTurn else { return }
     draft = ""
     failure = nil
     pendingSteers.removeAll()
-    engine?.effort = effort
+    send(text, in: current.id)
+  }
 
-    let run = Run(chatID: current.id, agent: agent)
+  /// A turn started against a named conversation, which may not be the one on screen: the
+  /// companion sends this way, and its rows fold into a parked copy until someone opens it,
+  /// exactly as a conversation left mid-answer does.
+  @discardableResult
+  func send(_ text: String, in chatID: UUID) -> Bool {
+    let queued = queuedSteers.removeValue(forKey: chatID)?.map(\.text) ?? []
+    let text = (queued + [text])
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n\n")
+    guard !text.isEmpty, !isRunningTurn else { return false }
+    guard let chat = saved(chatID), let agent = resolveAgent(for: chatID) else { return false }
+    if chatID != current.id, parked[chatID] == nil {
+      var builder = RowBuilder()
+      let transcript = agent.transcript.isEmpty ? chat.transcript : agent.transcript
+      parked[chatID] = Parked(
+        rows: builder.rows(from: transcript), meta: [:], display: [:], steers: [],
+        failure: nil)
+    }
+    engine?.effort = chatID == current.id ? effort : chat.effort
+
+    let run = Run(chatID: chatID, agent: agent)
     run.totalsAtStart = server?.readout?.totals
     run.tokensAtStart = run.totalsAtStart?.generatedTokens ?? 0
     self.run = run
@@ -563,6 +588,7 @@ final class ChatController {
       guard let self else { return }
       self.finish(run)
     }
+    return true
   }
 
   func stop() {
@@ -614,15 +640,23 @@ final class ChatController {
     }
   }
 
-  private func resolveAgent() -> CodingAgent? {
-    if let agent = agents[current.id] { return agent }
-    guard let engine, let workspace else { return nil }
-    engine.effort = effort
+  private func resolveAgent() -> CodingAgent? { resolveAgent(for: current.id) }
+
+  /// The session for a conversation, made against that conversation's own folder rather than
+  /// whichever one the window happens to be pointed at.
+  private func resolveAgent(for chatID: UUID) -> CodingAgent? {
+    if let agent = agents[chatID] { return agent }
+    guard let engine, let chat = saved(chatID) else { return nil }
+    let folder =
+      (chatID == current.id ? workspace : nil)
+      ?? chat.workspace.map { URL(filePath: $0) }
+    engine.effort = chatID == current.id ? effort : chat.effort
     let made = CodingAgent(
       engine: engine,
-      workspace: Workspace(host: LocalShellHost(workspace: workspace)),
-      transcript: current.transcript.isEmpty ? nil : current.transcript)
-    agents[current.id] = made
+      workspace: Workspace(
+        host: LocalShellHost(workspace: folder ?? FileManager.default.temporaryDirectory)),
+      transcript: chat.transcript.isEmpty ? nil : chat.transcript)
+    agents[chatID] = made
     return made
   }
 
@@ -765,6 +799,92 @@ final class ChatController {
       self.update(chatID) { $0.title = written }
       if let chat = self.saved(chatID) { self.store.save(chat) }
     }
+  }
+
+  // MARK: - Reached from the companion
+
+  /// A conversation by id, wherever it is held.
+  func chat(_ id: UUID) -> SavedChat? { saved(id) }
+
+  /// The rows of any conversation: the one on screen, one being answered in the background, or
+  /// one that has only ever been on disk.
+  func rows(of id: UUID) -> [Row] {
+    if id == current.id { return transcriptRows }
+    if let parked = parked[id] { return parked.rows }
+    guard let chat = saved(id) else { return [] }
+    var builder = RowBuilder()
+    return builder.rows(from: agents[id]?.transcript ?? chat.transcript)
+  }
+
+  func meta(of id: UUID) -> [String: RowMeta] {
+    id == current.id ? meta : (parked[id]?.meta ?? [:])
+  }
+
+  func steers(of id: UUID) -> [Row] {
+    id == current.id ? pendingSteers : (parked[id]?.steers ?? [])
+  }
+
+  func failure(of id: UUID) -> String? {
+    id == current.id ? failure : parked[id]?.failure
+  }
+
+  /// A conversation made without opening it, so a phone starting one does not move the window
+  /// off whatever is being read on the Mac.
+  func makeChat(
+    workspace folder: String?, model: String?, effort wanted: ReasoningEffort?
+  )
+    -> SavedChat
+  {
+    let chat = SavedChat(
+      workspace: folder ?? workspace?.path,
+      model: model ?? server?.settings.activeModelID,
+      effort: wanted ?? effort)
+    chats.insert(chat, at: 0)
+    store.save(chat)
+    return chat
+  }
+
+  func change(
+    _ id: UUID, title: String?, workspace folder: String?, effort wanted: ReasoningEffort?
+  ) {
+    update(id) {
+      if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        $0.title = title
+        $0.titleIsCustom = true
+      }
+      if let folder { $0.workspace = folder }
+      if let wanted { $0.effort = wanted }
+      $0.updated = Date()
+    }
+    if id == current.id {
+      if let folder { workspace = URL(filePath: folder) }
+      if let wanted { effort = wanted }
+    }
+    if let chat = saved(id) { store.save(chat) }
+  }
+
+  /// Guidance for a conversation that may not be the one on screen. One being answered takes it
+  /// into the running session; any other holds it until its next turn.
+  func steer(_ text: String, in id: UUID) {
+    let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+    if run?.chatID == id, let agent = agents[id] {
+      agent.steer(text)
+      return
+    }
+    let row = Row(id: "steer-\(UUID().uuidString)", kind: .steer, text: text)
+    if id == current.id {
+      pendingSteers.append(row)
+    } else if parked[id] != nil {
+      parked[id]?.steers.append(row)
+    } else {
+      queuedSteers[id, default: []].append(row)
+    }
+  }
+
+  func stop(_ id: UUID) {
+    guard run?.chatID == id else { return }
+    run?.task?.cancel()
   }
 
   func saveEffort() {

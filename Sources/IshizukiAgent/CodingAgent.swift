@@ -44,8 +44,7 @@ public final class CodingAgent: Sendable {
       if let transcript, !transcript.isEmpty {
         LanguageModelSession(model: model, tools: tools, transcript: transcript)
       } else {
-        LanguageModelSession(
-          model: model, tools: tools, instructions: Instructions(instructions))
+        LanguageModelSession(model: model, tools: tools, instructions: Instructions(instructions))
       }
     self.modelSession = session
 

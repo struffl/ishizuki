@@ -20,7 +20,7 @@ struct ContextDial: View {
   }
 
   private var spent: Color {
-    fraction > 0.9 ? .orange : .accentSoft
+    fraction > 0.9 ? .orange : Color.reading
   }
 
   var body: some View {
@@ -31,7 +31,7 @@ struct ContextDial: View {
         .frame(width: 46, height: 46)
 
       Circle()
-        .stroke(.white.opacity(0.1), lineWidth: 4)
+        .stroke(.quaternary, lineWidth: 4)
         .frame(width: 32, height: 32)
       Circle()
         .trim(from: 0, to: fraction)
@@ -41,12 +41,12 @@ struct ContextDial: View {
 
       // The outer track is always there so the turn's progress has somewhere to appear.
       Circle()
-        .stroke(.white.opacity(0.09), lineWidth: 2.5)
+        .stroke(.quaternary, lineWidth: 2.5)
         .frame(width: 43, height: 43)
       if let prefill {
         Circle()
           .trim(from: 0, to: max(0.015, min(1, prefill)))
-          .stroke(Color.accentSoft, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+          .stroke(Color.reading, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
           .rotationEffect(.degrees(-90))
           .frame(width: 43, height: 43)
       } else if decoding {
@@ -56,7 +56,7 @@ struct ContextDial: View {
       }
 
       Text(ReadoutFormat.percent(fraction))
-        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .font(.system(.footnote, design: .monospaced, weight: .semibold))
         .foregroundStyle(.secondary)
     }
     .frame(width: 50, height: 50)
@@ -88,7 +88,6 @@ struct ChatReadoutBar: View {
       if controller.phase.isBusy {
         ProgressView()
           .controlSize(.small)
-          .scaleEffect(0.7)
       }
       HStack(spacing: 8) {
         modelSwitcher
@@ -133,10 +132,10 @@ struct ChatReadoutBar: View {
   private func reading(_ value: String, _ label: String) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(value)
-        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced, weight: .semibold))
         .foregroundStyle(.primary)
       Text(label)
-        .font(.system(size: 9))
+        .font(.footnote)
         .foregroundStyle(.secondary)
     }
   }
@@ -156,13 +155,17 @@ struct ChatReadoutBar: View {
       }
     } label: {
       Text(controller.activeEntry?.displayName ?? "No pack")
-        .font(.system(size: 11))
+        .font(.subheadline)
         .lineLimit(1)
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
+    .frame(minHeight: Metrics.hit)
     .disabled(controller.catalog.entries.isEmpty || chat.isRunningTurn)
-    .help(chat.isRunningTurn ? "Finish or stop the turn before switching packs" : "")
+    .accessibilityLabel("Model pack")
+    .help(
+      chat.isRunningTurn
+        ? "Finish or stop the turn before switching packs" : "Which pack answers")
   }
 
   @ViewBuilder private var effortDial: some View {
@@ -181,10 +184,12 @@ struct ChatReadoutBar: View {
       }
     } label: {
       Text(chat.effort.rawValue)
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced, weight: .medium))
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
+    .frame(minHeight: Metrics.hit)
+    .accessibilityLabel("Reasoning effort")
     .help("How long the model is asked to think")
   }
 }
@@ -202,12 +207,12 @@ struct TurnStatus: View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(spacing: 6) {
         Text(label)
-          .font(.system(size: 11, weight: .medium))
+          .font(.system(.subheadline, weight: .medium))
           .foregroundStyle(tint)
         AnimatedDots(size: 4, tint: tint)
         if !detail.isEmpty {
           Text(detail)
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(.footnote, design: .monospaced))
             .foregroundStyle(.secondary)
             .padding(.leading, 2)
         }
@@ -216,7 +221,7 @@ struct TurnStatus: View {
       // The command as it is written, so the wait for it is not a blank one.
       if case .writingCommand = chat.activity, !chat.writingCommand.isEmpty {
         Text(chat.writingCommand)
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(.footnote, design: .monospaced))
           .foregroundStyle(.secondary)
           .lineLimit(2)
           .frame(maxWidth: 320, alignment: .leading)
@@ -232,7 +237,7 @@ struct TurnStatus: View {
         .frame(width: 168)
       }
     }
-    .glassBubble()
+    .plateBubble()
     .padding(.leading, 10)
     .padding(.trailing, 44)
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,7 +255,7 @@ struct TurnStatus: View {
 
   private var tint: Color {
     switch chat.activity {
-    case .reading: .accentSoft
+    case .reading: Color.reading
     case .writing, .writingCommand: .generating
     case .queued, .unknown: .secondary
     }
@@ -297,7 +302,7 @@ struct ReadingBar: View {
             .fill(Color.instructing)
             .frame(width: min(filled, boundary))
           Rectangle()
-            .fill(Color.accentSoft)
+            .fill(Color.reading)
             .frame(width: max(0, filled - boundary))
         }
       }

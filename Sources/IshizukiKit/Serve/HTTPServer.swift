@@ -151,13 +151,24 @@ public final class HTTPServer: @unchecked Sendable {
   private let handler: Handler
   private let queue = DispatchQueue(label: "bonsai.http", attributes: .concurrent)
 
-  public init(port: UInt16, handler: @escaping Handler) throws {
-    let parameters = NWParameters.tcp
-    parameters.allowLocalEndpointReuse = true
+  /// A plain TCP listener by default. A key makes every connection TLS with that pre-shared
+  /// key, and a service name has the listener answer Bonjour browses for itself.
+  public init(
+    port: UInt16, psk: PreSharedKey? = nil, advertise: BonjourService? = nil,
+    handler: @escaping Handler
+  ) throws {
+    let parameters: NWParameters
+    if let psk {
+      parameters = psk.parameters()
+    } else {
+      parameters = NWParameters.tcp
+      parameters.allowLocalEndpointReuse = true
+    }
     guard let nwPort = NWEndpoint.Port(rawValue: port) else {
       throw BonsaiError.unsupportedModel("invalid port \(port)")
     }
     self.listener = try NWListener(using: parameters, on: nwPort)
+    if let advertise { listener.service = advertise.service }
     self.handler = handler
   }
 

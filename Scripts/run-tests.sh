@@ -20,4 +20,13 @@ METALLIB=$(find "$BUNDLE" -name "default.metallib" | head -1)
 cp "$METALLIB" "$BUNDLE/Contents/MacOS/mlx.metallib"
 codesign -f -s - "$BUNDLE" >/dev/null 2>&1 || true
 
-exec xcrun xctest "$BUNDLE"
+STATUS=0
+xcrun xctest "$BUNDLE" || STATUS=$?
+
+LINK=$(find .build -name "IshizukiLinkTests.xctest" -maxdepth 5 -type d | head -1)
+if [ -n "$LINK" ]; then
+    codesign -f -s - "$LINK" >/dev/null 2>&1 || true
+    xcrun xctest "$LINK" || STATUS=$?
+fi
+
+exit "$STATUS"

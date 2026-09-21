@@ -36,6 +36,7 @@ xcodegen generate >/dev/null
 xcodebuild archive \
   -project Ishizuki.xcodeproj \
   -scheme Ishizuki \
+  -destination 'platform=macOS,arch=arm64' \
   -configuration Release \
   -archivePath "$archive" \
   -skipPackagePluginValidation -skipMacroValidation \

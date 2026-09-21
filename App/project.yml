@@ -4,7 +4,22 @@ options:
   bundleIdPrefix: studio.ishizuki
   deploymentTarget:
     macOS: "27.0"
+    iOS: "27.0"
   createIntermediateGroups: true
+
+schemes:
+  Ishizuki:
+    build:
+      targets:
+        Ishizuki: all
+    run:
+      config: Debug
+  IshizukiPhone:
+    build:
+      targets:
+        IshizukiPhone: all
+    run:
+      config: Debug
 
 packages:
   IshizukiKit:
@@ -19,12 +34,15 @@ targets:
     platform: macOS
     sources:
       - path: Ishizuki
+      - path: Shared
       - path: ../assets/Ishizuki.icon
     dependencies:
       - package: IshizukiKit
         product: IshizukiKit
       - package: IshizukiKit
         product: IshizukiAgent
+      - package: IshizukiKit
+        product: IshizukiLink
       - package: Highlightr
         product: Highlightr
     info:
@@ -37,6 +55,9 @@ targets:
         LSUIElement: true
         NSHumanReadableCopyright: "© 2026 Sarah Truffle"
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Letting your iPhone reach this Mac's conversations, files and shell.
+        NSBonjourServices:
+          - _ishizuki._tcp
     entitlements:
       path: Ishizuki/Ishizuki.entitlements
       properties:
@@ -53,3 +74,57 @@ targets:
         DEVELOPMENT_TEAM: 2WTR6KH74L
         COMBINE_HIDPI_IMAGES: true
         ASSETCATALOG_COMPILER_APPICON_NAME: Ishizuki
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: -O
+      SWIFT_WHOLE_MODULE_OPTIMIZATION: YES
+      LLVM_LTO: YES
+
+  IshizukiPhone:
+    type: application
+    platform: iOS
+    sources:
+      - path: IshizukiPhone
+      - path: Shared
+      - path: Ishizuki/Views/Markdown.swift
+      - path: Ishizuki/Views/StreamText.swift
+    dependencies:
+      - package: IshizukiKit
+        product: IshizukiKit
+      - package: IshizukiKit
+        product: IshizukiLink
+      - package: Highlightr
+        product: Highlightr
+    info:
+      path: IshizukiPhone/Info.plist
+      properties:
+        CFBundleDisplayName: Ishizuki
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: Scanning the pairing square shown by Ishizuki on your Mac.
+        NSLocalNetworkUsageDescription: Finding and talking to Ishizuki on your Mac.
+        NSBonjourServices:
+          - _ishizuki._tcp
+        CFBundleURLTypes:
+          - CFBundleURLName: studio.ishizuki.pair
+            CFBundleURLSchemes:
+              - ishizuki
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: studio.ishizuki.phone
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 2WTR6KH74L
+        TARGETED_DEVICE_FAMILY: "1"
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: -O
+      SWIFT_WHOLE_MODULE_OPTIMIZATION: YES
+      LLVM_LTO: YES

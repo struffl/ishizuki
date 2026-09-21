@@ -26,109 +26,114 @@ struct ModelsView: View {
 
   var body: some View {
     ScrollView {
-      GlassEffectContainer(spacing: 12) {
-        VStack(alignment: .leading, spacing: 18) {
-          if !library.downloads.isEmpty {
-            section("Downloading") {
-              ForEach(library.downloads) { download in
-                DownloadRow(download: download, library: library, controller: controller)
-              }
+      VStack(alignment: .leading, spacing: 18) {
+        if !library.downloads.isEmpty {
+          section("Downloading") {
+            ForEach(library.downloads) { download in
+              DownloadRow(download: download, library: library, controller: controller)
             }
           }
+        }
 
-          section("Installed") {
-            if controller.catalog.entries.isEmpty {
-              GlassCard {
-                VStack(alignment: .leading, spacing: 8) {
-                  Text("No packs in reach yet.")
-                    .font(.callout.weight(.medium))
-                  Text(
-                    "Ishizuki can only read folders you hand it. If you already have packs, "
-                      + "point it at them — nothing is copied."
-                  )
-                  .font(.system(size: 11))
-                  .foregroundStyle(.secondary)
-                  HStack {
-                    ForEach(ModelLibrary.wellKnownRoots, id: \.label) { root in
-                      Button(root.label) {
-                        library.grantFolder(startingAt: root.url)
-                        controller.rescan()
-                      }
-                      .buttonStyle(.glass)
-                      .controlSize(.small)
+        section("Installed") {
+          if controller.catalog.entries.isEmpty {
+            GlassCard {
+              VStack(alignment: .leading, spacing: 8) {
+                Text("No packs in reach yet.")
+                  .font(.callout.weight(.medium))
+                Text(
+                  "Ishizuki can only read folders you hand it. If you already have packs, "
+                    + "point it at them — nothing is copied."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                HStack {
+                  ForEach(ModelLibrary.wellKnownRoots, id: \.label) { root in
+                    Button(root.label) {
+                      library.grantFolder(startingAt: root.url)
+                      controller.rescan()
                     }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
                   }
                 }
               }
             }
-            ForEach(controller.catalog.entries, id: \.id) { entry in
-              InstalledRow(entry: entry, controller: controller, deleteTarget: $deleteTarget)
-            }
           }
-
-          section("Available") {
-            ForEach(available) { model in
-              CuratedRow(model: model, library: library)
-            }
-            GlassCard {
-              VStack(alignment: .leading, spacing: 6) {
-                Text("Any HuggingFace repo")
-                  .font(.system(size: 12, weight: .medium))
-                HStack {
-                  TextField("org/model", text: $repo)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11, design: .monospaced))
-                    .onSubmit(pull)
-                  Button("Download", action: pull)
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                    .disabled(!repo.contains("/"))
-                }
-                Text(
-                  "A pack is taken whole. For a GGUF repo add the file after a colon, "
-                    + "e.g. org/model:Qwen3.8-27B-IQ3_S.gguf"
-                )
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-              }
-            }
-          }
-
-          section("This Mac") {
-            Text(Machine.summary)
-              .font(.system(size: 10, design: .monospaced))
-              .foregroundStyle(.secondary)
-          }
-
-          section("Folders") {
-            ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
-              FolderRow(url: root, removable: false, library: library)
-            }
-            ForEach(library.grantedFolders, id: \.self) { root in
-              FolderRow(url: root, removable: true, library: library)
-            }
-            Button("Add Folder…") {
-              library.grantFolder()
-              controller.rescan()
-            }
-            .buttonStyle(.glass)
-            .controlSize(.small)
+          ForEach(controller.catalog.entries, id: \.id) { entry in
+            InstalledRow(entry: entry, controller: controller, deleteTarget: $deleteTarget)
           }
         }
-        .padding(16)
+
+        section("Available") {
+          ForEach(available) { model in
+            CuratedRow(model: model, library: library)
+          }
+          GlassCard {
+            VStack(alignment: .leading, spacing: 6) {
+              Text("Any HuggingFace repo")
+                .font(.system(.callout, weight: .medium))
+              HStack {
+                TextField("org/model", text: $repo)
+                  .textFieldStyle(.roundedBorder)
+                  .font(.system(.subheadline, design: .monospaced))
+                  .onSubmit(pull)
+                Button("Download", action: pull)
+                  .buttonStyle(.glass)
+                  .controlSize(.small)
+                  .disabled(!repo.contains("/"))
+              }
+              Text(
+                "A pack is taken whole. For a GGUF repo add the file after a colon, "
+                  + "e.g. org/model:Qwen3.8-27B-IQ3_S.gguf"
+              )
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+            }
+          }
+        }
+
+        section("This Mac") {
+          Text(Machine.summary)
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+
+        section("Folders") {
+          ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
+            FolderRow(url: root, removable: false, library: library)
+          }
+          ForEach(library.grantedFolders, id: \.self) { root in
+            FolderRow(url: root, removable: true, library: library)
+          }
+          Button("Add Folder…") {
+            library.grantFolder()
+            controller.rescan()
+          }
+          .buttonStyle(.glass)
+          .controlSize(.small)
+        }
       }
+      .padding(16)
     }
     .scrollContentBackground(.hidden)
-    .alert(item: $deleteTarget) { entry in
-      Alert(
-        title: Text("Delete \(entry.displayName)?"),
-        message: Text("\(ReadoutFormat.gigabytes(entry.byteCount)) will be removed from disk."),
-        primaryButton: .destructive(Text("Delete")) {
-          try? library.delete(entry)
-          controller.rescan()
-        },
-        secondaryButton: .cancel())
+    .alert(
+      "Delete this pack?", isPresented: deleting, presenting: deleteTarget
+    ) { entry in
+      Button("Delete", role: .destructive) {
+        try? library.delete(entry)
+        controller.rescan()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: { entry in
+      Text(
+        "\(entry.displayName) — \(ReadoutFormat.gigabytes(entry.byteCount)) "
+          + "will be removed from disk.")
     }
+  }
+
+  private var deleting: Binding<Bool> {
+    Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
   }
 
   private var available: [CuratedModel] {
@@ -140,9 +145,8 @@ struct ModelsView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(title)
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(.subheadline, weight: .semibold))
         .foregroundStyle(.secondary)
-        .textCase(.uppercase)
       content()
     }
   }
@@ -171,8 +175,8 @@ private struct InstalledRow: View {
       Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
       VStack(alignment: .leading, spacing: 2) {
-        Text(entry.displayName).font(.system(size: 12, weight: .medium))
-        Text(detail).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+        Text(entry.displayName).font(.system(.callout, weight: .medium))
+        Text(detail).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
       }
       Spacer()
       if !isActive {
@@ -187,9 +191,11 @@ private struct InstalledRow: View {
         }
       } label: {
         Image(systemName: "ellipsis.circle")
+          .hitTarget()
       }
       .menuStyle(.borderlessButton)
       .fixedSize()
+      .accessibilityLabel("More actions for \(entry.displayName)")
     }
     .padding(10)
     .glassEffect(.clear, in: .rect(cornerRadius: 12))
@@ -203,19 +209,19 @@ private struct CuratedRow: View {
   var body: some View {
     HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.name).font(.system(size: 12, weight: .medium))
-        Text(model.summary).font(.system(size: 10)).foregroundStyle(.secondary)
+        Text(model.name).font(.system(.callout, weight: .medium))
+        Text(model.summary).font(.footnote).foregroundStyle(.secondary)
       }
       Spacer()
       if !Machine.fits(weightBytes: model.bytes) {
         Label("won't fit", systemImage: "exclamationmark.triangle")
-          .font(.system(size: 10))
+          .font(.footnote)
           .foregroundStyle(.orange)
           .help(
             "This pack needs more than this Mac will keep resident — \(Machine.summary).")
       }
       Text(ReadoutFormat.gigabytes(model.bytes))
-        .font(.system(size: 10, design: .monospaced))
+        .font(.system(.footnote, design: .monospaced))
         .foregroundStyle(.tertiary)
       Button("Download") { library.download(repo: model.repo, only: model.only) }
         .buttonStyle(.glass)
@@ -235,10 +241,10 @@ private struct DownloadRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
-        Text(download.repo).font(.system(size: 11, design: .monospaced))
+        Text(download.repo).font(.system(.subheadline, design: .monospaced))
         Spacer()
         if let failure = download.failure {
-          Text(failure).font(.system(size: 10)).foregroundStyle(.red).lineLimit(1)
+          Text(failure).font(.footnote).foregroundStyle(.red).lineLimit(1)
           Button("Dismiss") {
             library.dismiss(repo: download.repo)
             controller.rescan()
@@ -254,7 +260,7 @@ private struct DownloadRow: View {
           "\(download.file) — \(ReadoutFormat.compact(download.completedBytes)) "
             + "/ \(ReadoutFormat.compact(download.totalBytes))"
         )
-        .font(.system(size: 10, design: .monospaced))
+        .font(.system(.footnote, design: .monospaced))
         .foregroundStyle(.tertiary)
       }
     }
@@ -272,7 +278,7 @@ private struct FolderRow: View {
     HStack(spacing: 8) {
       Image(systemName: "folder").foregroundStyle(.secondary)
       Text(url.path(percentEncoded: false))
-        .font(.system(size: 10, design: .monospaced))
+        .font(.system(.footnote, design: .monospaced))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

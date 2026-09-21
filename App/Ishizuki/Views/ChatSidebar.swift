@@ -36,7 +36,10 @@ struct ChatSidebar: View {
           Label("New chat", systemImage: "square.and.pencil")
         }
         .buttonStyle(.plain)
-        .font(.system(size: 11))
+        .font(.subheadline)
+        .frame(minHeight: Metrics.hit)
+        .contentShape(.rect)
+        .help("Start a new conversation")
         Spacer()
       }
       .padding(.horizontal, 12)
@@ -74,7 +77,7 @@ struct ChatSidebar: View {
     VStack(alignment: .leading, spacing: 2) {
       HStack(spacing: 5) {
         Text(saved.title)
-          .font(.system(size: 12))
+          .font(.callout)
           .lineLimit(1)
         // A turn keeps going in the conversation it was started in, so the one still being
         // answered says so from the list rather than only from its own transcript.
@@ -93,7 +96,7 @@ struct ChatSidebar: View {
             .foregroundStyle(Color.instructing)
         }
       }
-      .font(.system(size: 9))
+      .font(.footnote)
       .foregroundStyle(.secondary)
     }
     .padding(.vertical, 2)

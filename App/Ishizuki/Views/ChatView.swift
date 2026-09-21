@@ -12,7 +12,7 @@ struct ChatView: View {
   @Bindable var controller: ServerController
 
   @AppStorage("chat.monoFont") private var monoFont = ""
-  @AppStorage("chat.fontSize") private var fontSize = 12.0
+  @AppStorage("chat.fontSize") private var fontSize = 13.0
 
   /// How far the transcript is dragged aside to show what each row cost.
   @State private var reveal: CGFloat = 0
@@ -65,22 +65,25 @@ struct ChatView: View {
     HStack(spacing: 8) {
       Image(systemName: "folder")
         .foregroundStyle(.secondary)
-        .font(.system(size: 11))
+        .font(.subheadline)
       Button {
         chat.chooseWorkspace()
       } label: {
         Text(chat.workspace?.lastPathComponent ?? "Choose a folder…")
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
           .lineLimit(1)
       }
       .buttonStyle(.plain)
+      .frame(minHeight: Metrics.hit)
+      .contentShape(.rect)
+      .accessibilityLabel("Working folder")
       .help(chat.workspace?.path ?? "The one directory the agent may touch")
 
       Spacer()
 
       if let failure = chat.failure {
         Text(failure)
-          .font(.system(size: 10))
+          .font(.footnote)
           .foregroundStyle(.orange)
           .lineLimit(1)
       }
@@ -236,12 +239,14 @@ struct ChatView: View {
       }
     } label: {
       Image(systemName: "arrow.down")
-        .font(.system(size: 12, weight: .semibold))
+        .font(.system(.callout, weight: .semibold))
         .foregroundStyle(.secondary)
         .frame(width: 30, height: 30)
     }
     .buttonStyle(.plain)
     .glassEffect(.clear, in: .circle)
+    .accessibilityLabel("Jump to the end")
+    .help("Jump to the end")
     .transition(.opacity.combined(with: .scale(scale: 0.85)))
   }
 
@@ -253,10 +258,10 @@ struct ChatView: View {
         ForEach(chat.pendingSteers) { row in
           HStack(spacing: 8) {
             Image(systemName: "arrow.turn.down.right")
-              .font(.system(size: 9))
+              .font(.footnote)
               .foregroundStyle(.secondary)
             Text(row.text)
-              .font(.system(size: 11))
+              .font(.subheadline)
               .lineLimit(1)
               .truncationMode(.tail)
             Spacer(minLength: 8)
@@ -265,29 +270,32 @@ struct ChatView: View {
             } label: {
               HStack(spacing: 3) {
                 Text("Send now")
-                  .font(.system(size: 10, weight: .medium))
+                  .font(.system(.footnote, weight: .medium))
                 Image(systemName: "return")
-                  .font(.system(size: 9))
+                  .font(.footnote)
               }
+              .hitTarget()
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentSoft)
+            .foregroundStyle(Color.reading)
             .help("Stop this turn and send it now")
             Button {
               chat.drop(row)
             } label: {
               Image(systemName: "xmark")
-                .font(.system(size: 9))
+                .font(.footnote)
+                .hitTarget()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Drop this steer")
             .help("Drop it")
           }
           .textPlate(radius: 9, horizontal: 10, vertical: 6)
           .overlay {
             RoundedRectangle(cornerRadius: 9)
               .strokeBorder(
-                Color.accentSoft.opacity(0.3),
+                Color.reading.opacity(0.3),
                 style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
           }
         }
@@ -402,7 +410,11 @@ struct ChatRowView: View, Equatable {
 
     case .answer:
       StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
-        .glassBubble()
+        .contextMenu {
+          Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
+          ShareLink(item: row.text)
+        }
+        .plateBubble()
         .padding(.leading, 10)
         .padding(.trailing, 44)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -413,9 +425,13 @@ struct ChatRowView: View, Equatable {
         rawBody: row.text, monospaced: false)
 
     case .toolCall(let name):
-      disclosure(
-        title: name, icon: icon(for: name), tint: .accentSoft,
-        rawBody: Self.spelled(arguments: row.text), monospaced: true)
+      if name == "edit", let diff = Self.editDiff(from: row.text) {
+        editDisclosure(title: name, icon: icon(for: name), path: diff.path, lines: diff.lines)
+      } else {
+        disclosure(
+          title: name, icon: icon(for: name), tint: .reading,
+          rawBody: Self.spelled(arguments: row.text), monospaced: true)
+      }
 
     case .toolOutput(let name):
       disclosure(
@@ -438,25 +454,29 @@ struct ChatRowView: View, Equatable {
       } label: {
         HStack(spacing: 5) {
           Image(systemName: icon)
-            .font(.system(size: 9))
+            .font(.footnote)
           Text(title)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(.footnote, design: .monospaced, weight: .medium))
           if !open {
             Text(caption ?? summary(of: body))
               .font(
                 caption == nil
-                  ? .system(size: 10, design: .monospaced) : .system(size: 10)
+                  ? .system(.footnote, design: .monospaced) : .footnote
               )
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
-            .font(.system(size: 7))
+            .font(.footnote)
             .foregroundStyle(.secondary)
         }
         .foregroundStyle(tint)
+        .frame(minHeight: Metrics.hit)
+        .contentShape(.rect)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityAddTraits(.isToggle)
 
       if open, !body.isEmpty {
         let long = Self.isLong(body)
@@ -472,12 +492,14 @@ struct ChatRowView: View, Equatable {
             } label: {
               HStack(spacing: 3) {
                 Image(systemName: capped ? "chevron.up" : "chevron.down")
-                  .font(.system(size: 7))
+                  .font(.footnote)
                 Text(capped ? "see more" : "see less")
               }
+              .frame(minHeight: Metrics.hit)
+              .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .font(.system(.footnote, design: .monospaced, weight: .medium))
             .foregroundStyle(.secondary)
           }
 
@@ -566,6 +588,155 @@ struct ChatRowView: View, Equatable {
     default: "wrench"
     }
   }
+
+  private enum DiffKind { case added, removed, context }
+
+  /// An edit call reads as the change it made, not the JSON it arrived in: the old and new
+  /// strings side by side, line by line, the way a patch does.
+  @ViewBuilder private func editDisclosure(
+    title: String, icon: String, path: String, lines: [(text: String, kind: DiffKind)]
+  ) -> some View {
+    let long = lines.count > Self.bodyLineCap
+    let capped = long && !show.showFull
+    let shown = capped ? Array(lines.suffix(Self.bodyLineCap)) : lines
+
+    VStack(alignment: .leading, spacing: 2) {
+      Button {
+        onExpand(!open)
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: icon)
+            .font(.footnote)
+          Text(title)
+            .font(.system(.footnote, design: .monospaced, weight: .medium))
+          if !open {
+            Text(path)
+              .font(.system(.footnote, design: .monospaced))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+          Image(systemName: open ? "chevron.down" : "chevron.right")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .foregroundStyle(Color.reading)
+        .frame(minHeight: Metrics.hit)
+        .contentShape(.rect)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("\(title) \(path)")
+      .accessibilityAddTraits(.isToggle)
+
+      if open, !lines.isEmpty {
+        VStack(alignment: .leading, spacing: 4) {
+          if long {
+            Button {
+              onShowFull(!show.showFull)
+            } label: {
+              HStack(spacing: 3) {
+                Image(systemName: capped ? "chevron.up" : "chevron.down")
+                  .font(.footnote)
+                Text(capped ? "see more" : "see less")
+              }
+              .frame(minHeight: Metrics.hit)
+              .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .foregroundStyle(.secondary)
+          }
+
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
+              diffRow(line)
+            }
+          }
+          .textSelection(.enabled)
+        }
+        .textPlate(radius: 8, horizontal: 9, vertical: 5)
+        // Indented to sit under its own title rather than beside it.
+        .padding(.leading, 15)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func style(for kind: DiffKind) -> (prefix: String, color: Color, background: Color) {
+    switch kind {
+    case .added: ("+", .diffAdded, Color.diffAdded.opacity(0.12))
+    case .removed: ("-", .diffRemoved, Color.diffRemoved.opacity(0.12))
+    case .context: (" ", .primary.opacity(0.85), .clear)
+    }
+  }
+
+  @ViewBuilder private func diffRow(_ line: (text: String, kind: DiffKind)) -> some View {
+    let (prefix, color, background) = style(for: line.kind)
+    HStack(alignment: .top, spacing: 6) {
+      Text(prefix)
+        .font(mono)
+        .foregroundStyle(color)
+      Text(line.text.isEmpty ? " " : line.text)
+        .font(mono)
+        .foregroundStyle(color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.horizontal, 4)
+    .padding(.vertical, 1)
+    .background(background)
+  }
+
+  /// The `old`/`new` an edit call carries, turned into a line diff. `nil` when the call isn't
+  /// an edit shaped like one — a malformed payload falls back to the generic disclosure.
+  private static func editDiff(
+    from argumentsJSON: String
+  ) -> (path: String, lines: [(text: String, kind: DiffKind)])? {
+    guard
+      let data = argumentsJSON.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let old = object["old"] as? String,
+      let new = object["new"] as? String
+    else { return nil }
+    let path = (object["path"] as? String) ?? ""
+    return (path, diffLines(old: old, new: new))
+  }
+
+  /// A line-level diff via `CollectionDifference`, walked back into order: unchanged lines
+  /// appear once, a removal is shown where the old line sat, an insertion where the new one
+  /// lands.
+  private static func diffLines(old: String, new: String) -> [(text: String, kind: DiffKind)] {
+    let oldLines = old.isEmpty ? [] : old.components(separatedBy: "\n")
+    let newLines = new.isEmpty ? [] : new.components(separatedBy: "\n")
+    let diff = newLines.difference(from: oldLines)
+
+    var removedAt: [Int: String] = [:]
+    var insertedAt: [Int: String] = [:]
+    for change in diff {
+      switch change {
+      case .remove(let offset, let element, _): removedAt[offset] = element
+      case .insert(let offset, let element, _): insertedAt[offset] = element
+      }
+    }
+
+    var result: [(text: String, kind: DiffKind)] = []
+    var oldIndex = 0
+    var newIndex = 0
+    while oldIndex < oldLines.count || newIndex < newLines.count {
+      if let removed = removedAt[oldIndex] {
+        result.append((removed, .removed))
+        oldIndex += 1
+      } else if let inserted = insertedAt[newIndex] {
+        result.append((inserted, .added))
+        newIndex += 1
+      } else if oldIndex < oldLines.count, newIndex < newLines.count {
+        result.append((oldLines[oldIndex], .context))
+        oldIndex += 1
+        newIndex += 1
+      } else {
+        break
+      }
+    }
+    return result
+  }
 }
 
 /// What a row cost, shown in the gutter: when it happened, how long that side of the turn
@@ -588,7 +759,7 @@ struct RowCost: View {
           Text("\(ReadoutFormat.group(tokens)) tok")
         }
       }
-      .font(.system(size: 9, design: .monospaced))
+      .font(.system(.footnote, design: .monospaced))
       .foregroundStyle(.tertiary)
     }
   }

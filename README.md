@@ -16,6 +16,7 @@ Requires Apple Silicon and macOS 26.
 - [Install](#install)
 - [Agents](#agents) — Hermes, Claude Code, Pi
 - [Serve](#serve)
+- [Companion](#companion) — the iPhone app
 - [Tools](#tools) — quantize, measure, prune
 - [Benchmarks](#benchmarks)
 - [Context](#context)
@@ -132,6 +133,40 @@ Settings holds the rest: the port, KV bits, how long an idle pool is held before
 and the model unloaded, the scheduling politeness, the disk budget for prefixes, whether to
 serve at launch and whether to open at login.
 
+## Companion
+
+An iPhone app that borrows this Mac: every conversation the window holds, the folders it shares,
+and its shell. Turns run on the Mac's resident pack, so the phone is reading the same weights,
+the same prefix cache and the same readout the desktop window is.
+
+Switch it on in **Settings → Companion**, choose which folders to share, then **Pair a phone**
+and point the camera at the square. The phone keeps the key in its keychain; nothing is typed
+twice.
+
+```
+just phone-run     # the companion in the simulator
+just phone-device  # a Release build for a real iPhone
+```
+
+How it is reached, in the order the phone tries:
+
+| Address | Comes from | Works |
+| --- | --- | --- |
+| `100.x.y.z` | Tailscale | anywhere both ends are on the tailnet |
+| `192.168.x.y` | the local router | the same network |
+| `_ishizuki._tcp` | Bonjour | the same network, no address to type |
+
+The pairing square carries all of them, best first, so a Mac that moves between a desk and a
+tailnet is found again without being paired twice.
+
+Every connection is TLS with a pre-shared key: the key is in the square, so completing a
+handshake is itself the proof of pairing. Pairing is open for three minutes and hands the phone a
+token of its own, which is what **Forget** revokes. A device that once knew the key still knows
+it, so forgetting *every* phone rotates the key instead.
+
+Without the Mac — asleep, or off the tailnet — the phone falls back to Apple's on-device model
+under **Ask this iPhone**: no files, no shell, and nothing saved to the Mac.
+
 ## Tools
 
 The Tools tab carries the work that is not serving:
@@ -218,8 +253,13 @@ Sources/IshizukiKit/
   Serve/       HTTP, OpenAI + Anthropic APIs, residency, politeness
   Quantize/    checkpoint scan, bit allocation, pack writing
   Bench/       kernel, batch, KV, context, prefill, speculative harnesses
+Sources/IshizukiLink/ the companion protocol: wire types, pairing ticket,
+                      TLS-PSK transport, Bonjour discovery, remote shell host
 App/Ishizuki/         the menu bar app: status item, dashboard, models,
-                      tools, settings
+                      tools, settings, companion listener
+App/IshizukiPhone/    the iPhone companion: pairing, conversations, files,
+                      shell, on-device fallback
+App/Shared/           what both apps draw
 ```
 
 ## License
@@ -229,3 +269,16 @@ AGPL-3.0-or-later © 2026 Sarah Truffle. See [LICENSE](LICENSE).
 ---
 
 Icon art from [StockCake](https://stockcake.com), public domain.
+
+### Reconnecting and cache
+
+The iPhone keeps a disposable, protected cache of previously loaded conversations, shared
+folder listings, model listings, and text previews (up to 32 MB per paired Mac). Saved content
+appears before network refresh and stays readable during outages. Conversation streams
+reconnect, stalled requests time out, and the chat list refreshes when returning to the app.
+Forgetting a Mac clears its cache. Messages and shell commands are not automatically replayed
+after a failed request, to avoid executing an action twice.
+
+Dashboard cache memory is a snapshot published by the generation owner at checkpoints and
+turn completion. It may lag during generation; drawing the dashboard never inspects mutable
+MLX cache arrays from another thread.

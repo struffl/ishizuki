@@ -38,7 +38,7 @@ struct MenuBarView: View {
         }
       } else {
         Text(status)
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
           .foregroundStyle(.secondary)
       }
 
@@ -79,13 +79,13 @@ struct MenuBarView: View {
   private var header: some View {
     HStack(spacing: 8) {
       Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "no model")
-        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        .font(.system(.callout, design: .monospaced, weight: .semibold))
         .lineLimit(1)
         .truncationMode(.middle)
       Spacer()
       if controller.phase.isRunning {
         Text("\(controller.settings.port)")
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
           .foregroundStyle(.secondary)
       }
     }

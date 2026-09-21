@@ -28,6 +28,8 @@ public final class SessionCache: @unchecked Sendable {
     let cache: ModelCache
     var lastUsed: Date
     var busy = false
+    // Published only by the lease owner, never inspected through live MLX arrays.
+    var publishedBytes = 0
     var checkpoints: [Checkpoint] = []
 
     init(tokens: [Int], cache: ModelCache) {
@@ -126,7 +128,7 @@ public final class SessionCache: @unchecked Sendable {
   /// so they go before any prefix does. Called with the lock held.
   private func enforceByteLimit() {
     guard byteLimit > 0 else { return }
-    func total() -> Int { slots.reduce(0) { $0 + $1.cache.byteCount + $1.checkpointBytes } }
+    func total() -> Int { slots.reduce(0) { $0 + $1.publishedBytes + $1.checkpointBytes } }
     guard total() > byteLimit else { return }
 
     let coldestFirst = slots.filter { !$0.busy }.sorted { $0.lastUsed < $1.lastUsed }
@@ -152,6 +154,7 @@ public final class SessionCache: @unchecked Sendable {
     for slot in coldestFirst {
       guard total() > byteLimit else { break }
       slot.cache.reset()
+      slot.publishedBytes = 0
       slot.clearCheckpoints()
       dropped.insert(ObjectIdentifier(slot))
       evictions += 1
@@ -197,10 +200,9 @@ public final class SessionCache: @unchecked Sendable {
     // the slot can be rewound to a checkpoint at or before where they part.
     var best: (slot: Slot, reuse: Int, rewind: Checkpoint?)?
     var trace: [String] = []
-    for slot in slots {
+    for slot in slots where !slot.busy {
       trace.append(
         "[held \(slot.tokens.count)"
-          + (slot.busy ? " busy" : "")
           + (slot.cache.kvConfig == kvConfig ? "" : " other-kv")
           + " offset \(slot.cache.offset)"
           + " agrees \(min(commonPrefixLength(slot.tokens, promptTokens), promptTokens.count - 1))"
@@ -236,6 +238,7 @@ public final class SessionCache: @unchecked Sendable {
       }
       best.slot.tokens = promptTokens
       best.slot.lastUsed = Date()
+      best.slot.publishedBytes = best.slot.cache.byteCount
       best.slot.busy = true
       lastReusedTokens = best.reuse
       hits += 1
@@ -273,6 +276,7 @@ public final class SessionCache: @unchecked Sendable {
 
     slot.tokens = promptTokens
     slot.lastUsed = Date()
+    slot.publishedBytes = slot.cache.byteCount
     slot.busy = true
     return Lease(
       cache: slot.cache, reused: fromDisk, recycled: recycled, branched: false, slot: slot)
@@ -288,6 +292,7 @@ public final class SessionCache: @unchecked Sendable {
     }
     checkpoint(slot)
     slot.lastUsed = Date()
+    slot.publishedBytes = slot.cache.byteCount
     slot.busy = false
     enforceByteLimit()
   }
@@ -327,6 +332,7 @@ public final class SessionCache: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     checkpoint(lease.slot)
+    lease.slot.publishedBytes = lease.cache.byteCount
   }
 
   /// A rewind point taken mid-prefill, strictly before the prompt ends.
@@ -341,11 +347,13 @@ public final class SessionCache: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     checkpoint(lease.slot, at: count)
+    lease.slot.publishedBytes = lease.cache.byteCount
   }
 
   public func release(_ lease: Lease) {
     lock.lock()
     defer { lock.unlock() }
+    lease.slot.publishedBytes = lease.cache.byteCount
     lease.slot.busy = false
   }
 
@@ -360,6 +368,7 @@ public final class SessionCache: @unchecked Sendable {
     defer { lock.unlock() }
     for slot in slots where !slot.busy {
       slot.cache.reset()
+      slot.publishedBytes = 0
       slot.clearCheckpoints()
     }
     slots.removeAll { !$0.busy }
@@ -375,7 +384,7 @@ public final class SessionCache: @unchecked Sendable {
   public var cachedBytes: Int {
     lock.lock()
     defer { lock.unlock() }
-    return slots.reduce(0) { $0 + $1.cache.byteCount + $1.checkpointBytes }
+    return slots.reduce(0) { $0 + $1.publishedBytes + $1.checkpointBytes }
   }
 
   /// What the rewind points cost on their own, which is the part that is bought rather than

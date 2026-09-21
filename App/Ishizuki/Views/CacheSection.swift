@@ -15,9 +15,8 @@ struct CacheSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Prefix cache")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(.subheadline, weight: .semibold))
         .foregroundStyle(.secondary)
-        .textCase(.uppercase)
 
       GlassCard {
         VStack(alignment: .leading, spacing: 10) {
@@ -27,7 +26,7 @@ struct CacheSection: View {
                 ? "Nothing archived yet."
                 : "\(entries.count) archived · \(ReadoutFormat.bytes(totalBytes)) on disk"
             )
-            .font(.system(size: 11, design: .monospaced))
+            .font(.system(.subheadline, design: .monospaced))
             .foregroundStyle(.secondary)
             Spacer()
             Button("Reload") { reload() }
@@ -54,16 +53,18 @@ struct CacheSection: View {
                 reload()
               } label: {
                 Image(systemName: "trash")
+                  .hitTarget()
               }
               .buttonStyle(.borderless)
-              .controlSize(.small)
+              .accessibilityLabel("Forget this prefix")
+              .help("Forget this prefix")
             }
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(.footnote, design: .monospaced))
           }
 
           if entries.count > 12 {
             Text("+\(entries.count - 12) more")
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(.footnote, design: .monospaced))
               .foregroundStyle(.tertiary)
           }
         }

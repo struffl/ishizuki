@@ -12,7 +12,7 @@ import SwiftUI
 /// pasted in. This reveals the backlog over a fixed short window, so the words come at the
 /// rate they were generated, never slower than the model is writing: the lag it adds is the
 /// drain window and nothing more.
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 struct StreamedMarkdown: View {
   let text: String
   let mono: Font

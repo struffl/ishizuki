@@ -7,7 +7,7 @@ import IshizukiKit
 import SwiftUI
 
 struct DashboardView: View {
-  enum Tab: String { case agent, server, models, tools, settings }
+  enum Tab: String { case agent, server, models, tools }
 
   @Bindable var controller: ServerController
   @State private var runner = JobRunner()
@@ -15,10 +15,12 @@ struct DashboardView: View {
   @State private var bench = BenchController()
   @State private var tab: Tab
   var chat: ChatController
+  var companion: CompanionServer
 
-  init(controller: ServerController, chat: ChatController) {
+  init(controller: ServerController, chat: ChatController, companion: CompanionServer) {
     self.controller = controller
     self.chat = chat
+    self.companion = companion
     _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .agent)
   }
 
@@ -36,9 +38,6 @@ struct DashboardView: View {
       ToolsView(controller: controller, runner: runner, quantize: quantize, bench: bench)
         .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
         .tag(Tab.tools)
-      SettingsView(controller: controller)
-        .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
-        .tag(Tab.settings)
     }
     .frame(minWidth: 680, minHeight: 560)
     .scrollContentBackground(.hidden)
@@ -46,33 +45,31 @@ struct DashboardView: View {
   }
 
   @ViewBuilder private var readout: some View {
-    GlassEffectContainer(spacing: 14) {
-      VStack(alignment: .leading, spacing: 14) {
-        GlassCard { EndpointHeader(controller: controller) }
+    VStack(alignment: .leading, spacing: 14) {
+      GlassCard { EndpointHeader(controller: controller) }
 
-        if let readout = controller.readout {
-          GlassSection(title: "In flight") { InFlightSection(readout: readout) }
-          GlassSection(title: "Session") { SessionSection(readout: readout) }
-          GlassSection(title: "Load") {
-            VStack(alignment: .leading, spacing: 3) {
-              LoadSection(readout: readout)
-              if let prefix = readout.prefix {
-                PrefixSection(prefix: prefix)
-              }
-              StateSection(state: readout.state)
+      if let readout = controller.readout {
+        GlassSection(title: "In flight") { InFlightSection(readout: readout) }
+        GlassSection(title: "Session") { SessionSection(readout: readout) }
+        GlassSection(title: "Load") {
+          VStack(alignment: .leading, spacing: 3) {
+            LoadSection(readout: readout)
+            if let prefix = readout.prefix {
+              PrefixSection(prefix: prefix)
             }
-          }
-        } else {
-          GlassCard {
-            Text(idleMessage)
-              .font(.system(size: 11, design: .monospaced))
-              .foregroundStyle(.secondary)
+            StateSection(state: readout.state)
           }
         }
+      } else {
+        GlassCard {
+          Text(idleMessage)
+            .font(.system(.subheadline, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+      }
 
-        if !controller.log.isEmpty {
-          GlassSection(title: "Log") { LogSection(lines: controller.log) }
-        }
+      if !controller.log.isEmpty {
+        GlassSection(title: "Log") { LogSection(lines: controller.log) }
       }
     }
   }
@@ -95,7 +92,7 @@ private struct EndpointHeader: View {
       HStack(spacing: 8) {
         StatusDot(phase: controller.phase)
         Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "no model")
-          .font(.system(size: 13, weight: .semibold, design: .monospaced))
+          .font(.system(.body, design: .monospaced, weight: .semibold))
         Spacer()
         Button(controller.phase.isRunning ? "Stop" : "Start") {
           controller.phase.isRunning ? controller.stop() : controller.start()
@@ -116,20 +113,26 @@ private struct EndpointHeader: View {
   }
 }
 
+/// The server's state as a shape as well as a colour, so it still reads for anyone who can't
+/// tell the green from the red.
 private struct StatusDot: View {
   let phase: ServerController.Phase
 
-  private var color: Color {
+  private var mark: (symbol: String, color: Color, label: String) {
     switch phase {
-    case .running: .green
-    case .starting: .orange
-    case .failed: .red
-    case .stopped: .secondary
+    case .running: ("circle.fill", .green, "Running")
+    case .starting: ("circle.dotted", .orange, "Starting")
+    case .failed: ("exclamationmark.triangle.fill", .red, "Failed")
+    case .stopped: ("circle", .secondary, "Stopped")
     }
   }
 
   var body: some View {
-    Circle().fill(color).frame(width: 8, height: 8)
+    Image(systemName: mark.symbol)
+      .font(.footnote)
+      .foregroundStyle(mark.color)
+      .accessibilityLabel(mark.label)
+      .help(mark.label)
   }
 }
 
@@ -150,9 +153,11 @@ private struct CopyableURL: View {
         }
       } label: {
         Image(systemName: copied ? "checkmark" : "doc.on.doc")
+          .hitTarget()
       }
       .buttonStyle(.borderless)
-      .controlSize(.small)
+      .accessibilityLabel(copied ? "Copied" : "Copy address")
+      .help("Copy this address")
     }
   }
 }
@@ -171,18 +176,18 @@ private struct InFlightSection: View {
           Text("queued").foregroundStyle(.secondary)
         }
       }
-      .font(.system(size: 11, design: .monospaced))
+      .font(.system(.subheadline, design: .monospaced))
 
       if readout.inFlight.isEmpty {
         Text("idle — waiting for requests")
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
           .foregroundStyle(.tertiary)
           .padding(.leading, 2)
       } else {
         ForEach(readout.inFlight.prefix(10), id: \.id) { RequestRow(request: $0) }
         if readout.inFlight.count > 10 {
           Text("+\(readout.inFlight.count - 10) more")
-            .font(.system(size: 11, design: .monospaced))
+            .font(.system(.subheadline, design: .monospaced))
             .foregroundStyle(.tertiary)
         }
       }
@@ -369,7 +374,7 @@ private struct LogSection: View {
     VStack(alignment: .leading, spacing: 2) {
       ForEach(Array(lines.suffix(8).enumerated()), id: \.offset) { _, line in
         Text(line)
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(.footnote, design: .monospaced))
           .foregroundStyle(.tertiary)
           .lineLimit(1)
       }

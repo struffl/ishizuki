@@ -15,22 +15,20 @@ struct ConsoleView: View {
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 8) {
             Text(job.name)
-              .font(.system(size: 12, weight: .semibold, design: .monospaced))
+              .font(.system(.callout, design: .monospaced, weight: .semibold))
             if job.isRunning {
               ProgressView().controlSize(.small)
             }
             Spacer()
             Text(ReadoutFormat.duration(job.elapsed))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(.footnote, design: .monospaced))
               .foregroundStyle(.secondary)
             if job.isRunning {
               Button("Cancel") { runner.cancel() }
                 .buttonStyle(.glass)
-                .controlSize(.small)
             } else {
               Button("Clear") { runner.clear() }
                 .buttonStyle(.glass)
-                .controlSize(.small)
             }
           }
 
@@ -40,7 +38,7 @@ struct ConsoleView: View {
 
           if let failure = job.failure {
             Text(failure)
-              .font(.system(size: 11, design: .monospaced))
+              .font(.system(.subheadline, design: .monospaced))
               .foregroundStyle(.red)
               .textSelection(.enabled)
           }
@@ -51,7 +49,7 @@ struct ConsoleView: View {
                 LazyVStack(alignment: .leading, spacing: 1) {
                   ForEach(Array(job.lines.enumerated()), id: \.offset) { index, line in
                     Text(line)
-                      .font(.system(size: 10, design: .monospaced))
+                      .font(.system(.footnote, design: .monospaced))
                       .textSelection(.enabled)
                       .frame(maxWidth: .infinity, alignment: .leading)
                       .id(index)

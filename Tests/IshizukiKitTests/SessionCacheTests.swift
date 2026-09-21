@@ -57,6 +57,24 @@ struct SessionCacheTests {
     return lease
   }
 
+  @Test("readout uses published bytes while a lease changes its arrays")
+  func readoutDoesNotInspectBusyArrays() {
+    let pool = pool(checkpoints: 0)
+    let active = lease(pool, [1, 2, 3, 4])
+    let before = pool.cachedBytes
+    run(active, to: 4)
+    #expect(active.cache.byteCount > before)
+    // Neither dashboard reads nor budget changes may touch the in-flight arrays.
+    #expect(pool.cachedBytes == before)
+    pool.setByteLimit(1)
+    #expect(pool.slotCount == 1)
+    pool.setByteLimit(0)
+    pool.release(active)
+    #expect(pool.cachedBytes == active.cache.byteCount)
+    pool.evict()
+    #expect(pool.cachedBytes == 0)
+  }
+
   /// The case an agentic harness lives in: a rendered prompt ends with the generation prompt,
   /// and next turn that position holds the reply's first token instead, so the two prompts
   /// agree on everything but the last token. A rewind point at the prompt boundary is one

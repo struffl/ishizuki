@@ -85,8 +85,11 @@ extension ShellHost {
   }
 }
 
+#if os(macOS)
+
 /// Runs commands in this process. Correct for a Developer ID build; under the App Sandbox the
-/// child inherits the sandbox and only the container is reachable.
+/// child inherits the sandbox and only the container is reachable. There is no process to spawn
+/// on iOS, where a workspace is reached over the link instead.
 public final class LocalShellHost: ShellHost {
   public let workspace: URL
   public let shell: String
@@ -202,3 +205,5 @@ private final class Expiry: @unchecked Sendable {
     lock.unlock()
   }
 }
+
+#endif

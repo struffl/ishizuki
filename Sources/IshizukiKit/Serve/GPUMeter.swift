@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
-import IOKit
 
-/// Device utilization, read from the accelerator's own IOKit performance statistics.
+#if os(macOS)
+  import IOKit
+#endif
+
+/// Device utilization, read from the accelerator's own IOKit performance statistics. There is no
+/// such registry to read on iOS, where the answer is simply not known.
 public enum GPUMeter {
   private static let interval: TimeInterval = 0.5
   private static let lock = NSLock()
@@ -26,6 +30,9 @@ public enum GPUMeter {
   }
 
   private static func read() -> Double? {
+    #if !os(macOS)
+      return nil
+    #else
     var iterator: io_iterator_t = 0
     guard
       IOServiceGetMatchingServices(
@@ -49,5 +56,6 @@ public enum GPUMeter {
       }
     }
     return nil
+    #endif
   }
 }

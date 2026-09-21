@@ -14,15 +14,13 @@ struct ToolsView: View {
 
   var body: some View {
     ScrollView {
-      GlassEffectContainer(spacing: 12) {
-        VStack(alignment: .leading, spacing: 18) {
-          ConsoleView(runner: runner)
-          benchSection
-          quantizeSection
-          CacheSection(controller: controller)
-        }
-        .padding(16)
+      VStack(alignment: .leading, spacing: 18) {
+        ConsoleView(runner: runner)
+        benchSection
+        quantizeSection
+        CacheSection(controller: controller)
       }
+      .padding(16)
     }
     .scrollContentBackground(.hidden)
     .task { quantize.rescan(roots: controller.library.searchRoots()) }
@@ -31,9 +29,8 @@ struct ToolsView: View {
   @ViewBuilder private var benchSection: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Measure")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(.subheadline, weight: .semibold))
         .foregroundStyle(.secondary)
-        .textCase(.uppercase)
 
       GlassCard {
         VStack(alignment: .leading, spacing: 10) {
@@ -43,7 +40,7 @@ struct ToolsView: View {
             }
           }
           Text(bench.kind.summary)
-            .font(.system(size: 10))
+            .font(.footnote)
             .foregroundStyle(.secondary)
 
           if let entry = controller.activeEntry {
@@ -74,9 +71,8 @@ struct ToolsView: View {
   @ViewBuilder private var quantizeSection: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Quantize")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(.subheadline, weight: .semibold))
         .foregroundStyle(.secondary)
-        .textCase(.uppercase)
 
       GlassCard {
         if quantize.candidates.isEmpty {
@@ -87,7 +83,7 @@ struct ToolsView: View {
               "Quantizing needs an unquantized checkpoint to read. Add the folder one sits in "
                 + "from the Models tab."
             )
-            .font(.system(size: 11))
+            .font(.subheadline)
             .foregroundStyle(.secondary)
           }
         } else {
@@ -107,7 +103,7 @@ struct ToolsView: View {
             }
 
             Text(quantize.profile.summary)
-              .font(.system(size: 10))
+              .font(.footnote)
               .foregroundStyle(.secondary)
 
             if let plan = quantize.plan() {
@@ -135,9 +131,9 @@ struct ToolsView: View {
               "Measure activations first (slower, closer to a calibrated pack)",
               isOn: $quantize.calibrate
             )
-            .font(.system(size: 11))
+            .font(.subheadline)
             Toggle("Replace an existing pack of that name", isOn: $quantize.replace)
-              .font(.system(size: 11))
+              .font(.subheadline)
 
             HStack {
               Button("Build Pack") { quantize.start(on: runner) }

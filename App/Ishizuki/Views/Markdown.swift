@@ -34,7 +34,9 @@ final class SyntaxHighlighter {
     return highlightr?.supportedLanguages().contains(language) ?? false
   }
 
-  func highlight(_ code: String, language: String?, dark: Bool, font: NSFont) -> AttributedString? {
+  func highlight(_ code: String, language: String?, dark: Bool, font: PlatformFont)
+    -> AttributedString?
+  {
     guard let highlightr, supports(language) else { return nil }
 
     let key = Key(code: code, language: language, dark: dark)
@@ -60,7 +62,7 @@ final class SyntaxHighlighter {
   }
 }
 
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 struct MarkdownText: View {
   let text: String
   let mono: Font
@@ -111,7 +113,7 @@ enum StreamFade {
 
 /// Headings and bullets are drawn here rather than handed to the markdown parser, which would
 /// collapse the whitespace a streamed answer depends on.
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 struct ProseText: View {
   let text: String
   let size: Double
@@ -205,7 +207,7 @@ struct ProseText: View {
   }
 }
 
-@available(macOS 27.0, *)
+@available(macOS 27.0, iOS 27.0, *)
 struct CodeBlock: View {
   let language: String?
   let code: String
@@ -219,7 +221,7 @@ struct CodeBlock: View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 6) {
         Text(language ?? "text")
-          .font(.system(size: 9, weight: .medium, design: .monospaced))
+          .font(.system(.footnote, design: .monospaced, weight: .medium))
           .foregroundStyle(.secondary)
         if !closed {
           // The fence is still open, so the block says so rather than looking finished.
@@ -227,19 +229,20 @@ struct CodeBlock: View {
         }
         Spacer()
         Button {
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(code, forType: .string)
+          Clipboard.copy(code)
         } label: {
           Image(systemName: "doc.on.doc")
-            .font(.system(size: 9))
+            .font(.footnote)
+            .hitTarget()
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .accessibilityLabel("Copy this code")
         .help("Copy")
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 5)
-      .background(.white.opacity(0.05))
+      .background(.quaternary)
 
       ScrollView(.horizontal, showsIndicators: false) {
         text
@@ -249,11 +252,11 @@ struct CodeBlock: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .background(.black.opacity(scheme == .dark ? 0.28 : 0.05))
+    .background(.quinary)
     .clipShape(.rect(cornerRadius: 8))
     .overlay {
       RoundedRectangle(cornerRadius: 8)
-        .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+        .strokeBorder(Color.hairline, lineWidth: 0.5)
     }
   }
 
@@ -264,7 +267,7 @@ struct CodeBlock: View {
     if closed,
       let highlighted = SyntaxHighlighter.shared.highlight(
         code, language: language, dark: scheme == .dark,
-        font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular))
+        font: .mono(size))
     {
       Text(highlighted)
     } else {

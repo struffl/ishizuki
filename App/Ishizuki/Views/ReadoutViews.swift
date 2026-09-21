@@ -13,11 +13,11 @@ struct Field<Content: View>: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 10) {
       Text(label)
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced))
         .foregroundStyle(.secondary)
         .frame(width: 62, alignment: .trailing)
       content
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced))
       Spacer(minLength: 0)
     }
   }
@@ -45,6 +45,8 @@ struct Bar: View {
           .fill(level)
           .frame(width: width * clamped, height: 5)
       }
+      // Every bar is read out in words beside it, so it would only say the number twice.
+      .accessibilityHidden(true)
   }
 }
 
@@ -119,7 +121,7 @@ struct RequestRow: View {
         .frame(width: 48, alignment: .trailing)
       Spacer(minLength: 0)
     }
-    .font(.system(size: 11, design: .monospaced))
+    .font(.system(.subheadline, design: .monospaced))
     .lineLimit(1)
   }
 }
