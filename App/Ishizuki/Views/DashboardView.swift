@@ -281,7 +281,7 @@ private struct LoadSection: View {
       Field(label: "context") {
         HStack(spacing: 6) {
           Text(MemoryBudget.tokens(context.peakTokens) + " peak")
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(.secondary)
           Text(
             "· \(MemoryBudget.tokens(context.reservedTokens)) reserved"
               + " · \(MemoryBudget.tokens(context.ceilingTokens)) ceiling"
@@ -325,10 +325,10 @@ private struct PrefixSection: View {
         HStack(spacing: 6) {
           if prefix.lookups > 0 {
             Text(ReadoutFormat.percent(prefix.hitRate) + " hit")
-              .foregroundStyle(Color.accentColor)
+              .foregroundStyle(.secondary)
             Text("·").foregroundStyle(.tertiary)
           }
-          Text(occupancy).foregroundStyle(Color.accentColor)
+          Text(occupancy).foregroundStyle(.secondary)
         }
       }
       Field(label: "") {

@@ -13,6 +13,7 @@ struct IshizukiApp: App {
   var body: some Scene {
     MenuBarExtra {
       MenuBarView(controller: controller)
+        .tint(.accentSoft)
     } label: {
       BonsaiGlyph()
     }
@@ -20,7 +21,10 @@ struct IshizukiApp: App {
 
     Window("Ishizuki", id: "dashboard") {
       DashboardView(controller: controller)
+        .tint(.accentSoft)
         .task { controller.bootstrap() }
+        .onAppear { NSApp.setActivationPolicy(.regular) }
+        .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
     .defaultSize(width: 760, height: 640)
     .defaultLaunchBehavior(.presented)
