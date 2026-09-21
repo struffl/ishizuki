@@ -110,7 +110,11 @@ public final class AgentEngine: @unchecked Sendable {
   /// The last turn's prompt, kept only to say how much of it the next one still agrees with.
   /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
   /// is not working, and the two look identical from the readout.
-  private var lastPromptTokens: [Int] = []
+  private var promptTokens: [Int] = []
+
+  /// The last prompt this engine rendered, which is what pairs a conversation with the
+  /// archives on disk that hold its prefix.
+  public var lastPromptTokens: [Int] { promptTokens }
   private let systemCount = Counter()
   private let commandText = Text()
 

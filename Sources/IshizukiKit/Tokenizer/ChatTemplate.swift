@@ -50,7 +50,7 @@ public struct ChatMessage: Sendable {
   }
 }
 
-public enum ReasoningEffort: String, Sendable, CaseIterable {
+public enum ReasoningEffort: String, Sendable, CaseIterable, Codable {
   case none, low, medium, high, xhigh
 }
 

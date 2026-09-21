@@ -19,14 +19,19 @@ struct ChatView: View {
   private let gutter: CGFloat = 116
 
   var body: some View {
-    VStack(spacing: 0) {
-      header
-      Divider().opacity(0.3)
-      transcript
-      Divider().opacity(0.3)
-      ChatReadoutBar(chat: chat, controller: controller)
-      queued
-      composer
+    NavigationSplitView {
+      ChatSidebar(chat: chat, controller: controller)
+        .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 320)
+    } detail: {
+      VStack(spacing: 0) {
+        header
+        Divider().opacity(0.3)
+        transcript
+        Divider().opacity(0.3)
+        ChatReadoutBar(chat: chat, controller: controller)
+        queued
+        composer
+      }
     }
     .windowBackdrop()
   }

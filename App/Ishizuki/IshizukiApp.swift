@@ -37,7 +37,7 @@ struct IshizukiApp: App {
     .defaultLaunchBehavior(.presented)
 
     // The same conversation, given room: a coding session wants more than a tab.
-    Window("Chat", id: "chat") {
+    Window("Agent", id: "agent") {
       ChatView(chat: chat, controller: controller)
         .tint(.accentSoft)
         .task { controller.bootstrap() }

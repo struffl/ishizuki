@@ -31,14 +31,22 @@ public final class CodingAgent: Sendable {
   public init(
     engine: AgentEngine,
     workspace: Workspace,
-    instructions: String = CodingAgent.defaultInstructions
+    instructions: String = CodingAgent.defaultInstructions,
+    /// A conversation being resumed. Its transcript already carries the instructions it was
+    /// started with, so they are not given again.
+    transcript: Transcript? = nil
   ) {
     self.workspace = workspace
 
-    let session = LanguageModelSession(
-      model: IshizukiModel(engine: engine),
-      tools: codingTools(for: workspace),
-      instructions: Instructions(instructions))
+    let tools = codingTools(for: workspace)
+    let model = IshizukiModel(engine: engine)
+    let session =
+      if let transcript, !transcript.isEmpty {
+        LanguageModelSession(model: model, tools: tools, transcript: transcript)
+      } else {
+        LanguageModelSession(
+          model: model, tools: tools, instructions: Instructions(instructions))
+      }
     self.modelSession = session
 
     let (stream, continuation) = AsyncStream<Event>.makeStream()

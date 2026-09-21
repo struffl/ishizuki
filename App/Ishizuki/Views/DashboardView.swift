@@ -7,7 +7,7 @@ import IshizukiKit
 import SwiftUI
 
 struct DashboardView: View {
-  enum Tab: String { case chat, server, models, tools, settings }
+  enum Tab: String { case agent, server, models, tools, settings }
 
   @Bindable var controller: ServerController
   @State private var runner = JobRunner()
@@ -19,14 +19,14 @@ struct DashboardView: View {
   init(controller: ServerController, chat: ChatController) {
     self.controller = controller
     self.chat = chat
-    _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .chat)
+    _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .agent)
   }
 
   var body: some View {
     TabView(selection: $tab) {
       ChatView(chat: chat, controller: controller)
-        .tabItem { Label("Chat", systemImage: "bubble.left.and.text.bubble.right") }
-        .tag(Tab.chat)
+        .tabItem { Label("Agent", systemImage: "bubble.left.and.text.bubble.right") }
+        .tag(Tab.agent)
       ScrollView { readout.padding(16) }
         .tabItem { Label("Server", systemImage: "gauge.with.dots.needle.33percent") }
         .tag(Tab.server)

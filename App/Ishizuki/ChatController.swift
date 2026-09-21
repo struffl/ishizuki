@@ -98,6 +98,11 @@ final class ChatController {
     didSet { engine?.effort = effort }
   }
 
+  /// Every conversation that has been had, newest first, and which one is open.
+  private(set) var chats: [SavedChat] = []
+  private(set) var current: SavedChat
+
+  private let store = ChatStore()
   private let defaults = UserDefaults.standard
   private weak var server: ServerController?
   private var agent: CodingAgent?
@@ -109,10 +114,94 @@ final class ChatController {
   init(server: ServerController) {
     self.server = server
     let stored = defaults.string(forKey: "chat.effort")
-    self.effort = stored.flatMap(ReasoningEffort.init(rawValue:)) ?? .xhigh
-    if let path = defaults.string(forKey: "chat.workspace") {
+    let effort = stored.flatMap(ReasoningEffort.init(rawValue:)) ?? .xhigh
+    self.effort = effort
+
+    let loaded = ChatStore().load()
+    self.chats = loaded
+    self.current = loaded.first ?? SavedChat(effort: effort)
+    if let path = current.workspace ?? defaults.string(forKey: "chat.workspace") {
       self.workspace = URL(filePath: path)
     }
+    if chats.isEmpty { chats = [current] }
+    self.transcriptRows = Self.rows(from: current.transcript)
+  }
+
+  // MARK: - Chats
+
+  func startNewChat() {
+    guard !isResponding else { return }
+    persist()
+    let chat = SavedChat(
+      workspace: workspace?.path, model: server?.settings.activeModelID, effort: effort)
+    chats.insert(chat, at: 0)
+    open(chat)
+  }
+
+  func select(_ chat: SavedChat) {
+    guard !isResponding, chat.id != current.id else { return }
+    persist()
+    open(chat)
+  }
+
+  func rename(_ chat: SavedChat, to title: String) {
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    update(chat.id) { $0.title = trimmed }
+    store.save(chats.first { $0.id == chat.id } ?? current)
+  }
+
+  func delete(_ chat: SavedChat) {
+    guard !(isResponding && chat.id == current.id) else { return }
+    store.delete(chat.id)
+    chats.removeAll { $0.id == chat.id }
+    if let prefixes = server?.prefixStore {
+      store.pruneCache(for: chat, keeping: chats, in: prefixes)
+    }
+    guard chat.id == current.id else { return }
+    open(chats.first ?? SavedChat(workspace: workspace?.path, effort: effort))
+  }
+
+  /// Opening a conversation rebuilds its session from the transcript it was saved with, so the
+  /// model picks up the thread rather than being told about it.
+  private func open(_ chat: SavedChat) {
+    current = chat
+    agent = nil
+    failure = nil
+    pendingSteers.removeAll()
+    meta.removeAll()
+    effort = chat.effort
+    if let path = chat.workspace { workspace = URL(filePath: path) }
+    transcriptRows = Self.rows(from: chat.transcript)
+    if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
+  }
+
+  private func update(_ id: UUID, _ change: (inout SavedChat) -> Void) {
+    if current.id == id { change(&current) }
+    guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
+    change(&chats[index])
+  }
+
+  /// Written after every turn, so closing the window is never a way to lose a conversation.
+  private func persist() {
+    guard let agent else { return }
+    let transcript = agent.transcript
+    guard !transcript.isEmpty else { return }
+    current.transcript = transcript
+    current.updated = Date()
+    current.workspace = workspace?.path
+    current.model = server?.settings.activeModelID
+    current.effort = effort
+    if let tokens = engine?.lastPromptTokens, !tokens.isEmpty {
+      current.promptTokens = tokens
+    }
+    if current.title == "New chat", let derived = SavedChat.title(from: transcript) {
+      current.title = derived
+    }
+    let saved = current
+    update(saved.id) { $0 = saved }
+    chats.sort { $0.updated > $1.updated }
+    store.save(saved)
   }
 
   private var engine: AgentEngine? { server?.engine }
@@ -341,7 +430,8 @@ final class ChatController {
     engine.effort = effort
     let made = CodingAgent(
       engine: engine,
-      workspace: Workspace(host: LocalShellHost(workspace: workspace)))
+      workspace: Workspace(host: LocalShellHost(workspace: workspace)),
+      transcript: current.transcript.isEmpty ? nil : current.transcript)
     agent = made
     return made
   }
@@ -364,6 +454,7 @@ final class ChatController {
     absorb(Self.rows(from: agent.transcript))
     isResponding = false
     recordTurnCost()
+    persist()
 
     meter.turns += 1
     meter.seconds += seconds
