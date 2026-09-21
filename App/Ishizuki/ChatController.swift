@@ -43,6 +43,21 @@ final class ChatController {
         case .reasoning, .answer, .toolCall: false
         }
       }
+
+      /// Which voice the row is in, which is what decides how tightly it sits under the row
+      /// above it: a run of tool traffic reads as one block of machinery, not as six separate
+      /// remarks, and only a change of voice earns a real gap.
+      enum Voice {
+        case mine, said, machinery
+      }
+
+      var voice: Voice {
+        switch self {
+        case .prompt, .steer: .mine
+        case .answer: .said
+        case .system, .reasoning, .toolCall, .toolOutput: .machinery
+        }
+      }
     }
 
     var id: String
@@ -66,6 +81,35 @@ final class ChatController {
   private(set) var pendingSteers: [Row] = []
 
   var rows: [Row] { transcriptRows }
+
+  /// What the transcript draws. A queued steer has not been said yet, and a row that renders
+  /// nothing still costs a line of height and a gap above it.
+  var visibleRows: [Row] { transcriptRows.filter { $0.kind != .steer } }
+
+  /// How a row is shown: open or shut, and whether a capped body has been let out in full.
+  ///
+  /// This lives here rather than in the row's own view because a `LazyVStack` discards a row's
+  /// `@State` once it is far enough out of sight. A row that came back collapsed changed height
+  /// underneath a scroll position that had been measured against it open, and the transcript
+  /// jumped to make up the difference — which is the whole of what made scrolling bounce.
+  nonisolated struct RowDisplay: Equatable {
+    /// nil follows the default (open while live, shut once it settles); set the moment someone
+    /// clicks, so a click mid-stream is not overruled on the next frame.
+    var expanded: Bool?
+    var showFull = false
+  }
+
+  private(set) var display: [String: RowDisplay] = [:]
+
+  func display(for row: Row) -> RowDisplay { display[row.id] ?? RowDisplay() }
+
+  func setExpanded(_ open: Bool, for id: String) {
+    display[id, default: RowDisplay()].expanded = open
+  }
+
+  func setShowFull(_ full: Bool, for id: String) {
+    display[id, default: RowDisplay()].showFull = full
+  }
 
   /// What a row cost, kept beside the transcript because the transcript carries no clock and
   /// no token counts of its own.
@@ -184,6 +228,7 @@ final class ChatController {
     failure = nil
     pendingSteers.removeAll()
     meta.removeAll()
+    display.removeAll()
     effort = chat.effort
     if let path = chat.workspace { workspace = URL(filePath: path) }
     builder = RowBuilder()

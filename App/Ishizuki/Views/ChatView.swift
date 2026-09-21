@@ -90,8 +90,10 @@ struct ChatView: View {
       GeometryReader { outer in
         ZStack(alignment: .bottomTrailing) {
           ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-              ForEach(chat.rows) { row in
+            // Spacing is set per row rather than once for the stack, so a run of tool traffic
+            // closes up into one block and air is spent only where the voice changes.
+            LazyVStack(alignment: .leading, spacing: 0) {
+              ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 // RowCost sits past the row's trailing edge rather than beside it, so the row
                 // never reports a width wider than the column actually is — the earlier
                 // version did that with negative padding, which left the true content wider
@@ -100,8 +102,11 @@ struct ChatView: View {
                 ZStack(alignment: .trailing) {
                   ChatRowView(
                     row: row, mono: mono, size: fontSize,
-                    live: chat.isResponding && row.id == chat.rows.last?.id,
-                    caption: chat.captioner.caption(for: row.id)
+                    live: chat.isResponding && row.id == rows.last?.id,
+                    caption: chat.captioner.caption(for: row.id),
+                    show: chat.display(for: row),
+                    onExpand: { chat.setExpanded($0, for: row.id) },
+                    onShowFull: { chat.setShowFull($0, for: row.id) }
                   )
                   .frame(maxWidth: .infinity, alignment: .leading)
                   .offset(x: -reveal)
@@ -111,6 +116,9 @@ struct ChatView: View {
                     .offset(x: gutter - reveal)
                 }
                 .clipped()
+                .padding(
+                  .top, Self.gap(after: index > 0 ? rows[index - 1].kind : nil, before: row.kind)
+                )
                 .id(row.id)
               }
               if chat.isResponding {
@@ -153,7 +161,7 @@ struct ChatView: View {
           )
           .onPreferenceChange(BottomMarkerKey.self) { maxY in
             let distance = maxY - outer.size.height
-            isAtBottom = distance < 40
+            isAtBottom = distance < 16
             let farEnough = distance > outer.size.height * (2.0 / 3.0)
             if farEnough != showJumpToBottom {
               withAnimation(.easeOut(duration: 0.15)) { showJumpToBottom = farEnough }
@@ -163,14 +171,23 @@ struct ChatView: View {
             // A row growing while the transcript is pinned to the bottom should read as the
             // content pushing itself up, not as the view panning down after it — so this
             // follow is a snap, never an animation.
-            guard isAtBottom else { return }
+            //
+            // Only while a turn is in flight. A lazy row settling on its true height as it
+            // scrolls in also moves this, and following that was the transcript hauling itself
+            // back down under someone who was reading it.
+            guard chat.isResponding, isAtBottom else { return }
             scroller.scrollTo("bottomAnchor", anchor: .bottom)
           }
           .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-          .onChange(of: chat.rows.count) {
-            withAnimation(.easeOut(duration: 0.15)) {
-              scroller.scrollTo("bottomAnchor", anchor: .bottom)
-            }
+          .onChange(of: rows.count) {
+            // Unanimated, like the follow above: a new row lands at the same moment the height
+            // changes, and two animated scrolls towards the same anchor read as a lurch.
+            //
+            // Someone reading back through a turn is left where they are, but sending something
+            // always goes to it — that jump is the answer to their own click, not the view
+            // wandering off on its own.
+            guard isAtBottom || rows.last?.kind == .prompt else { return }
+            scroller.scrollTo("bottomAnchor", anchor: .bottom)
           }
           // A drag left mid-gesture by switching chats should not keep shifting the next
           // conversation's rows aside.
@@ -280,6 +297,17 @@ struct ChatView: View {
     .padding(.bottom, 10)
   }
 
+  private var rows: [ChatController.Row] { chat.visibleRows }
+
+  /// How much air a row gets above it. Sharing a voice with the row before means the two belong
+  /// to one utterance and sit almost touching; only a change of voice earns a real gap.
+  private static func gap(
+    after previous: ChatController.Row.Kind?, before current: ChatController.Row.Kind
+  ) -> CGFloat {
+    guard let previous else { return 0 }
+    return previous.voice == current.voice ? 2 : 8
+  }
+
   private var mono: Font {
     monoFont.isEmpty
       ? .system(size: fontSize, design: .monospaced)
@@ -291,7 +319,7 @@ struct ChatView: View {
 struct ChatRowView: View, Equatable {
   nonisolated static func == (a: ChatRowView, b: ChatRowView) -> Bool {
     a.row == b.row && a.mono == b.mono && a.size == b.size && a.live == b.live
-      && a.caption == b.caption
+      && a.caption == b.caption && a.show == b.show
   }
 
   let row: ChatController.Row
@@ -302,15 +330,12 @@ struct ChatRowView: View, Equatable {
   var live = false
   /// What the system model made of this, when it has had a look.
   var caption: String?
-
-  /// nil follows the default (open while live, closed once it settles); set the moment someone
-  /// clicks, so a click during streaming can still close a row that would otherwise force itself
-  /// open every frame.
-  @State private var expanded: Bool?
-
-  /// Set once someone clicks past the height cap on a long body. A shell dump that scrolls
-  /// the whole transcript off-screen is worse than one more click.
-  @State private var showFull = false
+  /// Whether this row is open, and whether a capped body has been let out in full. Held by the
+  /// controller rather than here: a LazyVStack does not keep a row's own `@State` across a
+  /// scroll, and a row that came back shut changed height under the scroll position.
+  var show = ChatController.RowDisplay()
+  var onExpand: (Bool) -> Void = { _ in }
+  var onShowFull: (Bool) -> Void = { _ in }
 
   /// A thought stays collapsed even while live: reopening itself every time new text lands is
   /// what left one stuck open, a frame behind the row it belonged to.
@@ -318,10 +343,15 @@ struct ChatRowView: View, Equatable {
     if case .reasoning = row.kind { false } else { true }
   }
 
-  /// How tall an open body is let grow before it is capped with a "see more".
-  private static let bodyHeightCap: Double = 260
+  /// How many lines of an open body are shown before it is capped with a "see more".
+  ///
+  /// Counted in lines and applied to the text itself, rather than clamped with a height and
+  /// clipped: a view clipped to a height still reports the height it wanted, and that gap
+  /// between the height a row claimed and the height it drew is what let a long shell dump
+  /// throw the rest of the transcript around as it scrolled in and out of sight.
+  private static let bodyLineCap = 12
 
-  private var open: Bool { expanded ?? (live && autoOpensLive) }
+  private var open: Bool { show.expanded ?? (live && autoOpensLive) }
 
   var body: some View {
     switch row.kind {
@@ -379,7 +409,7 @@ struct ChatRowView: View, Equatable {
     let body = rawBody.trimmingCharacters(in: .whitespacesAndNewlines)
     VStack(alignment: .leading, spacing: 2) {
       Button {
-        expanded = !open
+        onExpand(!open)
       } label: {
         HStack(spacing: 5) {
           Image(systemName: icon)
@@ -408,12 +438,12 @@ struct ChatRowView: View, Equatable {
         // Output worth capping is worth reading from its tail: the last lines of a shell
         // dump are the ones that say how it ended, so a capped block stays pinned to the
         // bottom and "see more" sits above it, pointing at what is hidden above.
-        let capped = long && !showFull
+        let capped = long && !show.showFull
 
         VStack(alignment: .leading, spacing: 4) {
           if long {
             Button {
-              showFull.toggle()
+              onShowFull(!show.showFull)
             } label: {
               HStack(spacing: 3) {
                 Image(systemName: capped ? "chevron.up" : "chevron.down")
@@ -426,13 +456,15 @@ struct ChatRowView: View, Equatable {
             .foregroundStyle(.secondary)
           }
 
+          let shown = capped ? Self.tail(of: body, lines: Self.bodyLineCap) : body
+
           Group {
             if monospaced {
-              Text(body)
+              Text(shown)
                 .font(mono)
                 .textSelection(.enabled)
             } else {
-              StreamedMarkdown(text: body, mono: mono, size: size - 1, live: live)
+              StreamedMarkdown(text: shown, mono: mono, size: size - 1, live: live)
             }
           }
           .foregroundStyle(.primary.opacity(0.85))
@@ -440,8 +472,8 @@ struct ChatRowView: View, Equatable {
           // itself to whichever line happens to be longest, which left a ragged right edge
           // that moved as the text streamed in.
           .frame(maxWidth: body.contains("\n") ? .infinity : nil, alignment: .leading)
-          .frame(maxHeight: capped ? Self.bodyHeightCap : nil, alignment: .bottom)
-          .clipped()
+          // One line long enough to wrap past the cap would otherwise slip through it.
+          .lineLimit(capped ? Self.bodyLineCap : nil)
         }
         .textPlate(radius: 8, horizontal: 9, vertical: 5)
         // Indented to sit under its own title rather than beside it.
@@ -453,7 +485,15 @@ struct ChatRowView: View, Equatable {
 
   /// Long enough that showing it in full would push the rest of the transcript off-screen.
   private static func isLong(_ body: String) -> Bool {
-    body.utf8.count > 1200 || body.reduce(into: 0) { count, ch in if ch == "\n" { count += 1 } } > 14
+    body.utf8.count > 1200
+      || body.reduce(into: 0) { count, ch in if ch == "\n" { count += 1 } } >= bodyLineCap
+  }
+
+  /// The last `lines` lines: the end of a dump is the part that says how it went.
+  private static func tail(of body: String, lines: Int) -> String {
+    let all = body.split(separator: "\n", omittingEmptySubsequences: false)
+    guard all.count > lines else { return body }
+    return all.suffix(lines).joined(separator: "\n")
   }
 
   private func summary(of body: String) -> String {

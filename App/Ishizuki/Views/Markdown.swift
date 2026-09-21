@@ -143,7 +143,9 @@ struct ProseText: View {
   @ViewBuilder private func rendered(_ raw: String, fade: Int) -> some View {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
     if trimmed.isEmpty {
-      Spacer().frame(height: 4)
+      // Not a Spacer: a flexible spacer in a VStack absorbs whatever slack an ancestor hands
+      // down, so a blank line between paragraphs could stretch into a void of its own.
+      Color.clear.frame(height: 4)
     } else if let heading = heading(trimmed) {
       Text(styled(heading.text, fade: fade))
         .font(.system(size: size + (heading.level == 1 ? 5 : 3), weight: .semibold))
