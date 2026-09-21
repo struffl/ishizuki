@@ -204,9 +204,12 @@ struct ChatRowView: View {
   /// What the system model made of this, when it has had a look.
   var caption: String?
 
-  @State private var expanded = false
+  /// nil follows the default (open while live, closed once it settles); set the moment someone
+  /// clicks, so a click during streaming can still close a row that would otherwise force itself
+  /// open every frame.
+  @State private var expanded: Bool?
 
-  private var open: Bool { expanded || live }
+  private var open: Bool { expanded ?? live }
 
   var body: some View {
     switch row.kind {
@@ -261,7 +264,7 @@ struct ChatRowView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       Button {
-        expanded.toggle()
+        expanded = !open
       } label: {
         HStack(spacing: 5) {
           Image(systemName: icon)
@@ -285,17 +288,23 @@ struct ChatRowView: View {
       .buttonStyle(.plain)
 
       if open, !body.isEmpty {
-        Text(body)
-          .font(monospaced ? mono : .system(size: size - 1))
-          .foregroundStyle(.primary.opacity(0.85))
-          .textSelection(.enabled)
-          // Once there is more than one line the block takes the width rather than sizing
-          // itself to whichever line happens to be longest, which left a ragged right edge
-          // that moved as the text streamed in.
-          .frame(maxWidth: body.contains("\n") ? .infinity : nil, alignment: .leading)
-          .textPlate(radius: 8, horizontal: 9, vertical: 5)
-          // Indented to sit under its own title rather than beside it.
-          .padding(.leading, 15)
+        Group {
+          if monospaced {
+            Text(body)
+              .font(mono)
+              .textSelection(.enabled)
+          } else {
+            MarkdownText(text: body, mono: mono, size: size - 1)
+          }
+        }
+        .foregroundStyle(.primary.opacity(0.85))
+        // Once there is more than one line the block takes the width rather than sizing
+        // itself to whichever line happens to be longest, which left a ragged right edge
+        // that moved as the text streamed in.
+        .frame(maxWidth: body.contains("\n") ? .infinity : nil, alignment: .leading)
+        .textPlate(radius: 8, horizontal: 9, vertical: 5)
+        // Indented to sit under its own title rather than beside it.
+        .padding(.leading, 15)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
