@@ -31,7 +31,7 @@ public final class APIServer: @unchecked Sendable {
   private var loaded: BonsaiModel?
   /// Whether a pack arrives with its vision tower already read, rather than on the first image.
   private let hot: Bool
-  private let generationQueue = DispatchQueue(label: "bonsai.generate")
+  let generationQueue = DispatchQueue(label: "bonsai.generate")
   private var server: HTTPServer?
   public var log: (@Sendable (String) -> Void)?
 
@@ -246,7 +246,7 @@ public final class APIServer: @unchecked Sendable {
     }
   }
 
-  private struct Request {
+  struct Request {
     var messages: [ChatMessage]
     var tools: [[String: Any]]?
     var maxTokens: Int
@@ -257,9 +257,11 @@ public final class APIServer: @unchecked Sendable {
     var responseSchema: [String: Any]?
     /// What the client asked to talk to. Honoured when it names a pack in the catalog.
     var model: String?
+    /// How long the model is asked to think, when the template spells that out.
+    var effort: ReasoningEffort?
   }
 
-  private func complete(
+  func complete(
     _ request: Request,
     id: Int? = nil,
     isCancelled: (@Sendable () -> Bool)? = nil,
@@ -276,6 +278,7 @@ public final class APIServer: @unchecked Sendable {
       messages: request.messages,
       addGenerationPrompt: true,
       enableThinking: request.thinking,
+      reasoningEffort: request.effort,
       tools: request.tools)
 
     stats.enter(id, phase: .prefill)

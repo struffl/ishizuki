@@ -1,0 +1,201 @@
+// SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// The workspace operations, presented to a session as tools. Nothing but argument shapes and
+// the sentences that teach a small model when to reach for each one.
+
+import Foundation
+import FoundationModels
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct ReadFileTool: Tool {
+  public let name = "read"
+  public let description = """
+    Read a slice of a text file. Returns numbered lines and says how many were withheld; \
+    call again with offset to see more. Read before you write or edit.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "Path, relative to the workspace")
+    public var path: String
+    @Guide(description: "First line to return, 1-based. Omit for the start of the file")
+    public var offset: Int?
+    @Guide(description: "How many lines to return. Omit for the default slice")
+    public var limit: Int?
+  }
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.readSlice(
+      path: arguments.path, offset: arguments.offset, limit: arguments.limit)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct WriteFileTool: Tool {
+  public let name = "write"
+  public let description = """
+    Write a file whole, creating it if it does not exist. Overwriting a file you have not read \
+    in full is refused; prefer edit for a change to part of a file.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "Path, relative to the workspace")
+    public var path: String
+    @Guide(description: "The file's entire new contents")
+    public var contents: String
+  }
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.writeWhole(path: arguments.path, contents: arguments.contents)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct EditFileTool: Tool {
+  public let name = "edit"
+  public let description = """
+    Replace an exact stretch of text in a file. You must have read the lines you are changing. \
+    The old text must appear exactly once unless you pass all.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "Path, relative to the workspace")
+    public var path: String
+    @Guide(description: "The exact text to replace, copied from a read")
+    public var old: String
+    @Guide(description: "What to put in its place")
+    public var new: String
+    @Guide(description: "Replace every occurrence rather than requiring exactly one")
+    public var all: Bool?
+  }
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.edit(
+      path: arguments.path, old: arguments.old, new: arguments.new,
+      all: arguments.all ?? false)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct GrepTool: Tool {
+  public let name = "grep"
+  public let description = """
+    Search the workspace for a regular expression. Returns path:line:text, capped. Use this to \
+    find where to read rather than reading whole files.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "Regular expression to search for")
+    public var pattern: String
+    @Guide(description: "Limit to paths matching this glob, e.g. *.swift")
+    public var glob: String?
+    @Guide(description: "Directory or file to search under. Omit for the whole workspace")
+    public var path: String?
+    @Guide(description: "Ignore case")
+    public var ignoreCase: Bool?
+  }
+
+  let workspace: Workspace
+  let limit: Int
+
+  public init(workspace: Workspace, limit: Int = 40) {
+    self.workspace = workspace
+    self.limit = limit
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.grep(
+      pattern: arguments.pattern, glob: arguments.glob, path: arguments.path,
+      ignoreCase: arguments.ignoreCase ?? false, limit: limit)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct GlobTool: Tool {
+  public let name = "glob"
+  public let description = "List workspace files matching a glob, capped. Respects .gitignore."
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "Glob to match, e.g. Sources/**/*.swift")
+    public var pattern: String
+  }
+
+  let workspace: Workspace
+  let limit: Int
+
+  public init(workspace: Workspace, limit: Int = 60) {
+    self.workspace = workspace
+    self.limit = limit
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.glob(pattern: arguments.pattern, limit: limit)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct ShellTool: Tool {
+  public let name = "shell"
+  public let description = """
+    Run a command in the workspace and return its output, capped. Use read, write, edit, grep \
+    and glob for files; use this for builds, tests and git.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "The command line to run")
+    public var command: String
+    @Guide(description: "Seconds to allow before it is cut short")
+    public var timeout: Int?
+  }
+
+  let workspace: Workspace
+  let byteLimit: Int
+
+  public init(workspace: Workspace, byteLimit: Int = 8 * 1024) {
+    self.workspace = workspace
+    self.byteLimit = byteLimit
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.shell(
+      command: arguments.command, timeout: Double(arguments.timeout ?? 120),
+      byteLimit: byteLimit)
+  }
+}
+
+/// The set a coding turn is given, in the order the model should reach for them.
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public func codingTools(for workspace: Workspace) -> [any Tool] {
+  [
+    ReadFileTool(workspace: workspace),
+    GrepTool(workspace: workspace),
+    GlobTool(workspace: workspace),
+    EditFileTool(workspace: workspace),
+    WriteFileTool(workspace: workspace),
+    ShellTool(workspace: workspace),
+  ]
+}
