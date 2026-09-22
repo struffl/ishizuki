@@ -45,6 +45,12 @@ public final class WeightStore: @unchecked Sendable {
   /// the shards. Nil means every expert is already in `arrays`.
   public func experts(layer: Int) -> ExpertStore? { expertStores[layer] }
 
+  /// What the streamed layers have read so far, summed. Nil for a pack that holds its experts,
+  /// which is what tells a readout there is nothing to say.
+  public var expertTraffic: ExpertStore.Summary? {
+    ExpertStore.Summary(layers: Array(expertStores.values))
+  }
+
   /// Opens the per-layer expert files a repacked sparse model ships, if there are any.
   public func openingExperts(at directory: URL, slots: Int) throws -> WeightStore {
     let layoutURL = directory.appending(path: ExpertRepack.layoutFile)

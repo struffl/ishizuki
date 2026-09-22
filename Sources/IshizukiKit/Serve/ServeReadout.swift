@@ -58,6 +58,8 @@ public struct ServeReadout: Sendable {
   public var headroom: Int
   public var context: Context
   public var prefix: Prefix?
+  /// Present only while a pack with its experts on disk is loaded.
+  public var experts: ExpertStore.Summary?
   public var state: State
 
   public var running: Int { inFlight.filter { $0.phase != .queued }.count }
@@ -151,6 +153,7 @@ extension APIServer {
         ceilingTokens: budget.maxContextTokens,
         kvHeldBytes: sessions.cachedBytes),
       prefix: prefix,
+      experts: loadedStore?.expertTraffic,
       state: ServeReadout.State(
         politeness: politeness,
         thermal: Politeness.thermalDescription,

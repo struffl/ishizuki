@@ -28,13 +28,16 @@ struct ExpertRepackTests {
   }
 
   /// An 8-bit pack of the fixture, which is what the repacker takes as its source.
-  private func pack(at destination: URL) throws {
+  @discardableResult
+  private func pack(
+    at destination: URL, streamExperts: Bool = false
+  ) throws -> Quantizer.Outcome {
     let profile = QuantProfile(
       name: "test", baseBits: 8, boostBits: [], targetBpw: 8, groupSize: 32,
       summary: "as close to the checkpoint as a pack gets")
-    _ = try Quantizer(
+    return try Quantizer(
       source: try SourceCheckpoint(directory: fixture), profile: profile,
-      destination: destination
+      destination: destination, streamExperts: streamExperts
     ).run()
   }
 
@@ -117,6 +120,57 @@ struct ExpertRepackTests {
 
     let bytes = try Data(contentsOf: whole.appending(path: "config.json"))
     #expect(try Data(contentsOf: split.appending(path: "config.json")) == bytes)
+  }
+
+  /// The other way to a streamed pack: the quantizer cuts the blobs itself, so a checkpoint
+  /// converts once rather than being written whole and then split. Both routes have to land on
+  /// the same numbers, or one of them is quantizing the experts differently.
+  @Test("the quantizer writes experts straight to disk, and they answer the same")
+  func quantizesStraightToDisk() throws {
+    let scratch = try scratch()
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let whole = scratch.appending(path: "whole")
+    let direct = scratch.appending(path: "direct")
+    try pack(at: whole)
+    let outcome = try pack(at: direct, streamExperts: true)
+
+    #expect(ExpertRepack.isSplit(direct))
+    #expect(outcome.byteCount > 0)
+
+    let (resident, _) = try model(at: whole, slots: nil)
+    let (streamed, store) = try model(at: direct, slots: 2)
+    #expect(!store.has("model.layers.0.mlp.switch_mlp.gate_proj.weight"))
+    #expect(try #require(store.experts(layer: 0)).layout.expertCount == 4)
+
+    let want = try logits(resident)
+    let got = try logits(streamed)
+    #expect(got.shape == want.shape)
+    #expect((got - want).abs().max().item(Float.self) == 0)
+  }
+
+  /// A pack written straight to disk and one split afterwards are the same pack, blob for
+  /// blob: the split moves bytes, and so does the quantizer's own cut.
+  @Test("and lands the same bytes as splitting afterwards")
+  func matchesTheSeparateSplit() throws {
+    let scratch = try scratch()
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let whole = scratch.appending(path: "whole")
+    let split = scratch.appending(path: "split")
+    let direct = scratch.appending(path: "direct")
+    try pack(at: whole)
+    try pack(at: direct, streamExperts: true)
+    let plan = try ExpertRepack.run(source: whole, destination: split)
+
+    for layer in plan.layers {
+      let one = try Data(contentsOf: split.appending(path: ExpertRepack.layerFile(layer)))
+      let other = try Data(contentsOf: direct.appending(path: ExpertRepack.layerFile(layer)))
+      #expect(one == other, "layer \(layer) differs between the two routes")
+    }
+    #expect(
+      try Data(contentsOf: split.appending(path: ExpertRepack.layoutFile))
+        == (try Data(contentsOf: direct.appending(path: ExpertRepack.layoutFile))))
   }
 
   @Test("refuses a pack that is already split, and refuses to write over itself")

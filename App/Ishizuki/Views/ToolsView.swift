@@ -238,6 +238,16 @@ struct ToolsView: View {
             .font(.subheadline)
             Toggle("Replace an existing pack of that name", isOn: $quantize.replace)
               .font(.subheadline)
+            if let plan = quantize.plan(), plan.expertCount > 0 {
+              Toggle(
+                "Keep the routed experts on disk (\(plan.expertCount) per sparse layer)",
+                isOn: $quantize.streamExperts
+              )
+              .font(.subheadline)
+              .help(
+                "Writes the experts beside the pack instead of into it, so the pack streams "
+                  + "them as it runs. Same answers, far less memory, a fraction of the rate.")
+            }
 
             HStack {
               Button("Build Pack") { quantize.start(on: runner) }

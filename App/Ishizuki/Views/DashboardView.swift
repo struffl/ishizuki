@@ -38,9 +38,10 @@ struct DashboardView: View {
         .tag(Tab.models)
       ToolsView(
         controller: controller, runner: runner, quantize: quantize, bench: bench,
-        split: split)
-        .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
-        .tag(Tab.tools)
+        split: split
+      )
+      .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+      .tag(Tab.tools)
     }
     .frame(minWidth: 680, minHeight: 560)
     .scrollContentBackground(.hidden)
@@ -59,6 +60,9 @@ struct DashboardView: View {
             LoadSection(readout: readout)
             if let prefix = readout.prefix {
               PrefixSection(prefix: prefix)
+            }
+            if let experts = readout.experts {
+              ExpertSection(experts: experts)
             }
             StateSection(state: readout.state)
           }
@@ -342,6 +346,42 @@ private struct PrefixSection: View {
             Text("·").foregroundStyle(.tertiary)
           }
           Text(occupancy).foregroundStyle(.secondary)
+        }
+      }
+      Field(label: "") {
+        Text(detail).foregroundStyle(.tertiary)
+      }
+    }
+  }
+}
+
+/// The one dial a streamed pack has, and whether it is buying anything. A slot budget at or
+/// below what a token routes to cannot hit, however large the bank is.
+private struct ExpertSection: View {
+  let experts: ExpertStore.Summary
+
+  private var detail: String {
+    var parts = [
+      "\(experts.slots) of \(experts.expertCount) held",
+      "\(experts.layers) layer\(experts.layers == 1 ? "" : "s")",
+      "\(ReadoutFormat.compact(experts.heldBytes)) resident",
+    ]
+    if experts.reads > 0 {
+      parts.append("\(experts.misses) read from disk")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Field(label: "experts") {
+        HStack(spacing: 6) {
+          if experts.reads > 0 {
+            Text(ReadoutFormat.percent(experts.hitRate) + " hit")
+              .foregroundStyle(.secondary)
+            Text("·").foregroundStyle(.tertiary)
+          }
+          Text("streamed from disk").foregroundStyle(.secondary)
         }
       }
       Field(label: "") {

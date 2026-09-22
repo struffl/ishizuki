@@ -91,8 +91,60 @@ public final class ExpertStore: @unchecked Sendable {
   private var lastTouched: [Int]
   private var clock = 0
 
-  public private(set) var hits = 0
-  public private(set) var misses = 0
+  private var hitCount = 0
+  private var missCount = 0
+
+  /// Reads and slot refills since the pack was opened, taken together so a reader cannot see
+  /// one of them from a half-finished token.
+  public struct Traffic: Sendable, Equatable {
+    public var hits: Int
+    public var misses: Int
+
+    public var reads: Int { hits + misses }
+    public var hitRate: Double { reads > 0 ? Double(hits) / Double(reads) : 0 }
+  }
+
+  public var traffic: Traffic {
+    lock.lock()
+    defer { lock.unlock() }
+    return Traffic(hits: hitCount, misses: missCount)
+  }
+
+  public var hits: Int { traffic.hits }
+  public var misses: Int { traffic.misses }
+
+  /// What the slots of this layer occupy, which is the memory the budget buys.
+  public var heldBytes: Int { slotCount * layout.stride }
+
+  /// Every streamed layer's traffic at once: what a readout needs to say whether the slot
+  /// budget is buying anything.
+  public struct Summary: Sendable, Equatable {
+    public var layers: Int
+    public var expertCount: Int
+    public var slots: Int
+    public var hits: Int
+    public var misses: Int
+    public var heldBytes: Int
+
+    public var reads: Int { hits + misses }
+    public var hitRate: Double { reads > 0 ? Double(hits) / Double(reads) : 0 }
+
+    public init?(layers stores: some Collection<ExpertStore>) {
+      guard let first = stores.first else { return nil }
+      self.layers = stores.count
+      self.expertCount = first.layout.expertCount
+      self.slots = first.slotCount
+      self.hits = 0
+      self.misses = 0
+      self.heldBytes = 0
+      for store in stores {
+        let traffic = store.traffic
+        hits += traffic.hits
+        misses += traffic.misses
+        heldBytes += store.heldBytes
+      }
+    }
+  }
 
   public init(url: URL, layout: ExpertLayout, slots: Int) throws {
     let opened = open(url.path, O_RDONLY)
@@ -139,7 +191,7 @@ public final class ExpertStore: @unchecked Sendable {
       clock += 1
 
       if let slot = occupant.firstIndex(of: expert) {
-        hits += 1
+        hitCount += 1
         uses[slot] += 1
         lastTouched[slot] = clock
         placed[expert] = slot
@@ -161,7 +213,7 @@ public final class ExpertStore: @unchecked Sendable {
           "\(experts.count) experts asked for at once, but only \(slotCount) slots")
       }
 
-      misses += 1
+      missCount += 1
       // One read per projection: each is contiguous in the expert's blob and contiguous in its
       // own run of slots, so nothing is copied or shuffled after it lands.
       for (name, part) in layout.parts {

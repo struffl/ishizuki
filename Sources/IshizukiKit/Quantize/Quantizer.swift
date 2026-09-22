@@ -74,12 +74,18 @@ public final class Quantizer: @unchecked Sendable {
   /// .defaultCorpus`. A caller with a real corpus supplies it here; tests that want to
   /// calibrate without shipping a tokenizer fixture do the same.
   public let calibrationTokens: [[Int32]]?
+  /// When set, the routed experts are written beside the pack as one file per sparse layer
+  /// rather than into its shards, and the runtime reads them a few at a time. It costs most of
+  /// the decode rate and buys a model the machine could not otherwise hold, so it is the
+  /// caller's choice rather than a default.
+  public let streamExperts: Bool
 
   private let onProgress: @Sendable (Progress) -> Void
 
   public init(
     source: SourceCheckpoint, profile: QuantProfile, destination: URL,
     shardLimit: Int = 4 << 30, calibrate: Bool = false, calibrationTokens: [[Int32]]? = nil,
+    streamExperts: Bool = false,
     onProgress: @escaping @Sendable (Progress) -> Void = { _ in }
   ) {
     self.source = source
@@ -88,6 +94,7 @@ public final class Quantizer: @unchecked Sendable {
     self.shardLimit = shardLimit
     self.calibrate = calibrate
     self.calibrationTokens = calibrationTokens
+    self.streamExperts = streamExperts
     self.onProgress = onProgress
   }
 
@@ -191,7 +198,21 @@ public final class Quantizer: @unchecked Sendable {
     var written = 0
     let totalToWrite = quantizable.count + passthrough.count
 
-    for name in quantizable {
+    // A streamed pack's experts never reach the shards: they are quantized a layer at a time
+    // and cut straight into the blobs the runtime reads slots out of.
+    var streamed: Set<String> = []
+    var expertBytes = 0
+    if streamExperts {
+      streamed = Set(
+        (quantizable + passthrough).filter { ExpertRepack.isExpert(canonical[$0] ?? $0) })
+      if !streamed.isEmpty {
+        expertBytes = try writeExperts(
+          names: streamed, canonical: canonical, allocation: allocation,
+          importance: importance, written: &written, total: totalToWrite, surveyed: surveyed)
+      }
+    }
+
+    for name in quantizable where !streamed.contains(name) {
       let bits = allocation.bits[name] ?? profile.baseBits
       let weight = try source.tensor(name)
       let wq: MLXArray
@@ -214,7 +235,7 @@ public final class Quantizer: @unchecked Sendable {
         .writing, written, totalToWrite, "\(short(name)) at \(bits)-bit", surveyed, "")
     }
 
-    for name in passthrough {
+    for name in passthrough where !streamed.contains(name) {
       var tensor = try source.tensor(name)
       if upstream {
         tensor = TensorNaming.relayout(name, tensor, zeroCentredNorms: zeroCentredNorms)
@@ -231,11 +252,79 @@ public final class Quantizer: @unchecked Sendable {
 
     return Outcome(
       directory: destination,
-      byteCount: summary.byteCount + (engrams?.byteCount ?? 0),
+      byteCount: summary.byteCount + (engrams?.byteCount ?? 0) + expertBytes,
       shards: summary.shards,
       achievedBpw: allocation.achievedBpw,
       histogram: allocation.histogram,
       seconds: -started.timeIntervalSinceNow)
+  }
+
+  // MARK: - Streamed experts
+
+  /// Quantizes one sparse layer's experts at a time and cuts each layer straight into its
+  /// blob, so the bank never has to sit in memory whole and never reaches the shards.
+  ///
+  /// The widths are the allocated ones, the same the shards would have carried: streaming
+  /// moves where a weight lives, not what it is worth.
+  private func writeExperts(
+    names: Set<String>, canonical: [String: String], allocation: BitAllocator.Result,
+    importance: [String: MLXArray], written: inout Int, total: Int, surveyed: Int
+  ) throws -> Int {
+    var byLayer: [Int: [String: String]] = [:]
+    for name in names {
+      guard let address = ExpertRepack.address(canonical[name] ?? name) else {
+        throw BonsaiError.unsupportedModel("\(name) is an expert of no layer this can name")
+      }
+      byLayer[address.layer, default: [:]][address.part] = name
+    }
+
+    var layout: ExpertLayout?
+    var bytes = 0
+    for layer in byLayer.keys.sorted() {
+      var parts: [String: MLXArray] = [:]
+      for (part, name) in byLayer[layer]! {
+        let tensor = try source.tensor(name)
+        // The runtime reads a streamed expert through `gatherQuantizedMM`, which wants a
+        // weight and its scales and biases. A projection that cannot be quantized has no
+        // streamed form, so this refuses rather than writing a pack that will not load.
+        guard part.hasSuffix(".weight"),
+          tensor.dim(tensor.ndim - 1) % profile.groupSize == 0
+        else {
+          throw BonsaiError.unsupportedModel(
+            "\(name) cannot be quantized at group \(profile.groupSize), so it cannot stream")
+        }
+        let bits = allocation.bits[name] ?? profile.baseBits
+        let (wq, scales, biases) = quantize(
+          tensor, bits: bits, importance: importance[name])
+        let base = String(part.dropLast(".weight".count))
+        parts[part] = wq
+        parts[base + ".scales"] = scales.asType(.float16)
+        parts[base + ".biases"] = (biases ?? MLXArray.zeros(like: scales)).asType(.float16)
+        written += 1
+        report(.writing, written, total, "\(short(name)) at \(bits)-bit, streamed", surveyed, "")
+      }
+
+      let expertCount = parts.values.first?.dim(0) ?? 0
+      let planned = layout ?? ExpertRepack.layout(of: parts, expertCount: expertCount)
+      layout = planned
+      bytes += try ExpertRepack.blob(
+        parts: parts, layout: planned,
+        to: destination.appending(path: ExpertRepack.layerFile(layer)))
+    }
+
+    guard let layout else { return 0 }
+    try ExpertRepack.writeLayout(layout, to: destination)
+    return bytes
+  }
+
+  private func quantize(
+    _ weight: MLXArray, bits: Int, importance: MLXArray?
+  ) -> (MLXArray, MLXArray, MLXArray?) {
+    if let importance {
+      return WeightedAffineQuantizer.quantize(
+        weight, groupSize: profile.groupSize, bits: bits, importance: importance)
+    }
+    return quantized(weight, groupSize: profile.groupSize, bits: bits, mode: .affine)
   }
 
   // MARK: - Calibration

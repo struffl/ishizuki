@@ -116,6 +116,11 @@ public final class APIServer: @unchecked Sendable {
 
   public var isLoaded: Bool { loaded != nil }
 
+  /// The loaded pack's weights, for a readout that wants to ask them something. Never loads
+  /// one: a server that has not been asked for a token reports nothing rather than paying for
+  /// a model to say so.
+  public var loadedStore: WeightStore? { loaded?.store }
+
   /// Switches the server to another pack from the catalog. The one in memory is dropped first,
   /// because two 17 GB packs do not sit side by side on this hardware.
   ///

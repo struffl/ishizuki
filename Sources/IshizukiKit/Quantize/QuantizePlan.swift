@@ -16,6 +16,9 @@ public struct QuantizePlan: Sendable {
   /// across at full width rather than quantized, so it is the one part of a checkpoint that
   /// does not shrink — and on the models that have one it is most of the download.
   public let engramBytes: Int
+  /// Whether this checkpoint routes through experts at all, which is what decides if the
+  /// stream-them-to-disk choice is worth offering.
+  public let expertCount: Int
 
   public enum Problem: Error, CustomStringConvertible {
     case destinationExists(URL)
@@ -70,6 +73,7 @@ public struct QuantizePlan: Sendable {
       table += ((try? checkpoint.tensor(name).size) ?? 0) * 2
     }
     self.engramBytes = table
+    self.expertCount = (checkpoint.textConfig["num_experts"] as? NSNumber)?.intValue ?? 0
     // Scales and biases already sit inside the target width, so this is fairer than the
     // nominal one.
     self.estimateBytes =
@@ -83,6 +87,7 @@ public struct QuantizePlan: Sendable {
   public func run(
     shardBytes: Int = 4 * 1_073_741_824,
     calibrate: Bool = false,
+    streamExperts: Bool = false,
     replacing: Bool = false,
     progress: @escaping @Sendable (Quantizer.Progress) -> Void
   ) throws -> Quantizer.Outcome {
@@ -95,7 +100,8 @@ public struct QuantizePlan: Sendable {
     let checkpoint = try SourceCheckpoint(directory: source.directory)
     let quantizer = Quantizer(
       source: checkpoint, profile: profile, destination: destination,
-      shardLimit: shardBytes, calibrate: calibrate, onProgress: progress)
+      shardLimit: shardBytes, calibrate: calibrate, streamExperts: streamExperts,
+      onProgress: progress)
     return try quantizer.run()
   }
 }

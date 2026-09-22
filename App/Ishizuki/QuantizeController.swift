@@ -15,6 +15,7 @@ final class QuantizeController {
   var profileName: String = QuantProfile.balanced.name
   var calibrate = false
   var replace = false
+  var streamExperts = false
 
   private(set) var outcome: Quantizer.Outcome?
 
@@ -43,6 +44,7 @@ final class QuantizeController {
     outcome = nil
     let calibrate = calibrate
     let replace = replace
+    let streamExperts = streamExperts && plan.expertCount > 0
 
     runner.run("quantize \(plan.destination.lastPathComponent)") { [weak self] log in
       log.line("source    \(plan.source.name)")
@@ -56,6 +58,11 @@ final class QuantizeController {
       log.line(
         "estimate  \(ReadoutFormat.bytes(plan.estimateBytes))"
           + "  from \(ReadoutFormat.bytes(plan.sourceBytes))")
+      if streamExperts {
+        log.line(
+          "experts   \(plan.expertCount) per sparse layer"
+            + "  written beside the pack, read a few at a time")
+      }
       if plan.engramBytes > 0 {
         log.line(
           "n-grams   \(ReadoutFormat.bytes(plan.engramBytes))"
@@ -65,7 +72,9 @@ final class QuantizeController {
       log.line("")
 
       let lastPhase = Mutex("")
-      let outcome = try plan.run(calibrate: calibrate, replacing: replace) { step in
+      let outcome = try plan.run(
+        calibrate: calibrate, streamExperts: streamExperts, replacing: replace
+      ) { step in
         log.progress(step.fraction)
         if lastPhase.swap(step.phase.rawValue) != step.phase.rawValue {
           log.line("\(step.phase.rawValue)  \(step.detail)")

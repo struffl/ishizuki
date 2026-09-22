@@ -62,6 +62,18 @@ public enum ExpertRepack {
 
   static func isExpert(_ name: String) -> Bool { name.contains(".switch_mlp.") }
 
+  /// Which layer a stacked expert tensor belongs to, and what it is called inside the blob.
+  public static func address(_ name: String) -> (layer: Int, part: String)? {
+    guard let range = name.range(of: ".mlp.switch_mlp.") else { return nil }
+    let head = name[name.startIndex..<range.lowerBound]
+    guard let marker = head.range(of: "model.layers.", options: .backwards),
+      let layer = Int(head[marker.upperBound...])
+    else { return nil }
+    let part = String(name[range.upperBound...])
+    guard part.split(separator: ".").count == 2 else { return nil }
+    return (layer, part)
+  }
+
   static func layerFile(_ layer: Int) -> String {
     "\(folder)/layer_\(String(format: "%02d", layer)).bin"
   }
@@ -133,9 +145,7 @@ public enum ExpertRepack {
 
     try carrySidecars(from: source, to: destination)
 
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    try encoder.encode(layout).write(to: destination.appending(path: layoutFile))
+    try writeLayout(layout, to: destination)
 
     return Plan(
       layers: layers, layout: layout, residentBytes: summary.byteCount,
@@ -180,20 +190,31 @@ public enum ExpertRepack {
     return (store, layers, ExpertLayout.plan(expertCount: expertCount, tensors: described))
   }
 
-  /// One layer's blobs, an expert at a time, so a layer larger than memory still converts.
-  private static func write(
-    layer: Int, prefix: String, store: WeightStore, layout: ExpertLayout, to url: URL
+  /// The layout one layer's stacked tensors describe: every layer of a model shares it.
+  public static func layout(of parts: [String: MLXArray], expertCount: Int) -> ExpertLayout {
+    ExpertLayout.plan(
+      expertCount: expertCount,
+      tensors: parts.map {
+        (name: $0.key, shape: Array($0.value.shape.dropFirst()), dtype: $0.value.dtype)
+      })
+  }
+
+  /// One layer's stacked tensors cut into one blob per expert, written an expert at a time so
+  /// a layer larger than memory still converts. Keys are part names — `gate_proj.scales`.
+  @discardableResult
+  public static func blob(
+    parts: [String: MLXArray], layout: ExpertLayout, to url: URL
   ) throws -> Int {
     let ordered = layout.parts.sorted { $0.value.offset < $1.value.offset }
     var sources: [(part: ExpertLayout.Part, array: MLXArray)] = []
     for (name, part) in ordered {
-      let pieces = name.split(separator: ".")
-      let full = expertPath(prefix, layer, String(pieces[0]), String(pieces[1]))
-      let array = try store(full)
+      guard let array = parts[name] else {
+        throw BonsaiError.missingWeight("\(name) is not among this layer's experts")
+      }
       guard array.dim(0) == layout.expertCount, Array(array.shape.dropFirst()) == part.shape,
         array.dtype == (try part.type)
       else {
-        throw BonsaiError.shapeMismatch("\(full) is not shaped like layer \(layer)'s experts")
+        throw BonsaiError.shapeMismatch("\(name) is not shaped like the layer before it")
       }
       sources.append((part, array))
     }
@@ -202,6 +223,8 @@ public enum ExpertRepack {
     let padding = Data(count: layout.stride - packed)
 
     let fm = FileManager.default
+    try fm.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
     fm.createFile(atPath: url.path, contents: nil)
     let handle = try FileHandle(forWritingTo: url)
@@ -214,13 +237,31 @@ public enum ExpertRepack {
         let bytes = slice.asData().data
         guard bytes.count == part.byteCount else {
           throw BonsaiError.shapeMismatch(
-            "expert \(expert) of layer \(layer) is \(bytes.count) bytes, not \(part.byteCount)")
+            "expert \(expert) is \(bytes.count) bytes, not \(part.byteCount)")
         }
         try handle.write(contentsOf: bytes)
       }
       if !padding.isEmpty { try handle.write(contentsOf: padding) }
     }
     return layout.expertCount * layout.stride
+  }
+
+  /// The layout a pack streams by, written once beside its experts.
+  public static func writeLayout(_ layout: ExpertLayout, to destination: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(layout).write(to: destination.appending(path: layoutFile))
+  }
+
+  private static func write(
+    layer: Int, prefix: String, store: WeightStore, layout: ExpertLayout, to url: URL
+  ) throws -> Int {
+    var parts: [String: MLXArray] = [:]
+    for name in layout.parts.keys {
+      let pieces = name.split(separator: ".")
+      parts[name] = try store(expertPath(prefix, layer, String(pieces[0]), String(pieces[1])))
+    }
+    return try blob(parts: parts, layout: layout, to: url)
   }
 
   /// Everything a pack needs that is not a weight: the config, the tokenizer, and any table
