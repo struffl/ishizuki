@@ -25,17 +25,34 @@ public final class ServeStats: @unchecked Sendable {
     public var generated = 0
     public var maxTokens = 0
 
-    public var elapsed: Double { -arrived.timeIntervalSinceNow }
-    public var phaseSeconds: Double { -phaseStart.timeIntervalSinceNow }
+    // The dial is a stored value, not one recomputed on every poll: it is
+    // refreshed only when a token batch lands, so it holds steady between
+    // batches instead of visibly ticking down while the clock keeps running.
+    public var rate = 0.0
+    public var rateWindowStart = Date()
+    public var rateWindowTokens = 0
 
-    public var rate: Double {
-      let seconds = phaseSeconds
-      guard seconds > 0 else { return 0 }
+    public var elapsed: Double { -arrived.timeIntervalSinceNow }
+
+    /// The token count for the phase the request is in right now.
+    func phaseTokens() -> Int {
       switch phase {
-      case .prefill: return Double(prefilled) / seconds
-      case .decode: return Double(generated) / seconds
-      case .queued, .finishing: return 0
+      case .prefill: prefilled
+      case .decode: generated
+      case .queued, .finishing: 0
       }
+    }
+
+    mutating func noteProgress(now: Date) {
+      let tokens = phaseTokens()
+      let span = -rateWindowStart.timeIntervalSince(now)
+      let batch = tokens - rateWindowTokens
+      // Only refresh once a batch has landed — enough tokens, or enough time —
+      // so the displayed rate is a batch average, not a per-poll number.
+      guard batch >= 8 || span >= 0.5 else { return }
+      rate = Double(batch) / max(span, 0.05)
+      rateWindowStart = now
+      rateWindowTokens = tokens
     }
   }
 
@@ -110,10 +127,12 @@ public final class ServeStats: @unchecked Sendable {
 
   public func update(_ id: Int?, _ mutate: (inout Request) -> Void) {
     guard let id else { return }
+    let now = Date()
     lock.lock()
     defer { lock.unlock() }
     guard var request = requests[id] else { return }
     mutate(&request)
+    request.noteProgress(now: now)
     requests[id] = request
   }
 
@@ -122,6 +141,9 @@ public final class ServeStats: @unchecked Sendable {
       guard request.phase != phase else { return }
       request.phase = phase
       request.phaseStart = Date()
+      request.rate = 0
+      request.rateWindowStart = Date()
+      request.rateWindowTokens = 0
     }
   }
 
