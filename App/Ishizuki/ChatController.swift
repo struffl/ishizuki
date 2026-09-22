@@ -1005,7 +1005,9 @@ final class ChatController {
   /// polling it is enough to show thinking, tool calls and the answer as they arrive.
   private func startPolling(_ run: Run) {
     run.poller?.cancel()
-    run.lastCheckpoint = Date()
+    // Start from the beginning: streamResponse may add the prompt after this poller starts.
+    // The first non-empty transcript must reach disk before a stop or process failure can win.
+    run.lastCheckpoint = .distantPast
     run.poller = Task { [weak self] in
       while !Task.isCancelled {
         self?.absorbTranscript(of: run)
@@ -1016,10 +1018,10 @@ final class ChatController {
   }
 
   /// A turn can run for minutes; writing only once it finishes means quitting or crashing
-  /// mid-turn loses all of it. This writes the transcript as it stands every few seconds, so
-  /// the worst a forced exit costs is the last stretch of one response.
+  /// mid-turn loses all of it. The short interval also catches the prompt immediately after
+  /// streamResponse inserts it, before a stop or inference failure can skip finish().
   private func checkpoint(_ run: Run) {
-    guard Date().timeIntervalSince(run.lastCheckpoint) >= 3 else { return }
+    guard Date().timeIntervalSince(run.lastCheckpoint) >= 0.25 else { return }
     run.lastCheckpoint = Date()
     let transcript = run.agent.transcript
     guard !transcript.isEmpty, var saved = saved(run.chatID) else { return }
@@ -1029,6 +1031,9 @@ final class ChatController {
       saved.workspace = workspace?.path
       saved.model = server?.settings.activeModelID
       saved.effort = effort
+    }
+    if !saved.titleIsCustom, let derived = SavedChat.title(from: transcript) {
+      saved.title = derived
     }
     // Encoding a long transcript is not something a turn should stop for: the window is trying
     // to draw tokens while this runs.
