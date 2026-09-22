@@ -212,4 +212,38 @@ struct Qwen4ExpTests {
     #expect(error / scale < 0.2, "the pack's logits drifted by \(error) against \(scale)")
   }
 
+  /// A table of any size lands in files of a fixed number of rows, and a row's address has to
+  /// survive being cut across them. The shipped tables run to nineteen parts; the fixture's is
+  /// one, so the split is driven here rather than left to the only size a test would see.
+  @Test("cuts a table across parts and still addresses every row")
+  func splitsAcrossParts() throws {
+    let flat = try scratch()
+    defer { try? FileManager.default.removeItem(at: flat) }
+
+    let source = try SourceCheckpoint(directory: fixture)
+    let whole = try #require(try EngramRepack.run(source: source, destination: flat))
+    let rows = (0..<whole.layout.totalRows).map { $0 }
+    let reference = try EngramStore(
+      directory: flat, layout: whole.layout, capacity: rows.count
+    ).rows(rows)
+    eval(reference)
+
+    for perPart in [64, 97, whole.layout.totalRows - 1] {
+      let cut = try scratch()
+      defer { try? FileManager.default.removeItem(at: cut) }
+      let plan = try #require(
+        try EngramRepack.run(source: source, destination: cut, rowsPerPart: perPart))
+      #expect(plan.layout.parts == (whole.layout.totalRows + perPart - 1) / perPart)
+      #expect(plan.layout.totalRows == whole.layout.totalRows)
+
+      let store = try EngramStore(
+        directory: cut, layout: plan.layout, capacity: rows.count)
+      let got = try store.rows(rows)
+      eval(got)
+      #expect(
+        (got - reference).abs().max().item(Float.self) == 0,
+        "a table in \(plan.layout.parts) parts read back differently")
+    }
+  }
+
 }

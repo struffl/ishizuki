@@ -35,7 +35,8 @@ public enum EngramRepack {
   }
 
   public static func run(
-    source: SourceCheckpoint, destination: URL, log: @escaping (String) -> Void = { _ in }
+    source: SourceCheckpoint, destination: URL, rowsPerPart: Int = rowsPerPart,
+    log: @escaping (String) -> Void = { _ in }
   ) throws -> Plan? {
     let shardNames = shards(in: source)
     guard !shardNames.isEmpty else { return nil }
