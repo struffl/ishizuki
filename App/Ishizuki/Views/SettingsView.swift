@@ -11,7 +11,7 @@ struct SettingsView: View {
   /// Which pane is showing, remembered so the window opens where it was left: related
   /// settings tend to be adjusted more than once.
   private enum Pane: String {
-    case general, model, cache, companion
+    case general, model, cache, companion, sandbox
   }
 
   @Bindable var controller: ServerController
@@ -33,6 +33,11 @@ struct SettingsView: View {
       CompanionPane(companion: companion)
         .tabItem { Label("Companion", systemImage: "iphone") }
         .tag(Pane.companion.rawValue)
+      if #available(macOS 27.0, *) {
+        SandboxPane()
+          .tabItem { Label("Sandbox", systemImage: "cube") }
+          .tag(Pane.sandbox.rawValue)
+      }
     }
   }
 }
@@ -179,6 +184,50 @@ private struct CompanionPane: View {
 
   var body: some View {
     PaneForm { CompanionSection(companion: companion) }
+  }
+}
+
+@available(macOS 27.0, *)
+private struct SandboxPane: View {
+  var body: some View {
+    PaneForm { SandboxSection(settings: SandboxSettings.shared) }
+  }
+}
+
+/// Where the local VM's kernel and init filesystem are. Neither ships with the app, so this is
+/// the one place to say where they were found.
+@available(macOS 27.0, *)
+struct SandboxSection: View {
+  @Bindable var settings: SandboxSettings
+
+  var body: some View {
+    Section("Local container") {
+      LabeledContent("Kernel") {
+        TextField(
+          SandboxArtifacts.kernelCandidates.first(where: {
+            FileManager.default.fileExists(atPath: $0)
+          }) ?? "point me at a vmlinux", text: $settings.kernelPath
+        )
+        .font(.system(size: 11, design: .monospaced))
+      }
+      LabeledContent("Init filesystem") {
+        TextField("an initfs.ext4, if you have one", text: $settings.initfsPath)
+          .font(.system(size: 11, design: .monospaced))
+      }
+      LabeledContent("Init image") {
+        TextField("vminit reference", text: $settings.initfsReference)
+          .font(.system(size: 11, design: .monospaced))
+      }
+      Text(
+        SandboxArtifacts.isReady || !settings.kernelPath.isEmpty
+          ? "A container boots in this process through Containerization; the folder is shared in at /workspace."
+          : "No kernel found. Install apple/container, which leaves one on this Mac, or give a path here."
+      )
+      .font(.footnote)
+      .foregroundStyle(
+        SandboxArtifacts.isReady || !settings.kernelPath.isEmpty
+          ? Color.secondary : Color.orange)
+    }
   }
 }
 

@@ -11,7 +11,7 @@ extension Workspace {
   public func readSlice(path: String, offset: Int? = nil, limit: Int? = nil) async throws
     -> String
   {
-    let file = try read(path)
+    let file = try await read(path)
     let total = file.lines.count
     let start = max(1, offset ?? 1)
     guard start <= total else {
@@ -37,14 +37,12 @@ extension Workspace {
     let url = try host.resolve(path)
     let display = host.display(url)
 
-    let existing = try? read(path)
+    let existing = try? await read(path)
     try await ledger.checkWrite(
       path: display, fingerprint: existing?.fingerprint,
       lineCount: existing?.lines.count ?? 0)
 
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data(contents.utf8).write(to: url, options: .atomic)
+    try await host.write(Data(contents.utf8), to: url)
     await ledger.invalidate(path: display)
 
     let lines = contents.components(separatedBy: "\n").count
@@ -54,7 +52,7 @@ extension Workspace {
   public func edit(path: String, old: String, new: String, all: Bool = false) async throws
     -> String
   {
-    let file = try read(path)
+    let file = try await read(path)
     let contents = file.lines.joined(separator: "\n")
 
     guard !old.isEmpty else {
@@ -88,7 +86,7 @@ extension Workspace {
       ? contents.replacingOccurrences(of: old, with: new)
       : contents.replacingCharacters(in: first, with: new)
 
-    try Data(updated.utf8).write(to: file.url, options: .atomic)
+    try await host.write(Data(updated.utf8), to: file.url)
     await ledger.invalidate(path: file.display)
 
     let touched = Workspace.lineRange(of: first, in: contents)
@@ -100,13 +98,22 @@ extension Workspace {
     pattern: String, glob: String? = nil, path: String? = nil, ignoreCase: Bool = false,
     limit: Int = 40
   ) async throws -> String {
-    guard let rg = Ripgrep.locate() else { throw ShellError.missingProgram("rg") }
     let target = try path.map { try host.resolve($0) } ?? root
+    let rg = await searchProgram()
 
-    var command = [rg, "--line-number", "--no-heading", "--color", "never", "--max-columns", "200"]
-    if ignoreCase { command.append("--ignore-case") }
-    if let glob { command += ["--glob", shellQuoted(glob)] }
-    command += [shellQuoted(pattern), shellQuoted(target.path)]
+    var command: [String]
+    if let rg {
+      command = [rg, "--line-number", "--no-heading", "--color", "never", "--max-columns", "200"]
+      if ignoreCase { command.append("--ignore-case") }
+      if let glob { command += ["--glob", shellQuoted(glob)] }
+      command += [shellQuoted(pattern), shellQuoted(target.path)]
+    } else {
+      // Nothing to install into a sandbox: plain grep says the same thing, more slowly.
+      command = ["grep", "-r", "-n", "-I", "-E"]
+      if ignoreCase { command.append("-i") }
+      if let glob { command += ["--include", shellQuoted(glob)] }
+      command += ["-e", shellQuoted(pattern), shellQuoted(target.path)]
+    }
 
     let result = try await host.run(
       command.joined(separator: " "), cwd: root, timeout: 30, byteLimit: 256 * 1024)
@@ -133,10 +140,14 @@ extension Workspace {
   }
 
   public func glob(pattern: String, limit: Int = 60) async throws -> String {
-    guard let rg = Ripgrep.locate() else { throw ShellError.missingProgram("rg") }
+    let command =
+      if let rg = await searchProgram() {
+        "\(rg) --files --glob \(shellQuoted(pattern))"
+      } else {
+        "find . -type f | sed 's|^\\./||' | grep -E \(shellQuoted(Workspace.regex(for: pattern)))"
+      }
     let result = try await host.run(
-      "\(rg) --files --glob \(shellQuoted(pattern))",
-      cwd: root, timeout: 30, byteLimit: 256 * 1024)
+      command, cwd: root, timeout: 30, byteLimit: 256 * 1024)
 
     let paths = result.stdout.components(separatedBy: "\n").filter { !$0.isEmpty }
     guard !paths.isEmpty else { return "no files match \(pattern)" }
@@ -202,6 +213,40 @@ extension Workspace {
     return force
       ? "\(id) was killed after \(whole(job.seconds))s"
       : "\(id) was asked to stop after \(whole(job.seconds))s; it is killed if it stays up"
+  }
+
+  /// Ripgrep where the workspace actually is, which on a sandbox is a question for the
+  /// sandbox rather than for this Mac.
+  private func searchProgram() async -> String? {
+    await host.locate("rg")
+  }
+
+  /// A glob as a regular expression, for a host with no ripgrep to read it for us.
+  static func regex(for pattern: String) -> String {
+    var out = "^"
+    var rest = Substring(pattern)
+    while let next = rest.first {
+      switch next {
+      case "*":
+        if rest.hasPrefix("**/") {
+          out += "(.*/)?"
+          rest = rest.dropFirst(3)
+          continue
+        }
+        if rest.hasPrefix("**") {
+          out += ".*"
+          rest = rest.dropFirst(2)
+          continue
+        }
+        out += "[^/]*"
+      case "?": out += "[^/]"
+      case ".", "+", "(", ")", "|", "[", "]", "{", "}", "^", "$", "\\":
+        out += "\\" + String(next)
+      default: out.append(next)
+      }
+      rest = rest.dropFirst()
+    }
+    return out + "$"
   }
 
   /// Stops everything this workspace still has running, which is what a conversation being

@@ -358,6 +358,7 @@ struct ContextStrip: View {
       ContextBar(use: chat.contextUse)
         .frame(maxWidth: 260)
       Spacer(minLength: 6)
+      SandboxChip(chat: chat)
       folder
       if chat.git.isRepository {
         Divider().frame(height: 11)

@@ -321,6 +321,8 @@ final class ChatController {
 
   /// The chosen folder as git sees it, watched so the strip above the composer is never stale.
   let git = GitProbe()
+  /// The VMs and pods this window has going, one per conversation that asked for one.
+  let sandboxes = Sandboxes()
 
   var workspace: URL? {
     didSet {
@@ -414,6 +416,7 @@ final class ChatController {
     ) { [weak self] _ in
       self?.persistAll()
       ShellJobs.stopEverything()
+      self?.sandboxes.shutdownAll()
     }
   }
 
@@ -461,6 +464,7 @@ final class ChatController {
     if let agent = agents[chat.id] {
       Task.detached { await agent.workspace.stopAllJobs() }
     }
+    sandboxes.shutdown(chat.id)
     agents[chat.id] = nil
     parked[chat.id] = nil
     store.delete(chat.id)
@@ -951,14 +955,51 @@ final class ChatController {
       (chatID == current.id ? workspace : nil)
       ?? chat.workspace.map { URL(filePath: $0) }
     engine.effort = chatID == current.id ? effort : chat.effort
+
+    // A sandbox needs a folder to share in. Without one there is nothing to sandbox, so the
+    // choice quietly becomes this Mac rather than failing on the first command.
+    var choice = chat.sandbox ?? sandboxes.settings.defaultChoice
+    if folder == nil { choice.kind = .native }
+
     let made = CodingAgent(
       engine: engine,
       workspace: Workspace(
-        host: LocalShellHost(workspace: folder ?? FileManager.default.temporaryDirectory)),
+        host: sandboxes.host(
+          for: chatID, choice: choice,
+          workspace: folder ?? FileManager.default.temporaryDirectory)),
       transcript: chat.transcript.isEmpty ? nil : chat.transcript)
     agents[chatID] = made
     return made
   }
+
+  /// Where this conversation's commands run. Changing it rebuilds the session against the new
+  /// shell; the transcript is what carries the conversation, so nothing is lost by that.
+  var sandboxChoice: SandboxChoice {
+    get { current.sandbox ?? sandboxes.settings.defaultChoice }
+    set {
+      guard newValue != sandboxChoice else { return }
+      update(current.id) { $0.sandbox = newValue }
+      sandboxes.settings.defaultChoice = newValue
+      if newValue.kind != sandboxes.choice(of: current.id).kind
+        || newValue.isSandboxed == false
+      {
+        sandboxes.shutdown(current.id)
+      }
+      agents[current.id] = nil
+      store.save(current)
+    }
+  }
+
+  var sandboxPhase: SandboxPhase { sandboxes.phase(of: current.id) }
+
+  /// Gives the VM or the pod back. The conversation stays; its next command boots another one.
+  func stopSandbox() {
+    sandboxes.shutdown(current.id)
+    agents[current.id] = nil
+  }
+
+  /// What the resident pack is holding, so the memory a VM may take is what is actually spare.
+  var residentBytes: Int { server?.readout?.load.held ?? 0 }
 
   /// The transcript is read rather than mirrored: the executor fills it as the tokens land, so
   /// polling it is enough to show thinking, tool calls and the answer as they arrive.

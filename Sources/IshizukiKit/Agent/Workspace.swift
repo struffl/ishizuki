@@ -28,9 +28,9 @@ public final class Workspace: Sendable {
     var fingerprint: Int
   }
 
-  func read(_ path: String) throws -> FileRead {
+  func read(_ path: String) async throws -> FileRead {
     let url = try host.resolve(path)
-    guard let data = FileManager.default.contents(atPath: url.path) else {
+    guard let data = try await host.contents(at: url) else {
       throw LedgerRefusal(message: "no such file: \(host.display(url))")
     }
     guard !isBinary(data) else {

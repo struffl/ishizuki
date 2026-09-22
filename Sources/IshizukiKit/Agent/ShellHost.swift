@@ -68,6 +68,18 @@ public protocol ShellHost: Sendable {
   /// SIGTERM, or SIGKILL when forced. A job that ignores the first gets the second three
   /// seconds later.
   func stop(job id: String, force: Bool) async throws -> ShellJob
+
+  /// A file's bytes, read wherever this host's workspace actually is. On a sandbox that is
+  /// not this filesystem, so nothing above here may reach for FileManager.
+  func contents(at url: URL) async throws -> Data?
+  func write(_ data: Data, to url: URL) async throws
+  /// Resolves a path the model handed over and refuses anything that leaves the workspace.
+  func resolve(_ path: String) throws -> URL
+  /// How a path is spelled back to the model: relative to the workspace.
+  func display(_ url: URL) -> String
+  /// Where a program is on this host, or nil if it is not installed there. A sandbox is not
+  /// this Mac, so what is on the PATH is its question to answer.
+  func locate(_ program: String) async -> String?
 }
 
 extension ShellHost {
@@ -87,6 +99,23 @@ extension ShellHost {
 
   public func stop(job id: String, force: Bool) async throws -> ShellJob {
     throw ShellError.noSuchJob(id)
+  }
+
+  public func locate(_ program: String) async -> String? {
+    if program == "rg", let bundled = Ripgrep.locate() { return bundled }
+    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+      .map { $0 + "/" + program }
+      .first { FileManager.default.isExecutableFile(atPath: $0) }
+  }
+
+  public func contents(at url: URL) async throws -> Data? {
+    FileManager.default.contents(atPath: url.path)
+  }
+
+  public func write(_ data: Data, to url: URL) async throws {
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try data.write(to: url, options: .atomic)
   }
 
   /// Resolves a path the model handed over, and refuses anything that leaves the workspace —

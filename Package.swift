@@ -18,7 +18,6 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.6"),
     .package(url: "https://github.com/huggingface/swift-jinja.git", from: "2.5.1"),
-    .package(url: "https://github.com/1amageek/SwiftAgent.git", from: "2.0.1"),
   ],
   targets: [
     .target(
@@ -31,14 +30,10 @@ let package = Package(
         .product(name: "Jinja", package: "swift-jinja"),
       ]
     ),
-    // The agent loop and nothing else, so the engine library stays clear of SwiftAgent's
-    // dependency graph and a build that wants only inference can leave it out.
+    // The agent loop and nothing else, so a build that wants only inference can leave it out.
     .target(
       name: "IshizukiAgent",
-      dependencies: [
-        "IshizukiKit",
-        .product(name: "SwiftAgent", package: "SwiftAgent"),
-      ]
+      dependencies: ["IshizukiKit"]
     ),
     // The companion protocol, which both the Mac serving a conversation and the phone borrowing
     // one are written against. Carries no model code, so the phone links it without MLX.

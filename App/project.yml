@@ -27,6 +27,9 @@ packages:
   Highlightr:
     url: https://github.com/raspu/Highlightr
     from: 2.3.0
+  containerization:
+    url: https://github.com/apple/containerization
+    from: 0.46.0
 
 targets:
   Ishizuki:
@@ -45,6 +48,12 @@ targets:
         product: IshizukiLink
       - package: Highlightr
         product: Highlightr
+      - package: containerization
+        product: Containerization
+      - package: containerization
+        product: ContainerizationOCI
+      - package: containerization
+        product: ContainerizationExtras
     info:
       path: Ishizuki/Info.plist
       properties:
@@ -62,6 +71,7 @@ targets:
       path: Ishizuki/Ishizuki.entitlements
       properties:
         com.apple.security.app-sandbox: false
+        com.apple.security.virtualization: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: studio.ishizuki.app

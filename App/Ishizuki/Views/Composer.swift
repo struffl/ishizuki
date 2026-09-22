@@ -98,6 +98,8 @@ struct Composer: View {
       .accessibilityLabel("Attach files")
       .help("Attach files, or drop them here")
 
+      SandboxPicker(chat: chat)
+
       TextField(
         chat.isResponding ? "Steer the next turn…" : "What needs doing?",
         text: $chat.draft, axis: .vertical

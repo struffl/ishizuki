@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The coding loop: a Foundation Models session whose model is the resident pack, driven by
-// SwiftAgent's conversation so a turn's tool calls resolve without the window arranging them.
+// The coding loop: a Foundation Models session whose model is the resident pack. The session
+// resolves a turn's tool calls itself; what is here is the streaming, the steers waiting for
+// the next prompt, and the events the window reads.
 
 import Foundation
 import FoundationModels
 import IshizukiKit
-import SwiftAgent
 
 @available(macOS 27.0, *)
 public final class CodingAgent: Sendable {
@@ -25,8 +25,8 @@ public final class CodingAgent: Sendable {
   public let modelSession: LanguageModelSession
   public let events: AsyncStream<Event>
 
-  private let conversation: Conversation
   private let emit: AsyncStream<Event>.Continuation
+  private let pending = Steers()
 
   public init(
     engine: AgentEngine,
@@ -51,41 +51,56 @@ public final class CodingAgent: Sendable {
     let (stream, continuation) = AsyncStream<Event>.makeStream()
     self.events = stream
     self.emit = continuation
-
-    self.conversation = Conversation(languageModelSession: session) {
-      GenerateText<Prompt>(
-        session: session,
-        prompt: { $0 },
-        onStream: { snapshot in
-          continuation.yield(.content(snapshot.content))
-        })
-    }
   }
 
   @discardableResult
   public func send(_ text: String) async throws -> String {
+    let started = Date()
+    let prompt = pending.fold(into: text)
     do {
-      let response = try await conversation.send(text)
-      emit.yield(
-        .finished(
-          content: response.content,
-          seconds: Double(response.duration.components.seconds)))
-      return response.content
+      var latest = ""
+      for try await snapshot in modelSession.streamResponse(to: prompt) {
+        latest = snapshot.content
+        emit.yield(.content(latest))
+      }
+      emit.yield(.finished(content: latest, seconds: -started.timeIntervalSinceNow))
+      return latest
     } catch {
       emit.yield(.failed(error.localizedDescription))
       throw error
     }
   }
 
-  /// Guidance for the turn after this one. It is not an interrupt: the conversation folds it
-  /// into the next prompt rather than into the turn already running.
+  /// Guidance for the turn after this one. It is not an interrupt: it goes in front of the
+  /// next prompt rather than into the turn already running.
   public func steer(_ text: String) {
-    conversation.steer(text)
+    pending.add(text)
   }
 
-  public var isResponding: Bool { conversation.isResponding }
+  public var isResponding: Bool { modelSession.isResponding }
 
   public var transcript: Transcript { modelSession.transcript }
+
+  /// What was said while a turn was running, waiting for the prompt that follows it.
+  private final class Steers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func add(_ text: String) {
+      lock.lock()
+      lines.append(text)
+      lock.unlock()
+    }
+
+    func fold(into text: String) -> String {
+      lock.lock()
+      let waiting = lines
+      lines.removeAll()
+      lock.unlock()
+      guard !waiting.isEmpty else { return text }
+      return (waiting + [text]).joined(separator: "\n\n")
+    }
+  }
 
   /// Written for a small model on a slow machine: every line is either a rule about which tool
   /// to reach for or a rule about not reading more than it needs.

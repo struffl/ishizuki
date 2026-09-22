@@ -24,6 +24,9 @@ struct SavedChat: Codable, Identifiable, Equatable {
   var promptTokens: [Int] = []
   /// A title someone typed is never overwritten by one that was written for them.
   var titleIsCustom = false
+  /// Where this conversation's commands run. Absent means whatever the app defaults to, which
+  /// is what every conversation saved before there was a choice gets.
+  var sandbox: SandboxChoice?
 
   init(
     id: UUID = UUID(), title: String = "New chat", workspace: String? = nil,
