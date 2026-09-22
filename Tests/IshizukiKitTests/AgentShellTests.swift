@@ -121,6 +121,66 @@ struct AgentShellTests {
     #expect(failed.contains("exit 3"))
   }
 
+  @Test("a command that outlasts the wait keeps running, as a job")
+  func longCommandIsBackgrounded() async throws {
+    let (workspace, _) = try sandbox()
+
+    let out = try await workspace.shell(command: "sleep 2; echo done", timeout: 0.3)
+    #expect(out.contains("still running"))
+    #expect(out.contains("job1"))
+
+    let listed = try await workspace.jobs()
+    #expect(listed.contains("job1"))
+    #expect(listed.contains("running"))
+
+    let finished = try await workspace.jobOutput("job1", wait: 10)
+    #expect(finished.contains("done"))
+
+    #expect(try await workspace.jobs() == "no background jobs")
+  }
+
+  @Test("a background command comes back at once and can be killed")
+  func backgroundAndKill() async throws {
+    let (workspace, _) = try sandbox()
+
+    let started = try await workspace.shell(command: "sleep 30", background: true)
+    #expect(started.contains("job1 started"))
+
+    let killed = try await workspace.killJob("job1", force: true)
+    #expect(killed.contains("job1 was killed"))
+
+    try await Task.sleep(for: .milliseconds(300))
+    let after = try await workspace.jobOutput("job1")
+    #expect(after.contains("was stopped"))
+  }
+
+  @Test("a job hands over what it has written since the last read")
+  func outputArrivesInPieces() async throws {
+    let (workspace, _) = try sandbox()
+
+    let first = try await workspace.shell(
+      command: "for i in 1 2 3; do /bin/echo line-$i; sleep 1; done", timeout: 0.3)
+    #expect(first.contains("still running"))
+    #expect(!first.contains("line-3"))
+
+    let second = try await workspace.jobOutput("job1", wait: 1.5)
+    let rest = try await workspace.jobOutput("job1", wait: 10)
+
+    let everything = first + second + rest
+    #expect(everything.contains("line-1"))
+    #expect(everything.contains("line-2"))
+    #expect(rest.contains("line-3"))
+    #expect(!rest.contains("line-1"))
+    #expect(!rest.contains("line-2"))
+  }
+
+  @Test("a job id nobody started is refused")
+  func unknownJob() async throws {
+    let (workspace, _) = try sandbox()
+    await #expect(throws: ShellError.self) { try await workspace.jobOutput("job9") }
+    await #expect(throws: ShellError.self) { try await workspace.killJob("job9") }
+  }
+
   @Test("grep answers with path:line:text and caps the hits")
   func grepFinds() async throws {
     guard Ripgrep.locate() != nil else { return }

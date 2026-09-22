@@ -110,6 +110,14 @@ public final class CodingAgent: Sendable {
     - Use shell for builds, tests and git. Read its output before deciding what it means.
     - When a build or test fails, fix the cause rather than reporting the failure back.
 
+    Commands that take a while:
+    - A command still running after fifteen seconds is not killed. It keeps going in the \
+    background and shell answers with a job id.
+    - Start a server or a long build with background, so the turn is not spent waiting on it.
+    - Use output with a job id to read what it has written since last time, and pass wait to \
+    give it a few more seconds to finish. Use jobs to see what is still going.
+    - Kill a job you are done with rather than leaving it running.
+
     Answer briefly. The person can see the tool calls, so do not narrate them.
     """
 }

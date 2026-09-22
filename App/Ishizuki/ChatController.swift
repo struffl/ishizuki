@@ -411,7 +411,10 @@ final class ChatController {
 
     NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: nil
-    ) { [weak self] _ in self?.persistAll() }
+    ) { [weak self] _ in
+      self?.persistAll()
+      ShellJobs.stopEverything()
+    }
   }
 
   // MARK: - Chats
@@ -455,6 +458,9 @@ final class ChatController {
   func delete(_ chat: SavedChat) {
     // The one being answered stays: there is a turn writing into it.
     guard !isRunning(chat) else { return }
+    if let agent = agents[chat.id] {
+      Task.detached { await agent.workspace.stopAllJobs() }
+    }
     agents[chat.id] = nil
     parked[chat.id] = nil
     store.delete(chat.id)

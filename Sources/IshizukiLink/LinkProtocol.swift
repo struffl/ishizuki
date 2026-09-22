@@ -5,6 +5,7 @@
 // and carries no platform in it, so the same declarations serve both ends of the link.
 
 import Foundation
+import IshizukiKit
 
 public enum Link {
   /// Bumped when a field stops meaning what it did. A phone that disagrees says so rather than
@@ -388,6 +389,16 @@ public struct ShellRequest: Codable, Sendable, Equatable {
     self.command = command
     self.cwd = cwd
     self.timeout = timeout
+  }
+}
+
+/// A job list on the wire. An envelope rather than a bare array, so the Mac can say how much
+/// of its shell it is sharing alongside it later without breaking a phone.
+public struct JobList: Codable, Sendable, Equatable {
+  public var jobs: [ShellJob]
+
+  public init(jobs: [ShellJob]) {
+    self.jobs = jobs
   }
 }
 

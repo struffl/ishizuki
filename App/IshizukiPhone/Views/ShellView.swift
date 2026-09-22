@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// A command line on the Mac, typed on the phone. One command at a time, with its output kept
-// above the next one.
+// A command line on the Mac, typed on the phone. A command that runs long keeps running: its
+// output arrives as it is written, and it can be stopped from here.
 
 import IshizukiKit
 import IshizukiLink
@@ -15,12 +15,13 @@ struct ShellView: View {
   @State private var command = ""
   @State private var cwd: String?
   @State private var history: [Entry] = []
-  @State private var running = false
 
   struct Entry: Identifiable {
     let id = UUID()
     var command: String
-    var outcome: ShellOutcome?
+    var job: ShellJob?
+    var stdout = ""
+    var stderr = ""
     var failure: String?
   }
 
@@ -35,34 +36,44 @@ struct ShellView: View {
                   Text("$ \(entry.command)")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.reading)
-                  if let outcome = entry.outcome {
-                    if !outcome.stdout.isEmpty {
-                      Text(outcome.stdout)
-                        .font(.system(size: 11, design: .monospaced))
-                        .textSelection(.enabled)
-                    }
-                    if !outcome.stderr.isEmpty {
-                      Text(outcome.stderr)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color.instructing)
-                        .textSelection(.enabled)
-                    }
-                    HStack(spacing: 8) {
-                      Text(outcome.exitCode == 0 ? "ok" : "exit \(outcome.exitCode)")
-                        .foregroundStyle(outcome.exitCode == 0 ? Color.generating : .red)
-                      Text(String(format: "%.1fs", outcome.seconds))
-                        .foregroundStyle(.tertiary)
-                      if outcome.truncated {
-                        Text("output capped").foregroundStyle(.tertiary)
-                      }
-                    }
-                    .font(.system(size: 10, design: .monospaced))
-                  } else if let failure = entry.failure {
+                  if !entry.stdout.isEmpty {
+                    Text(entry.stdout)
+                      .font(.system(size: 11, design: .monospaced))
+                      .textSelection(.enabled)
+                  }
+                  if !entry.stderr.isEmpty {
+                    Text(entry.stderr)
+                      .font(.system(size: 11, design: .monospaced))
+                      .foregroundStyle(Color.instructing)
+                      .textSelection(.enabled)
+                  }
+                  if let failure = entry.failure {
                     Text(failure)
                       .font(.system(size: 11, design: .monospaced))
                       .foregroundStyle(.red)
+                  } else if let job = entry.job, !job.isRunning {
+                    HStack(spacing: 8) {
+                      Text(job.state == .killed ? "stopped" : statusText(job))
+                        .foregroundStyle(
+                          job.state == .exited && job.exitCode == 0
+                            ? Color.generating : .red)
+                      Text(String(format: "%.1fs", job.seconds))
+                        .foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 10, design: .monospaced))
                   } else {
-                    AnimatedDots(size: 3, tint: Color.reading)
+                    HStack(spacing: 10) {
+                      AnimatedDots(size: 3, tint: Color.reading)
+                      if let job = entry.job {
+                        Text("\(job.id) · \(Int(job.seconds))s")
+                          .font(.system(size: 10, design: .monospaced))
+                          .foregroundStyle(.tertiary)
+                        Button("stop") { stop(job) }
+                          .font(.system(size: 10, design: .monospaced))
+                          .buttonStyle(.plain)
+                          .foregroundStyle(Color.instructing)
+                      }
+                    }
                   }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -75,7 +86,7 @@ struct ShellView: View {
             guard let last = history.last?.id else { return }
             withAnimation { scroller.scrollTo(last, anchor: .bottom) }
           }
-          .onChange(of: history.last?.outcome?.stdout) {
+          .onChange(of: history.last?.stdout) {
             guard let last = history.last?.id else { return }
             withAnimation { scroller.scrollTo(last, anchor: .bottom) }
           }
@@ -132,27 +143,45 @@ struct ShellView: View {
   }
 
   private var canRun: Bool {
-    !running && !command.trimmingCharacters(in: .whitespaces).isEmpty && store.phase.isReady
+    !command.trimmingCharacters(in: .whitespaces).isEmpty && store.phase.isReady
   }
 
+  private func statusText(_ job: ShellJob) -> String {
+    (job.exitCode ?? 0) == 0 ? "ok" : "exit \(job.exitCode ?? 0)"
+  }
+
+  /// Starts the command on the Mac and then reads it as it writes, so a build can be watched
+  /// rather than waited on, and the next command can be typed over the top of it.
   private func run() {
     guard canRun, let client = store.client else { return }
     let text = command
     command = ""
-    running = true
     let entry = Entry(command: text)
     history.append(entry)
 
     Task {
       do {
-        let outcome = try await client.shell(
-          ShellRequest(command: text, cwd: folder.wrappedValue, timeout: 300))
-        update(entry.id) { $0.outcome = outcome }
+        let started = try await client.start(
+          ShellRequest(command: text, cwd: folder.wrappedValue))
+        update(entry.id) { $0.job = started }
+        while true {
+          let seen = try await client.jobOutput(started.id, wait: 5, limit: 32 * 1024)
+          update(entry.id) {
+            $0.stdout += seen.stdout
+            $0.stderr += seen.stderr
+            $0.job = seen.job
+          }
+          if !seen.job.isRunning, seen.remaining == 0 { break }
+        }
       } catch {
         update(entry.id) { $0.failure = error.localizedDescription }
       }
-      running = false
     }
+  }
+
+  private func stop(_ job: ShellJob) {
+    guard let client = store.client else { return }
+    Task { _ = try? await client.stopJob(job.id) }
   }
 
   private func update(_ id: UUID, _ change: (inout Entry) -> Void) {

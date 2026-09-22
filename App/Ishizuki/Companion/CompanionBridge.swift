@@ -15,6 +15,10 @@ final class CompanionBridge {
   private let server: ServerController
   private let settings: CompanionSettings
 
+  /// The Mac's background commands, held here rather than on a shell that is built per
+  /// request. A job outlives the call that started it, so its table has to as well.
+  private let jobTable = ShellJobs()
+
   init(chat: ChatController, server: ServerController, settings: CompanionSettings) {
     self.chat = chat
     self.server = server
@@ -268,19 +272,55 @@ final class CompanionBridge {
   }
 
   func shell(_ request: ShellRequest) async throws -> ShellOutcome {
+    let started = Date()
+    let result = try await host(for: request.cwd).run(
+      request.command, cwd: try resolve(request.cwd ?? defaultDirectory().path),
+      timeout: min(request.timeout ?? 120, 900), byteLimit: 256 * 1024)
+    return ShellOutcome(
+      stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode,
+      truncated: result.truncated, seconds: -started.timeIntervalSinceNow)
+  }
+
+  func startJob(_ request: ShellRequest) async throws -> ShellJob {
+    try await host(for: request.cwd).start(
+      request.command, cwd: try resolve(request.cwd ?? defaultDirectory().path))
+  }
+
+  func jobs() async throws -> JobList {
+    JobList(jobs: try await host(for: nil).jobs())
+  }
+
+  func jobOutput(_ id: String, wait: Double, limit: Int) async throws -> ShellJobOutput {
+    do {
+      return try await host(for: nil).read(
+        job: id, wait: min(max(0, wait), 120), byteLimit: min(max(1024, limit), 256 * 1024))
+    } catch ShellError.noSuchJob {
+      throw missingJob(id)
+    }
+  }
+
+  func stopJob(_ id: String, force: Bool) async throws -> ShellJob {
+    do {
+      return try await host(for: nil).stop(job: id, force: force)
+    } catch ShellError.noSuchJob {
+      throw missingJob(id)
+    }
+  }
+
+  private func missingJob(_ id: String) -> LinkFailure {
+    LinkFailure(code: "no_job", message: "there is no job called \(id) on this Mac")
+  }
+
+  /// A shell rooted wherever the phone is working, sharing one job table with every other
+  /// request so a command started by one call is still there for the next.
+  private func host(for cwd: String?) throws -> LocalShellHost {
     guard settings.allowShell else {
       throw LinkFailure(
         code: "shell_off", message: "this Mac is not sharing its shell")
     }
-    let directory = try resolve(request.cwd ?? defaultDirectory().path)
+    let directory = try resolve(cwd ?? defaultDirectory().path)
     let root = try rootContaining(directory) ?? directory
-    let started = Date()
-    let result = try await LocalShellHost(workspace: root).run(
-      request.command, cwd: directory, timeout: min(request.timeout ?? 120, 900),
-      byteLimit: 256 * 1024)
-    return ShellOutcome(
-      stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode,
-      truncated: result.truncated, seconds: -started.timeIntervalSinceNow)
+    return LocalShellHost(workspace: root, jobs: jobTable)
   }
 
   private func defaultDirectory() -> URL {

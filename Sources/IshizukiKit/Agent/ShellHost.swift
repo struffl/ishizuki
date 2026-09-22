@@ -27,6 +27,8 @@ public enum ShellError: Error, LocalizedError, Sendable {
   case noHost
   case missingProgram(String)
   case timedOut(Double)
+  case noSuchJob(String)
+  case noJobs
 
   public var errorDescription: String? {
     switch self {
@@ -38,6 +40,10 @@ public enum ShellError: Error, LocalizedError, Sendable {
       return "\(name) was not found"
     case .timedOut(let seconds):
       return String(format: "timed out after %.0fs", seconds)
+    case .noSuchJob(let id):
+      return "there is no job called \(id)"
+    case .noJobs:
+      return "this shell cannot leave a command running"
     }
   }
 }
@@ -51,11 +57,36 @@ public protocol ShellHost: Sendable {
   func run(
     _ command: String, cwd: URL?, timeout: Double, byteLimit: Int
   ) async throws -> ShellResult
+
+  /// Starts a command and returns the moment it is running. Nothing waits on it and no clock
+  /// cuts it short: it ends when it ends, or when someone stops it.
+  func start(_ command: String, cwd: URL?) async throws -> ShellJob
+  func jobs() async throws -> [ShellJob]
+  /// Waits up to `wait` seconds for a job to finish, then hands over what it has written since
+  /// it was last read.
+  func read(job id: String, wait: Double, byteLimit: Int) async throws -> ShellJobOutput
+  /// SIGTERM, or SIGKILL when forced. A job that ignores the first gets the second three
+  /// seconds later.
+  func stop(job id: String, force: Bool) async throws -> ShellJob
 }
 
 extension ShellHost {
   public func run(_ command: String) async throws -> ShellResult {
     try await run(command, cwd: nil, timeout: 120, byteLimit: 64 * 1024)
+  }
+
+  public func start(_ command: String, cwd: URL?) async throws -> ShellJob {
+    throw ShellError.noJobs
+  }
+
+  public func jobs() async throws -> [ShellJob] { [] }
+
+  public func read(job id: String, wait: Double, byteLimit: Int) async throws -> ShellJobOutput {
+    throw ShellError.noSuchJob(id)
+  }
+
+  public func stop(job id: String, force: Bool) async throws -> ShellJob {
+    throw ShellError.noSuchJob(id)
   }
 
   /// Resolves a path the model handed over, and refuses anything that leaves the workspace —
@@ -94,14 +125,19 @@ extension ShellHost {
     public let workspace: URL
     public let shell: String
     public let extraPaths: [String]
+    /// The jobs this workspace has running. Passed in where a host is rebuilt per request, so
+    /// the processes an earlier one started are still there to be read and stopped.
+    public let table: ShellJobs
 
     public init(
       workspace: URL, shell: String = "/bin/zsh",
-      extraPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]
+      extraPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin"],
+      jobs table: ShellJobs = ShellJobs()
     ) {
       self.workspace = workspace
       self.shell = shell
       self.extraPaths = extraPaths
+      self.table = table
     }
 
     public var isAvailable: Bool { FileManager.default.isExecutableFile(atPath: shell) }
@@ -117,11 +153,7 @@ extension ShellHost {
       process.arguments = ["-l", "-c", command]
       process.currentDirectoryURL = directory
 
-      var environment = ProcessInfo.processInfo.environment
-      let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-      environment["PATH"] = (extraPaths + [path]).joined(separator: ":")
-      environment["TERM"] = "dumb"
-      process.environment = environment
+      process.environment = environment()
 
       let out = Pipe()
       let err = Pipe()
@@ -153,6 +185,33 @@ extension ShellHost {
         stderr: captured.1.text,
         exitCode: process.terminationStatus,
         truncated: captured.0.truncated || captured.1.truncated)
+    }
+
+    public func start(_ command: String, cwd: URL?) async throws -> ShellJob {
+      guard isAvailable else { throw ShellError.missingProgram(shell) }
+      let directory = try cwd.map { try resolve($0.path) } ?? workspace
+      return try await table.start(
+        command: command, cwd: directory, shell: shell, environment: environment())
+    }
+
+    public func jobs() async throws -> [ShellJob] {
+      await table.list()
+    }
+
+    public func read(job id: String, wait: Double, byteLimit: Int) async throws -> ShellJobOutput {
+      try await table.read(id, wait: wait, byteLimit: byteLimit)
+    }
+
+    public func stop(job id: String, force: Bool) async throws -> ShellJob {
+      try await table.stop(id, force: force)
+    }
+
+    private func environment() -> [String: String] {
+      var environment = ProcessInfo.processInfo.environment
+      let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+      environment["PATH"] = (extraPaths + [path]).joined(separator: ":")
+      environment["TERM"] = "dumb"
+      return environment
     }
 
     private struct Capture: Sendable {

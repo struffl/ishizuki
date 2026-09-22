@@ -173,7 +173,8 @@ final class CompanionServer {
       do {
         try await self.dispatch(request, writer, bridge, path: path, query: query)
       } catch let failure as LinkFailure {
-        self.fail(writer, status: failure.code == "no_chat" ? 404 : 409, failure)
+        self.fail(
+          writer, status: ["no_chat", "no_job"].contains(failure.code) ? 404 : 409, failure)
       } catch {
         self.fail(
           writer, status: 500,
@@ -193,6 +194,13 @@ final class CompanionServer {
     }
     let rest = Array(segments.dropFirst())
     let method = request.method
+
+    if rest.count >= 2, rest[0] == "jobs" {
+      try await jobRoute(
+        writer, bridge, id: rest[1], verb: rest.count > 2 ? rest[2] : nil, method: method,
+        query: query)
+      return
+    }
 
     if rest.count >= 2, rest[0] == "chats" {
       guard let id = UUID(uuidString: rest[1]) else { throw badBody() }
@@ -230,11 +238,34 @@ final class CompanionServer {
     case ("POST", "shell"):
       guard let wanted: ShellRequest = decode(request) else { throw badBody() }
       respond(writer, try await bridge.shell(wanted))
+    case ("POST", "shell/start"):
+      guard let wanted: ShellRequest = decode(request) else { throw badBody() }
+      respond(writer, try await bridge.startJob(wanted))
+    case ("GET", "jobs"):
+      respond(writer, try await bridge.jobs())
     case ("POST", "unpair"):
       if let device = authenticate(request) { forget(device) }
       respond(writer, Empty())
     default:
       notFound(writer, path)
+    }
+  }
+
+  private func jobRoute(
+    _ writer: ResponseWriter, _ bridge: CompanionBridge, id: String, verb: String?,
+    method: String, query: [String: String]
+  ) async throws {
+    switch (method, verb) {
+    case ("GET", "output"):
+      respond(
+        writer,
+        try await bridge.jobOutput(
+          id, wait: Double(query["wait"] ?? "0") ?? 0,
+          limit: Int(query["limit"] ?? "8192") ?? 8192))
+    case ("POST", "stop"):
+      respond(writer, try await bridge.stopJob(id, force: query["force"] == "1"))
+    default:
+      notFound(writer, "jobs/\(id)")
     }
   }
 

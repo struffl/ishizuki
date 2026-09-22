@@ -27,4 +27,20 @@ public final class RemoteShellHost: ShellHost {
       stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode,
       truncated: outcome.truncated)
   }
+
+  public func start(_ command: String, cwd: URL?) async throws -> ShellJob {
+    try await client.start(ShellRequest(command: command, cwd: cwd?.path ?? workspace.path))
+  }
+
+  public func jobs() async throws -> [ShellJob] {
+    try await client.jobs()
+  }
+
+  public func read(job id: String, wait: Double, byteLimit: Int) async throws -> ShellJobOutput {
+    try await client.jobOutput(id, wait: wait, limit: byteLimit)
+  }
+
+  public func stop(job id: String, force: Bool) async throws -> ShellJob {
+    try await client.stopJob(id, force: force)
+  }
 }

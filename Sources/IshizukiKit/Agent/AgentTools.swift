@@ -161,15 +161,18 @@ public struct ShellTool: Tool {
   public let name = "shell"
   public let description = """
     Run a command in the workspace and return its output, capped. Use read, write, edit, grep \
-    and glob for files; use this for builds, tests and git.
+    and glob for files; use this for builds, tests and git. A command still running after the \
+    wait is left in the background with a job id rather than killed.
     """
 
   @Generable
   public struct Arguments {
     @Guide(description: "The command line to run")
     public var command: String
-    @Guide(description: "Seconds to allow before it is cut short")
+    @Guide(description: "Seconds to wait before it goes to the background. Omit for 15")
     public var timeout: Int?
+    @Guide(description: "Send it to the background at once, for a server or a long build")
+    public var background: Bool?
   }
 
   let workspace: Workspace
@@ -182,8 +185,87 @@ public struct ShellTool: Tool {
 
   public func call(arguments: Arguments) async throws -> String {
     try await workspace.shell(
-      command: arguments.command, timeout: Double(arguments.timeout ?? 120),
-      byteLimit: byteLimit)
+      command: arguments.command, timeout: Double(arguments.timeout ?? 15),
+      byteLimit: byteLimit, background: arguments.background ?? false)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct JobsTool: Tool {
+  public let name = "jobs"
+  public let description = """
+    List the commands still running in the background, with how long they have been going and \
+    how much output is waiting to be read.
+    """
+
+  @Generable
+  public struct Arguments {}
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.jobs()
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct JobOutputTool: Tool {
+  public let name = "output"
+  public let description = """
+    Read what a background job has written since you last read it. Pass wait to give it that \
+    many seconds to finish first; a job that has finished reports its exit code here.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "The job id, as jobs and shell spell it")
+    public var job: String
+    @Guide(description: "Seconds to wait for it to finish before answering. Omit for none")
+    public var wait: Int?
+  }
+
+  let workspace: Workspace
+  let byteLimit: Int
+
+  public init(workspace: Workspace, byteLimit: Int = 8 * 1024) {
+    self.workspace = workspace
+    self.byteLimit = byteLimit
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.jobOutput(
+      arguments.job, wait: Double(arguments.wait ?? 0), byteLimit: byteLimit)
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct KillJobTool: Tool {
+  public let name = "kill"
+  public let description = """
+    Stop a background job. It is asked to stop first and killed if it stays up; pass force to \
+    kill it outright.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "The job id, as jobs and shell spell it")
+    public var job: String
+    @Guide(description: "Kill it outright rather than asking it to stop")
+    public var force: Bool?
+  }
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await workspace.killJob(arguments.job, force: arguments.force ?? false)
   }
 }
 
@@ -197,5 +279,8 @@ public func codingTools(for workspace: Workspace) -> [any Tool] {
     EditFileTool(workspace: workspace),
     WriteFileTool(workspace: workspace),
     ShellTool(workspace: workspace),
+    JobsTool(workspace: workspace),
+    JobOutputTool(workspace: workspace),
+    KillJobTool(workspace: workspace),
   ]
 }

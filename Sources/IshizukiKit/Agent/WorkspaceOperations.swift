@@ -146,13 +146,76 @@ extension Workspace {
     return out
   }
 
-  public func shell(command: String, timeout: Double = 120, byteLimit: Int = 8 * 1024)
-    async throws -> String
-  {
+  /// Runs a command and waits a short while for it. A command that is still going when the
+  /// wait runs out is not killed: it is left running and answered for with a job id, which is
+  /// the only way a build or a server belongs in a turn.
+  public func shell(
+    command: String, timeout: Double = 15, byteLimit: Int = 8 * 1024, background: Bool = false
+  ) async throws -> String {
     guard host.isAvailable else { throw ShellError.noHost }
-    let result = try await host.run(
-      command, cwd: root, timeout: timeout, byteLimit: byteLimit)
 
+    let job: ShellJob
+    do {
+      job = try await host.start(command, cwd: root)
+    } catch ShellError.noJobs {
+      return try await foreground(command: command, timeout: timeout, byteLimit: byteLimit)
+    }
+
+    if background {
+      return
+        "\(job.id) started: \(command)\nRead it with output \(job.id), stop it with kill \(job.id)."
+    }
+
+    let seen = try await host.read(job: job.id, wait: max(0, timeout), byteLimit: byteLimit)
+    guard seen.job.isRunning else { return settled(seen) }
+
+    var out = "\(job.id) is still running after \(whole(timeout))s, so it was left in the "
+    out += "background: \(command)"
+    let written = body(of: seen)
+    if !written.isEmpty { out += "\n\(written)" }
+    out += "\nRead the rest with output \(job.id), stop it with kill \(job.id)."
+    return out
+  }
+
+  /// Every job this workspace has going, and the ones that have finished with output nobody
+  /// has read yet.
+  public func jobs() async throws -> String {
+    let jobs = try await host.jobs()
+    guard !jobs.isEmpty else { return "no background jobs" }
+    return jobs.map(line(for:)).joined(separator: "\n")
+  }
+
+  public func jobOutput(_ id: String, wait: Double = 0, byteLimit: Int = 8 * 1024) async throws
+    -> String
+  {
+    let seen = try await host.read(job: id, wait: min(max(0, wait), 120), byteLimit: byteLimit)
+    guard seen.job.isRunning else { return settled(seen) }
+    let written = body(of: seen)
+    return written.isEmpty
+      ? "\(id) is still running, \(whole(seen.job.seconds))s in, with nothing new to show"
+      : "\(id) is still running, \(whole(seen.job.seconds))s in\n\(written)"
+  }
+
+  public func killJob(_ id: String, force: Bool = false) async throws -> String {
+    let job = try await host.stop(job: id, force: force)
+    guard job.isRunning else { return "\(id) had already finished" }
+    return force
+      ? "\(id) was killed after \(whole(job.seconds))s"
+      : "\(id) was asked to stop after \(whole(job.seconds))s; it is killed if it stays up"
+  }
+
+  /// Stops everything this workspace still has running, which is what a conversation being
+  /// thrown away owes the machine it was working on.
+  public func stopAllJobs() async {
+    guard let running = try? await host.jobs() else { return }
+    for job in running where job.isRunning {
+      _ = try? await host.stop(job: job.id, force: true)
+    }
+  }
+
+  private func foreground(command: String, timeout: Double, byteLimit: Int) async throws -> String {
+    let result = try await host.run(
+      command, cwd: root, timeout: max(timeout, 120), byteLimit: byteLimit)
     var out = ""
     if !result.stdout.isEmpty { out += result.stdout }
     if !result.stderr.isEmpty {
@@ -162,6 +225,52 @@ extension Workspace {
     if result.truncated { out += "\n… output truncated" }
     if !result.succeeded { out += "\nexit \(result.exitCode)" }
     return out.isEmpty ? "exit \(result.exitCode), no output" : out
+  }
+
+  private func settled(_ output: ShellJobOutput) -> String {
+    var out = body(of: output)
+    let code = output.job.exitCode ?? 0
+    if output.job.state == .killed {
+      out += out.isEmpty ? "" : "\n"
+      out += "\(output.job.id) was stopped after \(whole(output.job.seconds))s"
+      return out
+    }
+    if code != 0 {
+      out += out.isEmpty ? "" : "\n"
+      out += "exit \(code)"
+    }
+    return out.isEmpty ? "exit \(code), no output" : out
+  }
+
+  private func body(of output: ShellJobOutput) -> String {
+    var out = output.stdout
+    if !output.stderr.isEmpty {
+      if !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
+      out += output.stderr
+    }
+    if output.skipped > 0 { out += "\n… \(size(output.skipped)) of earlier output was dropped" }
+    if output.remaining > 0 { out += "\n… \(size(output.remaining)) more waiting" }
+    return out
+  }
+
+  private func line(for job: ShellJob) -> String {
+    var out = job.id + "  "
+    switch job.state {
+    case .running: out += "running \(whole(job.seconds))s"
+    case .exited: out += "exit \(job.exitCode ?? 0) after \(whole(job.seconds))s"
+    case .killed: out += "stopped after \(whole(job.seconds))s"
+    }
+    out += "  \(job.command)"
+    if job.pending > 0 { out += "  (\(size(job.pending)) unread)" }
+    return out
+  }
+
+  private func whole(_ seconds: Double) -> String {
+    String(Int(seconds.rounded()))
+  }
+
+  private func size(_ bytes: Int) -> String {
+    bytes < 1024 ? "\(bytes) B" : String(format: "%.1f KB", Double(bytes) / 1024)
   }
 }
 

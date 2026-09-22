@@ -160,6 +160,31 @@ public struct LinkClient: Sendable {
       timeout: max(30, min(900, request.timeout ?? 120) + 10))
   }
 
+  /// Starts a command on the Mac and comes back with the job it became. Nothing on this side
+  /// holds the connection open while it runs.
+  public func start(_ request: ShellRequest) async throws -> ShellJob {
+    try await transport.call("POST", "/link/shell/start", body: request)
+  }
+
+  public func jobs() async throws -> [ShellJob] {
+    let list: JobList = try await transport.call("GET", "/link/jobs")
+    return list.jobs
+  }
+
+  public func jobOutput(_ id: String, wait: Double = 0, limit: Int = 8 * 1024) async throws
+    -> ShellJobOutput
+  {
+    try await transport.call(
+      "GET", "/link/jobs/\(Self.escape(id))/output?wait=\(wait)&limit=\(limit)",
+      timeout: max(30, wait + 10))
+  }
+
+  public func stopJob(_ id: String, force: Bool = false) async throws -> ShellJob {
+    try await transport.call(
+      "POST", "/link/jobs/\(Self.escape(id))/stop?force=\(force ? 1 : 0)",
+      body: Optional<Empty>.none)
+  }
+
   static func escape(_ text: String) -> String {
     text.addingPercentEncoding(
       withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? text
