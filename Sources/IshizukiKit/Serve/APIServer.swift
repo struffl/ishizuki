@@ -339,7 +339,10 @@ public final class APIServer: @unchecked Sendable {
     let generator = Generator(
       model: model, kvConfig: kvConfig, politeness: politeness)
 
-    var filter = StreamFilter(thinking: request.thinking)
+    let opened =
+      request.thinking
+      && rendered.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("<think>")
+    var filter = StreamFilter(thinking: opened)
 
     let promptLease = lease
     // A rewind point a few tokens short of the end, which is where the next prompt parts ways.
@@ -407,7 +410,7 @@ public final class APIServer: @unchecked Sendable {
       stats.record(id, generation: result.stats, cached: reused, reused: reused > 0)
     }
 
-    let raw = request.thinking ? "<think>" + result.text : result.text
+    let raw = opened ? "<think>" + result.text : result.text
     return (
       ToolCallParser.parse(raw), promptTokens.count, result.tokens.count, result.cancelled
     )
@@ -447,6 +450,9 @@ public final class APIServer: @unchecked Sendable {
           parsed, id: id, isCancelled: { writer.isCancelled },
           onText: { text in
             chunk(["content": text])
+          },
+          onReasoning: { thought in
+            chunk(["reasoning_content": thought])
           }
         )
         if completion.cancelled {
@@ -635,21 +641,54 @@ public final class APIServer: @unchecked Sendable {
               "usage": ["input_tokens": 0, "output_tokens": 0],
             ],
           ])
-        writer.sendEvent(
-          name: "content_block_start",
-          data: [
-            "type": "content_block_start", "index": 0,
-            "content_block": ["type": "text", "text": ""],
-          ])
+        var nextIndex = 0
+        var open: String?
+        func close() {
+          guard let kind = open else { return }
+          if kind == "thinking" {
+            writer.sendEvent(
+              name: "content_block_delta",
+              data: [
+                "type": "content_block_delta", "index": nextIndex - 1,
+                "delta": ["type": "signature_delta", "signature": ""],
+              ])
+          }
+          writer.sendEvent(
+            name: "content_block_stop",
+            data: ["type": "content_block_stop", "index": nextIndex - 1])
+          open = nil
+        }
+        func begin(_ kind: String) {
+          guard open != kind else { return }
+          close()
+          let block: [String: Any] =
+            kind == "thinking"
+            ? ["type": "thinking", "thinking": ""] : ["type": "text", "text": ""]
+          writer.sendEvent(
+            name: "content_block_start",
+            data: ["type": "content_block_start", "index": nextIndex, "content_block": block])
+          nextIndex += 1
+          open = kind
+        }
 
         let completion = try complete(
           parsed, id: id, isCancelled: { writer.isCancelled },
           onText: { text in
+            begin("text")
             writer.sendEvent(
               name: "content_block_delta",
               data: [
-                "type": "content_block_delta", "index": 0,
+                "type": "content_block_delta", "index": nextIndex - 1,
                 "delta": ["type": "text_delta", "text": text],
+              ])
+          },
+          onReasoning: { thought in
+            begin("thinking")
+            writer.sendEvent(
+              name: "content_block_delta",
+              data: [
+                "type": "content_block_delta", "index": nextIndex - 1,
+                "delta": ["type": "thinking_delta", "thinking": thought],
               ])
           }
         )
@@ -657,12 +696,14 @@ public final class APIServer: @unchecked Sendable {
           writer.finish()
           return
         }
-        writer.sendEvent(
-          name: "content_block_stop",
-          data: ["type": "content_block_stop", "index": 0])
+        if open != "text" && (open == nil || completion.parsed.toolCalls.isEmpty) {
+          begin("text")
+        }
+        close()
 
-        for (offset, call) in completion.parsed.toolCalls.enumerated() {
-          let index = offset + 1
+        for call in completion.parsed.toolCalls {
+          let index = nextIndex
+          nextIndex += 1
           writer.sendEvent(
             name: "content_block_start",
             data: [
@@ -707,6 +748,9 @@ public final class APIServer: @unchecked Sendable {
         return
       }
       var blocks: [[String: Any]] = []
+      if let reasoning = completion.parsed.reasoning {
+        blocks.append(["type": "thinking", "thinking": reasoning, "signature": ""])
+      }
       if !completion.parsed.content.isEmpty {
         blocks.append(["type": "text", "text": completion.parsed.content])
       }
@@ -719,7 +763,9 @@ public final class APIServer: @unchecked Sendable {
           "type": "tool_use", "id": call.id, "name": call.name, "input": input,
         ])
       }
-      if blocks.isEmpty { blocks = [["type": "text", "text": ""]] }
+      if !blocks.contains(where: { $0["type"] as? String != "thinking" }) {
+        blocks.append(["type": "text", "text": ""])
+      }
 
       writer.send(json: [
         "id": identifier, "type": "message", "role": "assistant", "model": modelName,
@@ -948,15 +994,28 @@ struct StreamFilter {
 
   private var buffer = ""
   private var phase: Phase
+  private var started: Bool
   private let guardLength = 12
 
   init(thinking: Bool) {
     self.phase = thinking ? .thinking : .answer
+    self.started = thinking
   }
 
   mutating func push(_ fragment: String) -> Output {
     buffer += fragment
     var out = Output()
+
+    if !started {
+      let lead = buffer.drop(while: \.isWhitespace)
+      if lead.hasPrefix("<think>") {
+        buffer = String(lead.dropFirst("<think>".count))
+        phase = .thinking
+      } else if "<think>".hasPrefix(lead) {
+        return out
+      }
+      started = true
+    }
 
     if phase == .thinking {
       guard let end = buffer.range(of: "</think>") else {

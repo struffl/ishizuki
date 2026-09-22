@@ -98,4 +98,21 @@ struct StreamFilterTests {
     #expect(drain.content == "Hello there, this is the answer.")
     #expect(drain.reasoning.isEmpty)
   }
+
+  @Test("a thought the model opens itself is still split off, even across fragments")
+  func modelOpensItsOwnThought() {
+    let drain = run(
+      thinking: false,
+      ["\n<th", "ink>\nWeighing it up first.", "</think>", "Here is the answer."])
+    #expect(
+      drain.reasoning.trimmingCharacters(in: .whitespacesAndNewlines) == "Weighing it up first.")
+    #expect(drain.content == "Here is the answer.")
+  }
+
+  @Test("a short answer that is not a thought is not held back")
+  func shortAnswerSurvives() {
+    let drain = run(thinking: false, ["<", "b>Hi</b>"])
+    #expect(drain.content == "<b>Hi</b>")
+    #expect(drain.reasoning.isEmpty)
+  }
 }
