@@ -78,13 +78,21 @@ struct Composer: View {
 
   @ViewBuilder private var field: some View {
     HStack(alignment: .bottom, spacing: 8) {
+      // Built to the same geometry as the two buttons on the other end of the row, so all
+      // three sit on one line however tall the box has grown.
       Button {
         chat.attach(AttachmentIntake.read(askForFiles()))
       } label: {
-        Image(systemName: "paperclip")
-          .font(.system(.callout))
-          .foregroundStyle(.secondary)
-          .hitTarget()
+        ZStack {
+          Circle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: 27, height: 27)
+          Image(systemName: "paperclip")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+        .frame(width: 38, height: 38)
+        .contentShape(.circle)
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Attach files")
@@ -97,10 +105,10 @@ struct Composer: View {
       .textFieldStyle(.plain)
       .font(mono)
       .lineLimit(1...max(2, maxLines))
-      // One line sits in the middle of the row rather than on its floor: the send button is
-      // the tallest thing here, and bottom-aligning a single line against it left the
-      // placeholder sunk under its own box.
-      .frame(minHeight: 30)
+      // One line sits in the middle of the row rather than on its floor. The buttons are all
+      // 38 across and the row is bottom-aligned so they stay put as the box grows, which
+      // means a single line of text has to claim the same height to share their centre.
+      .frame(minHeight: 38)
       // Return sends, shift-return opens a line. Handled here rather than through onSubmit,
       // which cannot tell the two apart.
       .onKeyPress(phases: .down) { press in
