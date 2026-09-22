@@ -1315,27 +1315,13 @@ final class ChatController {
     return rows
   }
 
-  /// A transcript only grows, and only its last entry is still being written into, so every
-  /// entry before that one can be folded once and kept. Reading the whole thing twenty times a
-  /// second was the transcript's own length being copied and re-joined on the main thread for
-  /// every fifty milliseconds of a turn, which is what made a long conversation stutter.
+  /// Entries can still change after another entry is appended: the generation channel updates
+  /// reasoning and responses by ID, including replacing their text when generation finishes.
+  /// Always fold the current snapshot so an earlier row cannot retain a partial streamed value.
+  /// `absorb` avoids publishing unchanged rows to the view.
   struct RowBuilder {
-    private var settled: [Row] = []
-    private var folded = 0
-
-    mutating func rows(from transcript: Transcript) -> [Row] {
-      let entries = Array(transcript)
-      if entries.count < folded {
-        settled = []
-        folded = 0
-      }
-      let stable = max(0, entries.count - 1)
-      if stable > folded {
-        settled = ChatController.fold(entries[folded..<stable], into: settled)
-        folded = stable
-      }
-      guard stable < entries.count else { return settled }
-      return ChatController.fold(entries[stable...], into: settled)
+    func rows(from transcript: Transcript) -> [Row] {
+      ChatController.fold(transcript, into: [])
     }
   }
 
