@@ -71,6 +71,34 @@ struct SavedChat: Codable, Identifiable, Equatable {
 
 @available(macOS 27.0, *)
 final class ChatStore {
+  /// Checkpoints are made off the main actor. Keep only the newest one for each chat so a
+  /// delayed disk write cannot put an earlier transcript back after a later checkpoint.
+  private final class CheckpointWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var issued: [UUID: Int] = [:]
+    private var written: [UUID: Int] = [:]
+
+    func reserve(for id: UUID) -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      issued[id, default: 0] += 1
+      return issued[id, default: 0]
+    }
+
+    func write(_ chat: SavedChat, in directory: URL, sequence: Int) {
+      lock.lock()
+      defer { lock.unlock() }
+      guard sequence > written[chat.id, default: 0] else { return }
+      written[chat.id] = sequence
+      let encoder = JSONEncoder()
+      encoder.dateEncodingStrategy = .iso8601
+      guard let data = try? encoder.encode(chat) else { return }
+      try? data.write(
+        to: directory.appending(path: "\(chat.id.uuidString).json"), options: .atomic)
+    }
+  }
+
+  private static let checkpointWriter = CheckpointWriter()
   private let directory: URL
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
@@ -99,19 +127,19 @@ final class ChatStore {
   }
 
   func save(_ chat: SavedChat) {
-    guard let data = try? encoder.encode(chat) else { return }
-    try? data.write(to: url(for: chat.id), options: .atomic)
+    let sequence = Self.checkpointWriter.reserve(for: chat.id)
+    Self.checkpointWriter.write(chat, in: directory, sequence: sequence)
   }
 
   /// A mid-turn checkpoint, written away from the main thread: encoding a long transcript is
   /// not something the window should stop drawing tokens for. It carries its own encoder,
   /// since the one above belongs to whoever is on the main thread.
-  static func write(_ chat: SavedChat, in directory: URL) {
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    guard let data = try? encoder.encode(chat) else { return }
-    try? data.write(
-      to: directory.appending(path: "\(chat.id.uuidString).json"), options: .atomic)
+  static func reserveCheckpoint(for id: UUID) -> Int {
+    checkpointWriter.reserve(for: id)
+  }
+
+  static func writeCheckpoint(_ chat: SavedChat, in directory: URL, sequence: Int) {
+    checkpointWriter.write(chat, in: directory, sequence: sequence)
   }
 
   var folder: URL { directory }

@@ -1038,7 +1038,10 @@ final class ChatController {
     // Encoding a long transcript is not something a turn should stop for: the window is trying
     // to draw tokens while this runs.
     let directory = store.folder
-    Task.detached(priority: .utility) { ChatStore.write(saved, in: directory) }
+    let sequence = ChatStore.reserveCheckpoint(for: saved.id)
+    Task.detached(priority: .utility) {
+      ChatStore.writeCheckpoint(saved, in: directory, sequence: sequence)
+    }
   }
 
   private func finish(_ run: Run) {
@@ -1141,8 +1144,9 @@ final class ChatController {
   private func withMeta(of chatID: UUID, _ change: (inout [String: RowMeta]) -> Void) {
     if chatID == current.id {
       change(&meta)
-    } else if parked[chatID] != nil {
-      change(&parked[chatID]!.meta)
+    } else if var state = parked[chatID] {
+      change(&state.meta)
+      parked[chatID] = state
     }
   }
 

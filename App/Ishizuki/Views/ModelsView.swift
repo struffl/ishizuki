@@ -146,7 +146,7 @@ struct ModelsView: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(title)
         .font(.system(.subheadline, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary.opacity(0.82))
       content()
     }
   }
@@ -196,7 +196,11 @@ private struct InstalledRow: View {
       .accessibilityLabel("More actions for \(entry.displayName)")
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .overlay {
+      RoundedRectangle(cornerRadius: 12)
+        .strokeBorder(Color.hairline, lineWidth: 1)
+    }
   }
 }
 
@@ -227,7 +231,11 @@ private struct CuratedRow: View {
         .disabled(library.downloads.contains { $0.repo == model.repo })
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .overlay {
+      RoundedRectangle(cornerRadius: 12)
+        .strokeBorder(Color.hairline, lineWidth: 1)
+    }
   }
 }
 
@@ -263,7 +271,11 @@ private struct DownloadRow: View {
       }
     }
     .padding(10)
-    .glassEffect(.clear, in: .rect(cornerRadius: 12))
+    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .overlay {
+      RoundedRectangle(cornerRadius: 12)
+        .strokeBorder(Color.hairline, lineWidth: 1)
+    }
   }
 }
 

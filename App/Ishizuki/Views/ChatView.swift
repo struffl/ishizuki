@@ -117,6 +117,9 @@ struct ChatView: View {
             // Spacing is set per row rather than once for the stack, so a run of tool traffic
             // closes up into one block and air is spent only where the voice changes.
             LazyVStack(alignment: .leading, spacing: 0) {
+              if blocks.isEmpty, !chat.isResponding {
+                emptyTranscript
+              }
               ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                 // RowCost sits past the row's trailing edge rather than beside it, so the row
                 // never reports a width wider than the column actually is — the earlier
@@ -365,6 +368,51 @@ struct ChatView: View {
   }
 
   private var rows: [ChatController.Row] { chat.visibleRows }
+
+  /// A new conversation is not an empty screen: say what the one prominent action will do.
+  @ViewBuilder private var emptyTranscript: some View {
+    VStack(spacing: 10) {
+      Image(systemName: emptyIcon)
+        .font(.system(size: 30, weight: .light))
+        .foregroundStyle(.secondary)
+      Text(emptyTitle)
+        .font(.title3.weight(.semibold))
+      Text(emptyDetail)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+      if chat.submission == .chooseFolder || chat.submission == .load {
+        Button(chat.submissionLabel) { chat.submit() }
+          .buttonStyle(.glassProminent)
+      }
+    }
+    .frame(maxWidth: .infinity, minHeight: 220)
+    .accessibilityElement(children: .contain)
+  }
+
+  private var emptyIcon: String {
+    switch chat.submission {
+    case .chooseFolder: "folder.badge.plus"
+    case .load: "bolt.circle"
+    default: "bubble.left.and.text.bubble.right"
+    }
+  }
+
+  private var emptyTitle: String {
+    switch chat.submission {
+    case .chooseFolder: "Choose a working folder"
+    case .load: "Load the pack to begin"
+    default: "Start a conversation"
+    }
+  }
+
+  private var emptyDetail: String {
+    switch chat.submission {
+    case .chooseFolder: "The agent will only work in the folder you choose."
+    case .load: "Your selected model will stay ready for this conversation."
+    default: "Write a request below to get started."
+    }
+  }
 
   /// A stretch of the transcript drawn as one thing. Most of it is one row per block; a run of
   /// machinery nobody has opened is a single line saying how many steps it was, the way a long
