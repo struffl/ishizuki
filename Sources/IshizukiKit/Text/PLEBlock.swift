@@ -90,3 +90,26 @@ public struct PLEBlock: @unchecked Sendable {
     return silu(conv1d(padded, conv, dilation: dilation, groups: channels))
   }
 }
+
+extension PLEBlock {
+  /// Read from a pack. Only the one layer named by `ple_layer_ids` carries these tensors, and
+  /// the convolution is dilated by the n-gram order so its taps land one whole n-gram apart.
+  public init(
+    config: BonsaiConfig.TextConfig, module: String, factory: PackedModuleFactory,
+    store: WeightStore
+  ) throws {
+    let prefix = factory.tensorPrefix + module + ".ple"
+    self.init(
+      keyProj: try factory.projection(module + ".ple.key_proj"),
+      valueProj: try factory.projection(module + ".ple.value_proj"),
+      normKey: try store(prefix + ".norm_key.weight"),
+      normQuery: try store(prefix + ".norm_query.weight"),
+      normConv: try store(prefix + ".norm_conv.weight"),
+      conv: try store(prefix + ".conv1d.weight"),
+      count: config.hcCount ?? 1,
+      width: config.hiddenSize,
+      kernel: config.pleConvKernelSize ?? 4,
+      dilation: config.ngramSize ?? 3,
+      eps: config.rmsNormEps)
+  }
+}

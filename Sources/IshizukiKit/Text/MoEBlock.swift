@@ -57,12 +57,14 @@ protocol ExpertSource: Sendable {
 }
 
 public final class MoEBlock: FeedForward, @unchecked Sendable {
-  private let router: PackedLinear
+  /// Read as whatever the pack holds: a router is a handful of rows against the bank it
+  /// scores, small enough that a converter may well have left it at full width.
+  private let router: any Projection
   private let experts: any ExpertSource
   private let groupSize: Int
   private let bits: Int
   private let shared: MLP?
-  private let sharedGate: PackedLinear?
+  private let sharedGate: (any Projection)?
   private let topK: Int
   private let normalizeWeights: Bool
   private let layer: Int
@@ -81,7 +83,7 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     self.topK = min(used, experts)
     self.normalizeWeights = config.normTopkProb ?? true
 
-    self.router = try factory.linear(module + ".gate")
+    self.router = try factory.projection(module + ".gate")
     guard router.outputDim == experts else {
       throw BonsaiError.shapeMismatch(
         "the router in layer \(layer) scores \(router.outputDim) experts, not \(experts)")
@@ -93,6 +95,8 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
 
     if let streamed = store.experts(layer: layer) {
       self.experts = StreamedExperts(store: streamed)
+    } else if factory.dense {
+      self.experts = try DenseExperts(store: store, prefix: prefix + ".switch_mlp")
     } else {
       self.experts = try ResidentExperts(
         gate: StackedExperts(
@@ -110,7 +114,7 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     // A checkpoint may route without one, so the shared branch is taken only when it ships.
     if store.has(prefix + ".shared_expert.gate_proj.weight") {
       self.shared = try MLP(prefix: module + ".shared_expert", layer: layer, factory: factory)
-      self.sharedGate = try factory.linear(module + ".shared_expert_gate")
+      self.sharedGate = try factory.projection(module + ".shared_expert_gate")
     } else {
       self.shared = nil
       self.sharedGate = nil
@@ -163,6 +167,34 @@ struct ResidentExperts: ExpertSource {
   func swiglu(_ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int) -> MLXArray {
     let batched = x.expandedDimensions(axes: [-2, -3])
     return down(silu(gate(batched, chosen)) * up(batched, chosen), chosen).squeezed(axis: -2)
+  }
+}
+
+/// Every expert in memory and unquantized.
+///
+/// This is what a checkpoint on its way through quantization runs, and what a golden test
+/// compares against: the same routing and the same SwiGLU as the packed path, over the
+/// weights as they were, so a difference between the two is the quantization and nothing else.
+struct DenseExperts: ExpertSource, @unchecked Sendable {
+  let gate: MLXArray
+  let up: MLXArray
+  let down: MLXArray
+
+  var expertCount: Int { gate.dim(0) }
+
+  init(store: WeightStore, prefix: String) throws {
+    self.gate = try store(prefix + ".gate_proj.weight")
+    self.up = try store(prefix + ".up_proj.weight")
+    self.down = try store(prefix + ".down_proj.weight")
+  }
+
+  func swiglu(_ x: MLXArray, chosen: MLXArray, groupSize: Int, bits: Int) -> MLXArray {
+    let batched = x.expandedDimensions(axes: [-2, -3])
+    func project(_ weight: MLXArray, _ input: MLXArray) -> MLXArray {
+      gatherMM(input, weight.swappedAxes(-1, -2), rhsIndices: chosen)
+    }
+    return project(down, silu(project(gate, batched)) * project(up, batched))
+      .squeezed(axis: -2)
   }
 }
 

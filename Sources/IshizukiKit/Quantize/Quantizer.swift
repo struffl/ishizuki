@@ -95,14 +95,25 @@ public final class Quantizer: @unchecked Sendable {
   /// tensors — is copied through at fp16, because quantizing them costs accuracy and saves
   /// almost nothing.
   public static func isQuantizable(_ name: String, shape: [Int]) -> Bool {
-    guard name.hasSuffix(".weight"), shape.count == 2 else { return false }
+    guard name.hasSuffix(".weight") else { return false }
+    // A bank of routed experts arrives as one stacked tensor. It quantizes along its last axis
+    // like any other projection, and `gatherQuantizedMM` reads an expert's rows straight out
+    // of the stack, so there is nothing to unpick first.
+    guard shape.count == 2 || (shape.count == 3 && name.contains(".switch_mlp.")) else {
+      return false
+    }
     let quantizable = [
       "q_proj", "k_proj", "v_proj", "o_proj",
       "gate_proj", "up_proj", "down_proj",
       "in_proj_qkv", "in_proj_a", "in_proj_b", "in_proj_z", "out_proj",
       "lm_head", "embed_tokens", "fc",
     ]
-    return quantizable.contains { name.contains(".\($0).") || name.hasSuffix(".\($0).weight") }
+    // A multimodal checkpoint nests the head under the language model and a text-only one
+    // does not, so the bare name has to match as well as the nested one — otherwise the head
+    // of a flat checkpoint is quietly carried at full width.
+    return quantizable.contains {
+      name.contains(".\($0).") || name.hasSuffix(".\($0).weight") || name.hasPrefix("\($0).")
+    }
   }
 
   public func run() throws -> Outcome {
@@ -111,10 +122,20 @@ public final class Quantizer: @unchecked Sendable {
     try fm.createDirectory(at: destination, withIntermediateDirectories: true)
 
     report(.scanning, 0, 1, "reading the checkpoint", 0, "")
-    let names = source.tensorNames.sorted()
+    // The n-gram table and the buffers that address it are lifted out beside the pack, not
+    // written into its shards: four gigabytes of rows that a step reads eight of.
+    let engrams = try EngramRepack.run(source: source, destination: destination) { note in
+      self.report(.writing, 0, 1, note, 0, "")
+    }
+    let names = source.tensorNames.sorted().filter {
+      !$0.hasPrefix("model.ngram_embedding.") && !$0.hasPrefix("model.ple_embedding.")
+    }
     // Upstream checkpoints nest their towers differently from the packs this runtime reads.
     let canonical = TensorNaming.map(names)
-    let upstream = TensorNaming.isHuggingFaceLayout(names)
+    // A checkpoint MLX has already been through carries its scales and has had its
+    // convolutions and norms relaid out on the way. One straight from upstream has not, and
+    // that is true whether or not it nests a vision tower — which is what this used to ask.
+    let upstream = TensorNaming.isUpstream(names)
     let zeroCentredNorms = TensorNaming.usesZeroCentredNorms(source.config)
     var quantizable: [String] = []
     var passthrough: [String] = []
@@ -144,7 +165,7 @@ public final class Quantizer: @unchecked Sendable {
       let weight = try source.tensor(name)
       // A module whose input width does not divide the group cannot be quantized at this
       // group size; it is carried at fp16 rather than silently reshaped.
-      guard weight.dim(1) % profile.groupSize == 0 else {
+      guard weight.dim(weight.ndim - 1) % profile.groupSize == 0 else {
         passthrough.append(name)
         continue
       }
@@ -210,7 +231,7 @@ public final class Quantizer: @unchecked Sendable {
 
     return Outcome(
       directory: destination,
-      byteCount: summary.byteCount,
+      byteCount: summary.byteCount + (engrams?.byteCount ?? 0),
       shards: summary.shards,
       achievedBpw: allocation.achievedBpw,
       histogram: allocation.histogram,

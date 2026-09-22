@@ -26,6 +26,7 @@ public final class GatedDeltaNet: @unchecked Sendable {
   private let convDim: Int
   private let kernelSize: Int
   private let normEps: Float
+  private let sigmoidOutputGate: Bool
   private let headRepeat: Int
   private let valueHeadLayout: ValueHeadLayout
 
@@ -48,6 +49,10 @@ public final class GatedDeltaNet: @unchecked Sendable {
     self.convDim = keyDim * 2 + valueDim
     self.kernelSize = config.linearConvKernelDim
     self.normEps = config.rmsNormEps
+    // Qwen3-Next gates the delta-net's output with silu; the hyper-connected models name the
+    // activation in the config and ask for a sigmoid. Reading it as silu is a quiet wrong
+    // answer, not a failure — the shapes are the same either way.
+    self.sigmoidOutputGate = config.outputGateType == "sigmoid"
 
     guard numValueHeads % numKeyHeads == 0 else {
       throw BonsaiError.unsupportedModel(
@@ -146,7 +151,9 @@ public final class GatedDeltaNet: @unchecked Sendable {
     let zValue = z ?? inProjZ(x).reshaped([b, s, numValueHeads, valueHeadDim])
 
     let normalized = MLXFast.rmsNorm(y, weight: normWeight.asType(y.dtype), eps: normEps)
-    let gated = (silu(zValue.asType(.float32)) * normalized.asType(.float32)).asType(x.dtype)
+    let z32 = zValue.asType(.float32)
+    let activated = sigmoidOutputGate ? sigmoid(z32) : silu(z32)
+    let gated = (activated * normalized.asType(.float32)).asType(x.dtype)
 
     return outProj(gated.reshaped([b, s, valueDim]))
   }

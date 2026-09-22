@@ -23,15 +23,20 @@ public final class WeightStore: @unchecked Sendable {
   public let ggmlArrays: [String: GGUFBlocks]
   public let valueHeadLayout: ValueHeadLayout
   private let expertStores: [Int: ExpertStore]
+  /// The n-gram table, when the pack keeps one beside itself. A single table serves the one
+  /// layer that carries a PLE block.
+  public let engrams: EngramStore?
 
   public init(
     arrays: [String: MLXArray], ggml: [String: GGUFBlocks] = [:],
-    valueHeadLayout: ValueHeadLayout = .grouped, experts: [Int: ExpertStore] = [:]
+    valueHeadLayout: ValueHeadLayout = .grouped, experts: [Int: ExpertStore] = [:],
+    engrams: EngramStore? = nil
   ) {
     self.arrays = arrays
     self.ggmlArrays = ggml
     self.valueHeadLayout = valueHeadLayout
     self.expertStores = experts
+    self.engrams = engrams
   }
 
   public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
@@ -57,7 +62,21 @@ public final class WeightStore: @unchecked Sendable {
         url: folder.appending(path: name), layout: layout, slots: slots)
     }
     return WeightStore(
-      arrays: arrays, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout, experts: stores)
+      arrays: arrays, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout, experts: stores,
+      engrams: engrams)
+  }
+
+  /// Opens the n-gram table a per-layer-embedding model ships, if there is one. `capacity` is
+  /// the most rows a single fetch may ask for: one chunk of tokens times the head count.
+  public func openingEngrams(at directory: URL, capacity: Int = 8192) throws -> WeightStore {
+    let layoutURL = directory.appending(path: EngramLayout.layoutFile)
+    guard FileManager.default.fileExists(atPath: layoutURL.path) else { return self }
+    let layout = try JSONDecoder().decode(
+      EngramLayout.self, from: try Data(contentsOf: layoutURL))
+    let store = try EngramStore(directory: directory, layout: layout, capacity: capacity)
+    return WeightStore(
+      arrays: arrays, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout,
+      experts: expertStores, engrams: store)
   }
 
   /// A pack is either one safetensors file or a set of shards named by an index. Both land in
@@ -138,12 +157,17 @@ public struct PackedModuleFactory {
   /// through the same `Attention`/`GatedDeltaNet`/`MLP` code the real packs run — nothing
   /// downstream of this factory needs to know the difference.
   public let dense: Bool
+  /// The width activations run at. Float16 is what a pack runs in; a golden test raises it so
+  /// that what it measures is the architecture rather than the rounding.
+  public let activationDType: DType
   private let collector: ActivationCollector?
 
   public init(
     store: WeightStore, config: BonsaiConfig, tensorPrefix: String,
-    dense: Bool = false, collector: ActivationCollector? = nil
+    dense: Bool = false, collector: ActivationCollector? = nil,
+    activationDType: DType = .float16
   ) {
+    self.activationDType = activationDType
     self.store = store
     self.records = Dictionary(
       uniqueKeysWithValues: config.modules.map { ($0.path, $0) })
@@ -185,7 +209,7 @@ public struct PackedModuleFactory {
       return PackedEmbedding(ggml: blocks)
     }
     if dense {
-      return PackedEmbedding(dense: try store(key + ".weight"))
+      return PackedEmbedding(dense: try store(key + ".weight"), dtype: activationDType)
     }
     let block: Int
     if let record = records[path] {

@@ -22,15 +22,16 @@ public protocol LayerCache: AnyObject {
 
 public enum CacheSnapshot: @unchecked Sendable {
   case kv(offset: Int)
-  case recurrent(conv: MLXArray?, state: MLXArray?, offset: Int)
+  case recurrent(
+    conv: MLXArray?, state: MLXArray?, ple: MLXArray?, pleTokens: MLXArray?, offset: Int)
 
   /// An attention layer rewinds by moving an offset, so its snapshot is free. A recurrent layer
   /// has to keep the state itself, which is what makes holding many of them expensive.
   public var byteCount: Int {
     switch self {
     case .kv: 0
-    case .recurrent(let conv, let state, _):
-      (conv?.nbytes ?? 0) + (state?.nbytes ?? 0)
+    case .recurrent(let conv, let state, let ple, let tokens, _):
+      (conv?.nbytes ?? 0) + (state?.nbytes ?? 0) + (ple?.nbytes ?? 0) + (tokens?.nbytes ?? 0)
     }
   }
 }
@@ -134,6 +135,10 @@ public final class KVCache: LayerCache, @unchecked Sendable {
 public final class GatedDeltaNetCache: LayerCache, @unchecked Sendable {
   public var convState: MLXArray?
   public var recurrentState: MLXArray?
+  /// The PLE block rides on one linear layer's cache, as it does upstream: a short convolution
+  /// state, and the handful of tokens its n-grams reach back over.
+  public var pleConvState: MLXArray?
+  public var pleTokens: MLXArray?
   public private(set) var offset = 0
 
   public init() {}
@@ -141,17 +146,24 @@ public final class GatedDeltaNetCache: LayerCache, @unchecked Sendable {
   public func reset() {
     convState = nil
     recurrentState = nil
+    pleConvState = nil
+    pleTokens = nil
     offset = 0
   }
 
   public func snapshot() -> CacheSnapshot {
-    .recurrent(conv: convState, state: recurrentState, offset: offset)
+    .recurrent(
+      conv: convState, state: recurrentState, ple: pleConvState, pleTokens: pleTokens,
+      offset: offset)
   }
 
   public func restore(_ snapshot: CacheSnapshot) {
-    guard case .recurrent(let conv, let state, let restored) = snapshot else { return }
+    guard case .recurrent(let conv, let state, let ple, let tokens, let restored) = snapshot
+    else { return }
     convState = conv
     recurrentState = state
+    pleConvState = ple
+    pleTokens = tokens
     offset = restored
   }
 
@@ -164,12 +176,16 @@ public final class GatedDeltaNetCache: LayerCache, @unchecked Sendable {
     var arrays: [String: MLXArray] = [:]
     if let convState { arrays["conv"] = convState }
     if let recurrentState { arrays["state"] = recurrentState }
+    if let pleConvState { arrays["ple_conv"] = pleConvState }
+    if let pleTokens { arrays["ple_tokens"] = pleTokens }
     return arrays.isEmpty ? nil : arrays
   }
 
   public func load(_ arrays: [String: MLXArray], offset: Int) -> Bool {
     convState = arrays["conv"]
     recurrentState = arrays["state"]
+    pleConvState = arrays["ple_conv"]
+    pleTokens = arrays["ple_tokens"]
     self.offset = offset
     return true
   }

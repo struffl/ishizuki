@@ -48,6 +48,11 @@ public enum BonsaiRuntime {
   /// streamed model.
   public nonisolated(unsafe) static var expertSlots = 16
 
+  /// Rows of the n-gram table a single fetch may ask for. A token costs one row per head, so
+  /// this is the prefill chunk times the head count, and the buffer it sizes is small enough
+  /// that being generous costs nothing.
+  public nonisolated(unsafe) static var engramRows = 16384
+
   // Share of the wide projections to prefill on the Neural Engine, or nil for none.
   public nonisolated(unsafe) static var aneOffload: ANEOffload?
 

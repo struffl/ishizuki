@@ -15,6 +15,10 @@ public final class SourceCheckpoint: @unchecked Sendable {
   public let textConfig: [String: Any]
 
   private let shardOf: [String: String]
+  /// Names this checkpoint does not hold, each cut from one that it does. A fused expert bank
+  /// is the only case: upstream stacks a layer's gate and up projections into one tensor, and
+  /// everything downstream reads them apart.
+  private var derived: [String: (source: String, half: Int?)] = [:]
   private let lock = NSLock()
   private var opened: [String: [String: MLXArray]] = [:]
   private var order: [String] = []
@@ -50,14 +54,46 @@ public final class SourceCheckpoint: @unchecked Sendable {
     } else {
       throw BonsaiError.missingWeight("no safetensors in \(directory.path)")
     }
+
+    for name in shardOf.keys {
+      guard let base = Self.fusedExpertBase(name) else { continue }
+      if name.hasSuffix(".gate_up_proj") {
+        derived[base + ".gate_proj.weight"] = (source: name, half: 0)
+        derived[base + ".up_proj.weight"] = (source: name, half: 1)
+      } else {
+        derived[base + ".down_proj.weight"] = (source: name, half: nil)
+      }
+    }
   }
 
-  public var tensorNames: [String] { Array(shardOf.keys) }
+  /// `…mlp.experts.gate_up_proj` and `…mlp.experts.down_proj` become `…mlp.switch_mlp.*`,
+  /// which is where this runtime looks for a bank of experts.
+  private static func fusedExpertBase(_ name: String) -> String? {
+    for suffix in [".mlp.experts.gate_up_proj", ".mlp.experts.down_proj"]
+    where name.hasSuffix(suffix) {
+      return String(name.dropLast(suffix.count)) + ".mlp.switch_mlp"
+    }
+    return nil
+  }
 
-  public func has(_ name: String) -> Bool { shardOf[name] != nil }
+  public var tensorNames: [String] {
+    Array(shardOf.keys.filter { Self.fusedExpertBase($0) == nil }) + Array(derived.keys)
+  }
+
+  public func has(_ name: String) -> Bool {
+    (shardOf[name] != nil && Self.fusedExpertBase(name) == nil) || derived[name] != nil
+  }
 
   /// The tensor, still unevaluated. Reading it costs nothing until it is used.
   public func tensor(_ name: String) throws -> MLXArray {
+    if let cut = derived[name] {
+      let fused = try tensor(cut.source)
+      guard let half = cut.half else { return fused }
+      // `linear(x, gate_up[e])` writes gate into the first half of its output and up into the
+      // second, so the split is along the output axis, not the input one.
+      let width = fused.dim(1) / 2
+      return fused[0..., (half * width)..<((half + 1) * width), 0...]
+    }
     guard let shard = shardOf[name] else {
       throw BonsaiError.missingWeight(name)
     }

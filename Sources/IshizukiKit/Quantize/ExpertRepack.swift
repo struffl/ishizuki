@@ -26,8 +26,18 @@ public enum ExpertRepack {
   static let projections = ["gate_proj", "up_proj", "down_proj"]
   static let components = ["weight", "scales", "biases"]
 
-  static func expertPath(_ layer: Int, _ projection: String, _ component: String) -> String {
-    "language_model.model.layers.\(layer).mlp.switch_mlp.\(projection).\(component)"
+  /// A multimodal pack nests the language model; a text-only one does not. Reading the wrong
+  /// one finds no experts at all, which reads as a model that routes through none.
+  static func prefix(_ store: WeightStore) -> String {
+    store.has("language_model.model.norm.weight")
+      || store.names(prefix: "language_model.model.layers.").first != nil
+      ? "language_model." : ""
+  }
+
+  static func expertPath(
+    _ prefix: String, _ layer: Int, _ projection: String, _ component: String
+  ) -> String {
+    "\(prefix)model.layers.\(layer).mlp.switch_mlp.\(projection).\(component)"
   }
 
   /// Splits `source` into `destination`, returning what it wrote.
@@ -42,6 +52,7 @@ public enum ExpertRepack {
     }
 
     let store = try WeightStore(directory: source)
+    let tensorPrefix = prefix(store)
     let sparse = text.isSparse
     let layers = (0..<text.numHiddenLayers).filter { sparse[$0] }
 
@@ -56,7 +67,7 @@ public enum ExpertRepack {
     }
     for projection in projections {
       for component in components {
-        let name = expertPath(first, projection, component)
+        let name = expertPath(tensorPrefix, first, projection, component)
         guard store.has(name) else { continue }
         let array = try store(name)
         described.append(
@@ -75,7 +86,7 @@ public enum ExpertRepack {
       var blob = Data(count: expertCount * layout.stride)
       for (name, part) in layout.parts {
         let pieces = name.split(separator: ".")
-        let full = expertPath(layer, String(pieces[0]), String(pieces[1]))
+        let full = expertPath(tensorPrefix, layer, String(pieces[0]), String(pieces[1]))
         let array = try store(full)
         guard array.dim(0) == expertCount else {
           throw BonsaiError.shapeMismatch(

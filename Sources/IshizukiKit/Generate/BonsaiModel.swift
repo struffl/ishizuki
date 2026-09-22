@@ -30,7 +30,8 @@ public final class BonsaiModel: @unchecked Sendable {
       // A repacked sparse model keeps its routed experts beside the shards; opening them here
       // is what makes the layers stream rather than load.
       store: try WeightStore(directory: directory)
-        .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots),
+        .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots)
+        .openingEngrams(at: directory, capacity: BonsaiRuntime.engramRows),
       tokenizer: try BonsaiTokenizer(directory: directory, config: config),
       directory: directory, ropeScaling: ropeScaling, hot: hot)
   }

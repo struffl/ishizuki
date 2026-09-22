@@ -212,6 +212,23 @@ public struct BonsaiConfig: Codable, Sendable {
     public var bosTokenId: Int?
     public var eosTokenId: Int?
 
+    /// Widened-residual geometry. `hcCount` streams, mixed through a gate of rank `hcLowrank`.
+    /// Absent, or one stream, means the ordinary residual.
+    public var hcCount: Int?
+    public var hcLowrank: Int?
+
+    /// Per-layer-embedding geometry: which layers carry a PLE block, and the shape of the
+    /// n-gram table it reads.
+    public var pleLayerIds: [Int]?
+    public var pleEmbedDim: Int?
+    public var pleConvKernelSize: Int?
+    public var ngramSize: Int?
+    public var headsPerNgram: Int?
+
+    /// How many tokens a query is allowed to attend to. A budget at or above the context is no
+    /// budget at all, which is the only case this runtime reads.
+    public var indexerBudget: Int?
+
     enum CodingKeys: String, CodingKey {
       case modelType = "model_type"
       case hiddenSize = "hidden_size"
@@ -245,11 +262,32 @@ public struct BonsaiConfig: Codable, Sendable {
       case mlpOnlyLayers = "mlp_only_layers"
       case bosTokenId = "bos_token_id"
       case eosTokenId = "eos_token_id"
+      case hcCount = "hc_count"
+      case hcLowrank = "hc_lowrank"
+      case pleLayerIds = "ple_layer_ids"
+      case pleEmbedDim = "ple_embed_dim"
+      case pleConvKernelSize = "ple_conv_kernel_size"
+      case ngramSize = "ngram_size"
+      case headsPerNgram = "heads_per_ngram"
+      case indexerBudget = "indexer_budget"
+    }
+
+    /// Whether the residual is widened. Every layer carries the streams, and the final norm is
+    /// the mixer's rather than a `model.norm` of its own.
+    public var usesHyperConnections: Bool { (hcCount ?? 1) > 1 }
+
+    /// Which layer holds the PLE block, if any. Upstream numbers these from one.
+    public var pleLayer: Int? {
+      guard let ids = pleLayerIds, let first = ids.first, first > 0 else { return nil }
+      return first - 1
     }
 
     public var isFullAttention: [Bool] {
       if let types = layerTypes, types.count == numHiddenLayers {
-        return types.map { $0 == "full_attention" }
+        // Upstream names a full-attention layer for whatever it does on top of the attention —
+        // `qwen_sparse_attention` when an indexer picks the keys — so the one name that means
+        // something here is the recurrent one.
+        return types.map { $0 != "linear_attention" }
       }
       let interval = fullAttentionInterval ?? 4
       return (0..<numHiddenLayers).map { ($0 + 1) % interval == 0 }
@@ -346,6 +384,8 @@ public struct BonsaiConfig: Codable, Sendable {
       "num_experts", "num_experts_per_tok", "moe_intermediate_size",
       "shared_expert_intermediate_size", "norm_topk_prob", "decoder_sparse_step",
       "mlp_only_layers", "mtp_num_hidden_layers",
+      "hc_count", "hc_lowrank", "ple_layer_ids", "ple_embed_dim", "ple_conv_kernel_size",
+      "ngram_size", "heads_per_ngram", "indexer_budget",
     ] where text[key] == nil {
       if let value = o[key] { text[key] = value }
     }
@@ -404,7 +444,12 @@ public struct BonsaiConfig: Codable, Sendable {
     }
     let modelType = o["model_type"] as? String ?? "qwen3"
 
-    var rope: [String: Any] = ["rope_theta": double("rope_theta") ?? 1_000_000]
+    var rope: [String: Any] =
+      (o["rope_parameters"] as? [String: Any])
+      ?? ["rope_theta": double("rope_theta") ?? 1_000_000]
+    if rope["rope_type"] == nil, let type = rope["type"] as? String {
+      rope["rope_type"] = type
+    }
     if let scaling = o["rope_scaling"] as? [String: Any] {
       if let type = scaling["rope_type"] as? String { rope["rope_type"] = type }
       if let factor = (scaling["factor"] as? NSNumber)?.doubleValue { rope["factor"] = factor }
@@ -433,6 +478,19 @@ public struct BonsaiConfig: Codable, Sendable {
     ]
     if let bos = int("bos_token_id") { text["bos_token_id"] = bos }
     if let eos = int("eos_token_id") { text["eos_token_id"] = eos }
+    for key in [
+      "attn_output_gate", "output_gate_type", "full_attention_interval",
+      "partial_rotary_factor", "mtp_num_hidden_layers",
+      "num_experts", "num_experts_per_tok", "moe_intermediate_size",
+      "shared_expert_intermediate_size", "norm_topk_prob", "decoder_sparse_step",
+      "mlp_only_layers",
+      "linear_num_value_heads", "linear_num_key_heads", "linear_value_head_dim",
+      "linear_key_head_dim", "linear_conv_kernel_dim",
+      "hc_count", "hc_lowrank", "ple_layer_ids", "ple_embed_dim", "ple_conv_kernel_size",
+      "ngram_size", "heads_per_ngram", "indexer_budget",
+    ] {
+      if let value = o[key] { text[key] = value }
+    }
 
     let quantization =
       o["quantization"] as? [String: Any]
@@ -451,7 +509,9 @@ public struct BonsaiConfig: Codable, Sendable {
 
   public static let hadamardModelType = "prism_hadamard_qwen35"
   public static let legacyModelTypes: Set<String> = ["qwen3"]
-  public static let affineModelTypes: Set<String> = ["qwen3_5", "qwen3_5_moe"]
+  public static let affineModelTypes: Set<String> = [
+    "qwen3_5", "qwen3_5_moe", "qwen4_exp", "qwen4_exp_text",
+  ]
 
   /// Which family of packing a checkpoint uses. The rotated Bonsai packs carry a sign vector
   /// and a Hadamard block per module; everything else is plain MLX affine quantization, at one

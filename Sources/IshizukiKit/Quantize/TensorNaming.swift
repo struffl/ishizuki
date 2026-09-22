@@ -18,6 +18,12 @@ public enum TensorNaming {
     names.contains { $0.hasPrefix("model.language_model.") }
   }
 
+  /// Whether a checkpoint is still as its author wrote it, rather than one MLX has converted.
+  /// A converted pack carries a `.scales` beside every quantized weight; nothing upstream does.
+  public static func isUpstream(_ names: [String]) -> Bool {
+    !names.contains { $0.hasSuffix(".scales") }
+  }
+
   public static func canonical(_ name: String) -> String {
     if name.hasPrefix("model.language_model.") {
       return "language_model.model." + name.dropFirst("model.language_model.".count)
@@ -40,7 +46,9 @@ public enum TensorNaming {
 
   /// Architectures whose RMSNorm weights are stored zero-centred: the checkpoint holds `w` and
   /// the norm is defined as scaling by `1 + w`, not by `w`.
-  public static let zeroCentredNormModelTypes: Set<String> = ["qwen3_5", "qwen3_5_moe"]
+  public static let zeroCentredNormModelTypes: Set<String> = [
+    "qwen3_5", "qwen3_5_moe", "qwen4_exp", "qwen4_exp_text",
+  ]
 
   public static func usesZeroCentredNorms(_ config: [String: Any]) -> Bool {
     guard let modelType = config["model_type"] as? String else { return false }
@@ -66,6 +74,9 @@ public enum TensorNaming {
   private static let centredNormModules: Set<String> = [
     "input_layernorm", "post_attention_layernorm", "q_norm", "k_norm", "norm",
     "pre_fc_norm_embedding", "pre_fc_norm_hidden",
+    // The hyper-connected architectures: the gate's own norm, the three the PLE block reads,
+    // and the indexer's two.
+    "hc_norm", "norm_key", "norm_query", "norm_conv", "q_layernorm", "k_layernorm",
   ]
 
   /// Convolution weights are laid out channels-second by PyTorch and channels-last by MLX, so

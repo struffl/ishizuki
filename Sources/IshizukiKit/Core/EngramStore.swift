@@ -22,11 +22,18 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   public var parts: Int
   public var rowsPerPart: Int
   public var dtype: String
+  /// One multiplier per position in the n-gram, and the token a shift refuses to reach over.
+  /// These are the checkpoint's own: upstream generates them from a seed, but a derived model
+  /// may ship something else, and what it ships is what it was trained with.
+  public var multipliers: [Int]
+  public var eosTokenId: Int
 
   public init(
     ngramSize: Int, heads: Int, headDim: Int, vocabSizes: [Int], offsets: [Int],
-    parts: Int, rowsPerPart: Int, dtype: String
+    parts: Int, rowsPerPart: Int, dtype: String, multipliers: [Int] = [], eosTokenId: Int = 0
   ) {
+    self.multipliers = multipliers
+    self.eosTokenId = eosTokenId
     self.ngramSize = ngramSize
     self.heads = heads
     self.headDim = headDim
@@ -38,8 +45,12 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   }
 
   /// The heads laid end to end, each starting where the last one ended.
+  /// How many heads share one n-gram order.
+  public var headsPerNgram: Int { heads / max(ngramSize - 1, 1) }
+
   public static func blocked(
-    ngramSize: Int, headDim: Int, vocabSizes: [Int], parts: Int, dtype: String
+    ngramSize: Int, headDim: Int, vocabSizes: [Int], parts: Int, dtype: String,
+    multipliers: [Int] = [], eosTokenId: Int = 0
   ) -> EngramLayout {
     var offsets: [Int] = []
     var running = 0
@@ -50,7 +61,8 @@ public struct EngramLayout: Codable, Sendable, Equatable {
     return EngramLayout(
       ngramSize: ngramSize, heads: vocabSizes.count, headDim: headDim, vocabSizes: vocabSizes,
       offsets: offsets, parts: parts,
-      rowsPerPart: (running + parts - 1) / parts, dtype: dtype)
+      rowsPerPart: (running + parts - 1) / parts, dtype: dtype, multipliers: multipliers,
+      eosTokenId: eosTokenId)
   }
 
   public var type: DType {
@@ -68,6 +80,8 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   public var rowBytes: Int {
     get throws { headDim * (try type.size) }
   }
+
+  public static let layoutFile = "engrams/layout.json"
 
   public static func fileName(part: Int) -> String {
     "engrams/part_\(String(format: "%03d", part)).bin"
