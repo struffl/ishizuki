@@ -13,13 +13,14 @@ import SwiftUI
 #endif
 
 private let backdropImage: Image = {
-  guard let url = Bundle.main.url(forResource: "Backdrop", withExtension: "jpg")
-  else { return Image(systemName: "photo") }
   #if os(macOS)
-    guard let image = NSImage(contentsOf: url) else { return Image(systemName: "photo") }
+    guard let url = Bundle.main.url(forResource: "Backdrop", withExtension: "jpg"),
+      let image = NSImage(contentsOf: url)
+    else { return Image(systemName: "photo") }
     return Image(nsImage: image)
   #else
-    guard let data = try? Data(contentsOf: url), let image = UIImage(data: data)
+    guard let url = Bundle.main.url(forResource: "Backdrop-iOS", withExtension: "jpg"),
+      let data = try? Data(contentsOf: url), let image = UIImage(data: data)
     else { return Image(systemName: "photo") }
     return Image(uiImage: image)
   #endif
