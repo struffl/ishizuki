@@ -37,7 +37,7 @@ struct WindowBackdrop: View {
       // Scaled up before the blur samples past its edges, so the blur has margin to draw from
       // instead of smearing in transparency at the frame's border.
       .scaleEffect(1.1)
-      .blur(radius: 4)
+      .blur(radius: 12)
       .clipped()
       .overlay { Sheen() }
       .ignoresSafeArea()
