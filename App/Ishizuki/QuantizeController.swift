@@ -56,6 +56,11 @@ final class QuantizeController {
       log.line(
         "estimate  \(ReadoutFormat.bytes(plan.estimateBytes))"
           + "  from \(ReadoutFormat.bytes(plan.sourceBytes))")
+      if plan.engramBytes > 0 {
+        log.line(
+          "n-grams   \(ReadoutFormat.bytes(plan.engramBytes))"
+            + "  carried whole, streamed from disk rather than held")
+      }
       log.line("output    \(plan.destination.path)")
       log.line("")
 

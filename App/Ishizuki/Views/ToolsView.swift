@@ -28,9 +28,7 @@ struct ToolsView: View {
 
   @ViewBuilder private var benchSection: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Measure")
-        .font(.system(.subheadline, weight: .semibold))
-        .foregroundStyle(.secondary)
+      SectionHeader(title: "Measure")
 
       GlassCard {
         VStack(alignment: .leading, spacing: 10) {
@@ -70,9 +68,7 @@ struct ToolsView: View {
 
   @ViewBuilder private var quantizeSection: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Quantize")
-        .font(.system(.subheadline, weight: .semibold))
-        .foregroundStyle(.secondary)
+      SectionHeader(title: "Quantize")
 
       GlassCard {
         if quantize.candidates.isEmpty {
@@ -106,6 +102,16 @@ struct ToolsView: View {
               .font(.footnote)
               .foregroundStyle(.secondary)
 
+            // A download in progress is a config and some of the weights, which is what a
+            // checkpoint looks like. Saying so beats a Build button that is greyed out for
+            // reasons the window keeps to itself.
+            if let source = quantize.source, !source.isComplete {
+              Field(label: "waiting") {
+                Label(source.readiness.summary, systemImage: "arrow.down.circle")
+                  .foregroundStyle(.orange)
+              }
+            }
+
             if let plan = quantize.plan() {
               VStack(alignment: .leading, spacing: 2) {
                 Field(label: "estimate") {
@@ -114,6 +120,15 @@ struct ToolsView: View {
                       + "  from \(ReadoutFormat.bytes(plan.sourceBytes))"
                   )
                   .foregroundStyle(.secondary)
+                }
+                if plan.engramBytes > 0 {
+                  Field(label: "n-grams") {
+                    Text(
+                      "\(ReadoutFormat.bytes(plan.engramBytes)) carried whole"
+                        + "  ·  read from disk, not held"
+                    )
+                    .foregroundStyle(.secondary)
+                  }
                 }
                 Field(label: "output") {
                   Text(plan.destination.lastPathComponent).foregroundStyle(.secondary)
@@ -138,7 +153,9 @@ struct ToolsView: View {
             HStack {
               Button("Build Pack") { quantize.start(on: runner) }
                 .buttonStyle(.glassProminent)
-                .disabled(runner.isRunning || quantize.plan() == nil)
+                .disabled(
+                  runner.isRunning || quantize.plan() == nil
+                    || quantize.source?.isComplete == false)
               Button("Rescan") {
                 quantize.rescan(roots: controller.library.searchRoots())
               }

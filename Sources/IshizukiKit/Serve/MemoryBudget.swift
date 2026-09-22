@@ -98,6 +98,35 @@ public final class MemoryBudget: @unchecked Sendable {
     return total > 0 ? total : nil
   }
 
+  /// Everything a pack occupies, rather than everything it will hold in memory.
+  ///
+  /// The two used to be the same number. They stopped being the same when a pack started
+  /// keeping parts of itself beside the shards to be read a piece at a time — a bank of routed
+  /// experts, an n-gram table — which weigh nothing at load and can be most of what is on disk.
+  /// A budget wants the first number; a row telling someone what deleting this would free
+  /// wants the second.
+  public static func diskBytes(in directory: URL) -> Int? {
+    guard directory.pathExtension.lowercased() != "gguf" else {
+      return weightBytes(in: directory)
+    }
+    let manager = FileManager.default
+    var total = weightBytes(in: directory) ?? 0
+    for folder in ["engrams", "experts"] {
+      let url = directory.appending(path: folder)
+      for name in (try? manager.contentsOfDirectory(atPath: url.path)) ?? [] {
+        let file = url.appending(path: name).resolvingSymlinksInPath()
+        total += (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+      }
+    }
+    return total > 0 ? total : nil
+  }
+
+  /// What a pack keeps beside its shards to read a piece at a time, which is the part of it
+  /// that never becomes resident.
+  public static func streamedBytes(in directory: URL) -> Int {
+    (diskBytes(in: directory) ?? 0) - (weightBytes(in: directory) ?? 0)
+  }
+
   public var tier: Tier {
     lock.lock()
     defer { lock.unlock() }

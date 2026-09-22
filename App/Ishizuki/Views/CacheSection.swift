@@ -14,9 +14,7 @@ struct CacheSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Prefix cache")
-        .font(.system(.subheadline, weight: .semibold))
-        .foregroundStyle(.secondary)
+      SectionHeader(title: "Prefix cache")
 
       GlassCard {
         VStack(alignment: .leading, spacing: 10) {

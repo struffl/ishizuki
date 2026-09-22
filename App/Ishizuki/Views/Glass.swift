@@ -174,16 +174,26 @@ extension View {
       }
   }
 
-  /// The sheen that tells the eye "glass" rather than "blurred photo": a highlight pooling at
-  /// the top of the shape, and a rim that catches the light the same way a real edge would.
+  /// The sheen that tells the eye "glass" rather than "blurred photo": light catching the top
+  /// edge, and a rim that picks it up the same way a real edge would.
+  ///
+  /// The highlight is a band of fixed height rather than a share of the shape. As a share it
+  /// ran two thirds of the way down, which is a different thing at every size: on a card
+  /// holding a paragraph it lifted the material almost to white underneath the text, and on a
+  /// pill two lines tall it was a ramp across the whole control — a gradient nobody drew on
+  /// purpose. Real glass catches the light at its edge whatever size the pane is, so this does
+  /// the same, and a tall card and a small chip now read as the same material.
   func gloss(_ shape: some Shape) -> some View {
     overlay {
-      shape
-        .fill(
+      Color.clear
+        .overlay(alignment: .top) {
           LinearGradient(
-            colors: [.white.opacity(0.4), .white.opacity(0)],
-            startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.65))
-        )
+            colors: [.white.opacity(0.22), .white.opacity(0)],
+            startPoint: .top, endPoint: .bottom
+          )
+          .frame(height: 14)
+        }
+        .clipShape(shape)
         .blendMode(.overlay)
         .allowsHitTesting(false)
     }
@@ -191,9 +201,9 @@ extension View {
       shape
         .stroke(
           LinearGradient(
-            colors: [.white.opacity(0.6), .white.opacity(0.05)],
+            colors: [.white.opacity(0.28), .white.opacity(0.04)],
             startPoint: .top, endPoint: .bottom),
-          lineWidth: 1
+          lineWidth: 0.5
         )
         .allowsHitTesting(false)
     }
@@ -220,16 +230,36 @@ struct GlassCard<Content: View>: View {
   }
 }
 
+/// The label over a panel, which is the one piece of text in the window with nothing behind
+/// it but the photograph.
+///
+/// So it is not styled like a caption. Secondary grey is right on a solid background and
+/// illegible over a photograph whose brightness changes across the width of the word. A halo
+/// behind the glyphs was the first attempt and was not enough: a shadow gives an edge to sit
+/// against but leaves the strokes themselves competing with whatever is behind them.
+///
+/// So it gets the same plate everything else in this window gets. The dense material and no
+/// sheen, which is what the small chips use — a header is two words on its own, and the wash
+/// that suits a panel is the thing small type cannot be read under.
+struct SectionHeader: View {
+  let title: String
+
+  var body: some View {
+    Text(title)
+      .font(.system(.subheadline, weight: .semibold))
+      .foregroundStyle(.primary)
+      .chipPlate(radius: 7, horizontal: 9, vertical: 3)
+      .fixedSize()
+  }
+}
+
 struct GlassSection<Content: View>: View {
   let title: String
   @ViewBuilder var content: Content
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(title)
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .padding(.leading, 4)
+      SectionHeader(title: title)
       GlassCard { content }
     }
   }

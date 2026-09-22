@@ -22,7 +22,11 @@ public struct ModelCatalog: Sendable {
     public let format: Format
     /// The pack's directory, or the `.gguf` file itself.
     public let url: URL
+    /// What the pack occupies on disk, all of it.
     public let byteCount: Int
+    /// The share of that which is read a piece at a time rather than held: a streamed expert
+    /// bank, an n-gram table. Zero for a pack that holds all of itself.
+    public let streamedBytes: Int
     public let quantization: String
     public let hasVision: Bool
     public let hasMTP: Bool
@@ -115,6 +119,8 @@ public struct ModelCatalog: Sendable {
       format: .gguf,
       url: file,
       byteCount: size ?? 0,
+      // One file, all of it read into memory: nothing to stream.
+      streamedBytes: 0,
       quantization: dominantType(of: opened),
       // The tower travels as its own file in this format, so a model is text-only until an
       // mmproj is found beside it.
@@ -143,8 +149,20 @@ public struct ModelCatalog: Sendable {
 
   private static func inspect(_ directory: URL) -> Entry? {
     let fm = FileManager.default
-    guard fm.fileExists(atPath: directory.appending(path: "config.json").path),
-      let config = try? BonsaiConfig.load(directory: directory),
+    let configURL = directory.appending(path: "config.json")
+    guard fm.fileExists(atPath: configURL.path) else { return nil }
+
+    // A checkpoint that was never quantized is not something this can serve, and it does not
+    // announce itself: read as a pack config it comes back with the schema's own defaults and
+    // presents as a 2-bit model whose weights carry no scales. It would list, offer a Use
+    // button, and fail on the first projection. The quantize scanner looks for exactly these,
+    // so this is the same test read the other way round.
+    guard let raw = try? Data(contentsOf: configURL),
+      let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+      object["quantization"] != nil || object["quantization_config"] != nil
+    else { return nil }
+
+    guard let config = try? BonsaiConfig.load(directory: directory),
       (try? config.validate()) != nil
     else { return nil }
 
@@ -161,7 +179,8 @@ public struct ModelCatalog: Sendable {
       id: name(for: directory),
       format: .pack,
       url: directory,
-      byteCount: MemoryBudget.weightBytes(in: directory) ?? 0,
+      byteCount: MemoryBudget.diskBytes(in: directory) ?? 0,
+      streamedBytes: MemoryBudget.streamedBytes(in: directory),
       quantization: "\(quantization) g\(config.quantization.groupSize)",
       hasVision: config.components?.vision == true,
       hasMTP: config.components?.mtp == true,

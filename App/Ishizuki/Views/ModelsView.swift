@@ -94,24 +94,31 @@ struct ModelsView: View {
         }
 
         section("This Mac") {
-          Text(Machine.summary)
-            .font(.system(.footnote, design: .monospaced))
-            .foregroundStyle(.secondary)
+          GlassCard {
+            Text(Machine.summary)
+              .font(.system(.footnote, design: .monospaced))
+              .foregroundStyle(.secondary)
+          }
         }
 
         section("Folders") {
-          ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
-            FolderRow(url: root, removable: false, library: library)
+          GlassCard {
+            VStack(alignment: .leading, spacing: 6) {
+              ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
+                FolderRow(url: root, removable: false, library: library)
+              }
+              ForEach(library.grantedFolders, id: \.self) { root in
+                FolderRow(url: root, removable: true, library: library)
+              }
+              Button("Add Folder…") {
+                library.grantFolder()
+                controller.rescan()
+              }
+              .buttonStyle(.glass)
+              .controlSize(.small)
+              .padding(.top, 2)
+            }
           }
-          ForEach(library.grantedFolders, id: \.self) { root in
-            FolderRow(url: root, removable: true, library: library)
-          }
-          Button("Add Folder…") {
-            library.grantFolder()
-            controller.rescan()
-          }
-          .buttonStyle(.glass)
-          .controlSize(.small)
         }
       }
       .padding(16)
@@ -144,9 +151,7 @@ struct ModelsView: View {
     _ title: String, @ViewBuilder content: () -> Content
   ) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(title)
-        .font(.system(.subheadline, weight: .semibold))
-        .foregroundStyle(.primary.opacity(0.82))
+      SectionHeader(title: title)
       content()
     }
   }
@@ -162,6 +167,11 @@ private struct InstalledRow: View {
   private var detail: String {
     var parts = [entry.format.rawValue, entry.quantization]
     parts.append(ReadoutFormat.gigabytes(entry.byteCount))
+    // Most of one of these packs is a table read a row at a time, so the size on disk says
+    // very little about what it will cost to run. Say which part never becomes resident.
+    if entry.streamedBytes > 0 {
+      parts.append(ReadoutFormat.gigabytes(entry.streamedBytes) + " streamed")
+    }
     parts.append(MemoryBudget.tokens(entry.contextTokens) + " ctx")
     if entry.hasVision { parts.append("vision") }
     if entry.hasMTP { parts.append("mtp") }
@@ -170,8 +180,20 @@ private struct InstalledRow: View {
 
   var body: some View {
     HStack(spacing: 10) {
-      Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+      // The dot is what the eye reads as "this one", so it is what the hand goes for. It
+      // switches packs exactly as the button on the right does; the button stays because a
+      // row with only a dot to click does not look like it can be clicked.
+      Button {
+        controller.activate(entry.id)
+      } label: {
+        Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+          .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+          .contentShape(.circle)
+      }
+      .buttonStyle(.plain)
+      .disabled(isActive)
+      .accessibilityLabel(isActive ? "\(entry.displayName), in use" : "Use \(entry.displayName)")
+      .help(isActive ? "This pack is answering" : "Answer with this pack")
       VStack(alignment: .leading, spacing: 2) {
         Text(entry.displayName).font(.system(.callout, weight: .medium))
         Text(detail).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
