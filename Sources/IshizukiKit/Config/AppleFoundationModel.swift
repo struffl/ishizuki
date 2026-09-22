@@ -17,6 +17,20 @@ public enum AppleFoundationModel: String, CaseIterable, Sendable, Identifiable, 
 
   public var id: String { rawValue }
 
+  /// The models this build may actually offer.
+  ///
+  /// Private Cloud Compute is gated on an entitlement Apple assigns to a developer account,
+  /// and only to accounts enrolled in the App Store Small Business Program. Without it the
+  /// framework does not decline politely: `FoundationModels` trips an internal assertion part
+  /// way through the turn, which is a Swift trap and takes the process with it rather than
+  /// failing the request. So an unentitled build does not list it at all.
+  ///
+  /// If the entitlement is granted, add `.privateCloudCompute` back here and nothing else has
+  /// to change — the session, the sheet and the reasoning level are all still wired.
+  public static let offered: [AppleFoundationModel] = [.onDevice]
+
+  public var isOffered: Bool { Self.offered.contains(self) }
+
   public var displayName: String {
     switch self {
     case .onDevice: return "Apple Intelligence"

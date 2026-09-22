@@ -37,7 +37,7 @@ struct ModelsView: View {
 
         if #available(macOS 27.0, *) {
           section("Apple Intelligence") {
-            ForEach(AppleFoundationModel.allCases) { model in
+            ForEach(AppleFoundationModel.offered) { model in
               AppleModelRow(model: model, controller: controller)
             }
           }

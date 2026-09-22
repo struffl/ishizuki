@@ -71,7 +71,7 @@ struct ChatReadoutBar: View {
   @ViewBuilder private var modelSwitcher: some View {
     Menu {
       Section("Apple Intelligence") {
-        ForEach(AppleFoundationModel.allCases) { model in
+        ForEach(AppleFoundationModel.offered) { model in
           Button {
             controller.settings.appleModel = model
           } label: {

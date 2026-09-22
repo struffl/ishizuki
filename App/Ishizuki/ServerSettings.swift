@@ -70,8 +70,11 @@ final class ServerSettings {
   }
 
   /// nil when the resident pack is answering.
+  ///
+  /// A model this build no longer offers reads as nil, so a choice saved before it was
+  /// withdrawn cannot start a turn that would take the app down.
   var appleModel: AppleFoundationModel? {
-    get { AppleFoundationModel(rawValue: appleModelID) }
+    get { AppleFoundationModel(rawValue: appleModelID).flatMap { $0.isOffered ? $0 : nil } }
     set { appleModelID = newValue?.rawValue ?? "" }
   }
 }
