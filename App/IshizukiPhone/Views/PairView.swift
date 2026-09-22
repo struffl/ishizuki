@@ -76,6 +76,7 @@ struct PairView: View {
           }
         }
       }
+      .glassList()
       .navigationTitle("Find your Mac")
       .task {
         store.browser.start()

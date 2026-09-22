@@ -50,6 +50,9 @@ struct TranscriptRowView: View {
   private var answer: some View {
     StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .background(.thinMaterial, in: .rect(cornerRadius: 14))
       .textSelection(.enabled)
       .contextMenu {
         Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }

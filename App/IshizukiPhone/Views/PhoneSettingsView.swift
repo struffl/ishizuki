@@ -94,6 +94,7 @@ struct PhoneSettingsView: View {
           Button("Forget this Mac", role: .destructive) { forgetting = true }
         }
       }
+      .glassList()
       .navigationTitle(store.known?.name ?? "Mac")
       .refreshable { await refresh() }
       .task { await refresh() }

@@ -32,3 +32,12 @@ extension PlatformFont {
     monospacedSystemFont(ofSize: size, weight: .regular)
   }
 }
+
+extension View {
+  /// A List or Form's rows, turned from an opaque platter into frosted glass over the window's
+  /// backdrop photo.
+  func glassList() -> some View {
+    scrollContentBackground(.hidden)
+      .listRowBackground(Rectangle().fill(.ultraThinMaterial))
+  }
+}

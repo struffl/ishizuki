@@ -39,21 +39,24 @@ struct RootView: View {
   let local: LocalSession
 
   var body: some View {
-    if store.known == nil {
-      PairView(store: store, local: local)
-    } else {
-      TabView {
-        Tab("Chats", systemImage: "bubble.left.and.text.bubble.right") {
-          ChatListView(store: store, chats: chats, local: local)
-        }
-        Tab("Files", systemImage: "folder") {
-          FilesView(store: store, chats: chats)
-        }
-        Tab("Shell", systemImage: "terminal") {
-          ShellView(store: store, chats: chats)
-        }
-        Tab("Mac", systemImage: "desktopcomputer") {
-          PhoneSettingsView(store: store, chats: chats, local: local)
+    ZStack {
+      WindowBackdrop()
+      if store.known == nil {
+        PairView(store: store, local: local)
+      } else {
+        TabView {
+          Tab("Chats", systemImage: "bubble.left.and.text.bubble.right") {
+            ChatListView(store: store, chats: chats, local: local)
+          }
+          Tab("Files", systemImage: "folder") {
+            FilesView(store: store, chats: chats)
+          }
+          Tab("Shell", systemImage: "terminal") {
+            ShellView(store: store, chats: chats)
+          }
+          Tab("Mac", systemImage: "desktopcomputer") {
+            PhoneSettingsView(store: store, chats: chats, local: local)
+          }
         }
       }
     }

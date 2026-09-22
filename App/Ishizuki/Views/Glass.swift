@@ -127,6 +127,7 @@ extension View {
       .padding(.trailing, horizontal)
       .padding(.leading, horizontal + shape.tail)
       .background(.thinMaterial, in: shape)
+      .gloss(shape)
   }
 
   /// A plate cut to a shape of its own, for the bubbles that are not rectangles.
@@ -136,11 +137,13 @@ extension View {
     padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
       .background(.thinMaterial, in: shape)
+      .gloss(shape)
   }
 
-  /// The window lays down a material, which is what lets the panels on it read as layered.
+  /// The window lays down the backdrop photo, which is what the panels on top read as layered
+  /// glass against, rather than the desktop the old flat material used to blur.
   func windowBackdrop() -> some View {
-    containerBackground(.ultraThinMaterial, for: .window)
+    containerBackground(for: .window) { WindowBackdrop() }
   }
 
   /// Anything carrying text sits on this. A thin material rather than clear glass, so small
@@ -151,6 +154,31 @@ extension View {
     padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
       .background(.thinMaterial, in: .rect(cornerRadius: radius))
+      .gloss(.rect(cornerRadius: radius))
+  }
+
+  /// The sheen that tells the eye "glass" rather than "blurred photo": a highlight pooling at
+  /// the top of the shape, and a rim that catches the light the same way a real edge would.
+  func gloss(_ shape: some Shape) -> some View {
+    overlay {
+      shape
+        .fill(
+          LinearGradient(
+            colors: [.white.opacity(0.4), .white.opacity(0)],
+            startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.65))
+        )
+        .blendMode(.overlay)
+        .allowsHitTesting(false)
+    }
+    .overlay {
+      shape
+        .stroke(
+          LinearGradient(
+            colors: [.white.opacity(0.6), .white.opacity(0.05)],
+            startPoint: .top, endPoint: .bottom),
+          lineWidth: 1)
+        .allowsHitTesting(false)
+    }
   }
 }
 
@@ -170,6 +198,7 @@ struct GlassCard<Content: View>: View {
         RoundedRectangle(cornerRadius: radius)
           .strokeBorder(Color.hairline, lineWidth: 1)
       }
+      .gloss(.rect(cornerRadius: radius))
   }
 }
 

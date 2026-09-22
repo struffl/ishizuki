@@ -27,6 +27,7 @@ struct FilesView: View {
           }
         }
       }
+      .glassList()
       .navigationTitle("Files")
       .refreshable { await chats.refresh() }
       .task { if chats.roots.isEmpty { await chats.refresh() } }
@@ -76,6 +77,7 @@ struct DirectoryView: View {
         Text(failure).font(.callout).foregroundStyle(.red)
       }
     }
+    .glassList()
     .navigationTitle(URL(filePath: path).lastPathComponent)
     .navigationBarTitleDisplayMode(.inline)
     .task {
@@ -169,6 +171,8 @@ struct FileView: View {
       }
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.regularMaterial, in: .rect(cornerRadius: 14))
+      .padding(12)
     }
     .navigationTitle(URL(filePath: path).lastPathComponent)
     .navigationBarTitleDisplayMode(.inline)

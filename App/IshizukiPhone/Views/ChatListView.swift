@@ -75,6 +75,7 @@ struct ChatListView: View {
           }
         }
       }
+      .glassList()
       .navigationTitle("Conversations")
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
@@ -173,6 +174,7 @@ struct FolderPicker: View {
           }
         }
       }
+      .glassList()
       .navigationTitle("Work where?")
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
