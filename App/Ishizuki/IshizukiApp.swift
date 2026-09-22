@@ -50,6 +50,10 @@ struct IshizukiApp: App {
     }
     .defaultSize(width: 720, height: 780)
     .keyboardShortcut("j", modifiers: [.command, .shift])
+    // Opened when it is asked for. Left to itself the system reopens whatever was on screen
+    // last, which is how launching the app came to put two windows up every time.
+    .defaultLaunchBehavior(.suppressed)
+    .restorationBehavior(.disabled)
 
     // Its own window, reached from the app menu at Command-comma, rather than a tab behind
     // the dashboard's own content.

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Every conversation that has been had, and what each one was had with. A chat is saved with
-// the pack that answered it and the folder it worked in, so reopening one is not a guess.
+// Every conversation that has been had, gathered under the folder it was had in. A chat is
+// saved with the pack that answered it and the folder it worked in, so reopening one is not a
+// guess — and the folder is picked here rather than from a bar over the transcript.
 
 import IshizukiKit
 import SwiftUI
@@ -14,37 +15,38 @@ struct ChatSidebar: View {
 
   @State private var renaming: SavedChat?
   @State private var draftTitle = ""
+  /// Folders someone has shut. Kept by path rather than by index, so a folder that moves up the
+  /// list as one of its chats is answered does not drag another one's state with it.
+  @State private var collapsed: Set<String> = []
 
   var body: some View {
     List(selection: selection) {
-      ForEach(chat.chats) { saved in
-        row(saved)
-          .tag(saved.id)
-          .contextMenu {
-            Button("Rename…") { beginRenaming(saved) }
-            Button("Delete", role: .destructive) { chat.delete(saved) }
-              .disabled(chat.isRunning(saved))
+      ForEach(chat.folders) { folder in
+        Section {
+          if !collapsed.contains(folder.id) {
+            ForEach(folder.chats) { saved in
+              row(saved)
+                .tag(saved.id)
+                .contextMenu {
+                  Button("Rename…") { beginRenaming(saved) }
+                  if let url = folder.url {
+                    Button("Reveal in Finder") {
+                      NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                  }
+                  Divider()
+                  Button("Delete", role: .destructive) { chat.delete(saved) }
+                    .disabled(chat.isRunning(saved))
+                }
+            }
           }
+        } header: {
+          header(folder)
+        }
       }
     }
     .listStyle(.sidebar)
-    .safeAreaInset(edge: .top) {
-      HStack {
-        Button {
-          chat.startNewChat()
-        } label: {
-          Label("New chat", systemImage: "square.and.pencil")
-        }
-        .buttonStyle(.plain)
-        .font(.subheadline)
-        .frame(minHeight: Metrics.hit)
-        .contentShape(.rect)
-        .help("Start a new conversation")
-        Spacer()
-      }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 6)
-    }
+    .safeAreaInset(edge: .top) { toolbar }
     .alert("Rename chat", isPresented: renamingBinding) {
       TextField("Title", text: $draftTitle)
       Button("Cancel", role: .cancel) { renaming = nil }
@@ -53,6 +55,92 @@ struct ChatSidebar: View {
         renaming = nil
       }
     }
+  }
+
+  /// One button, and everything a new conversation needs to decide: which folder it is in.
+  /// The folder bar that used to sit over the transcript is this menu now.
+  @ViewBuilder private var toolbar: some View {
+    HStack(spacing: 6) {
+      Button {
+        chat.startNewChat()
+      } label: {
+        Label("New chat", systemImage: "square.and.pencil")
+      }
+      .buttonStyle(.plain)
+      .font(.subheadline)
+      .frame(minHeight: Metrics.hit)
+      .contentShape(.rect)
+      .help("Start a new conversation in \(chat.workspace?.lastPathComponent ?? "no folder")")
+
+      Spacer()
+
+      Menu {
+        if let current = chat.workspace {
+          Button("New chat in \(current.lastPathComponent)") { chat.startNewChat(in: current) }
+          Divider()
+        }
+        ForEach(others, id: \.self) { url in
+          Button(url.lastPathComponent) { chat.startNewChat(in: url) }
+        }
+        if !others.isEmpty { Divider() }
+        Button("Other folder…") { chat.startNewChatInChosenFolder() }
+      } label: {
+        Image(systemName: "plus")
+          .font(.subheadline)
+          .hitTarget()
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .accessibilityLabel("New chat in a folder")
+      .help("Start a conversation somewhere else")
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 6)
+  }
+
+  /// Folders worth offering, which is the ones lately worked in minus the one already open.
+  private var others: [URL] {
+    chat.recentWorkspaces.filter { $0 != chat.workspace }.prefix(6).map { $0 }
+  }
+
+  @ViewBuilder private func header(_ folder: ChatController.FolderGroup) -> some View {
+    let shut = collapsed.contains(folder.id)
+    let isOpen = folder.path != nil && folder.path == chat.workspace?.path
+
+    Button {
+      if shut { collapsed.remove(folder.id) } else { collapsed.insert(folder.id) }
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: shut ? "chevron.right" : "chevron.down")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(.tertiary)
+        Image(systemName: folder.path == nil ? "questionmark.folder" : "folder")
+          .font(.footnote)
+          .foregroundStyle(isOpen ? Color.reading : .secondary)
+        Text(folder.name)
+          .font(.system(.footnote, design: .monospaced, weight: .medium))
+          .lineLimit(1)
+          .truncationMode(.head)
+        // Only the folder being worked in says which branch it is on: the others would each
+        // cost a git call on every tick, and none of them is the one about to be changed.
+        if isOpen, let status = chat.git.status {
+          Text(status.summary)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(status.isClean ? Color.secondary : Color.instructing)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        Text("\(folder.chats.count)")
+          .font(.system(size: 10, design: .monospaced))
+          .foregroundStyle(.tertiary)
+      }
+      .frame(minHeight: Metrics.hit)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(.isToggle)
+    .help(folder.path ?? "Conversations with no folder of their own")
   }
 
   private var selection: Binding<SavedChat.ID?> {

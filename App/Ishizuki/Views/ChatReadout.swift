@@ -1,80 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The corner cluster: how much context is spent, how far this turn has come, which pack is
-// answering and how hard it is being asked to think.
+// The corner cluster: what a turn costs, which pack is answering, and how hard it is being
+// asked to think. Context itself is the bar over the composer.
 
 import IshizukiKit
 import SwiftUI
-
-/// Two rings on a disc of glass. The empty part matters as much as the full part, so both
-/// tracks are drawn faintly at nought per cent and the rings grow into them.
-struct ContextDial: View {
-  var used: Int
-  var ceiling: Int
-  var prefill: Double?
-  var decoding: Bool
-
-  private var fraction: Double {
-    ceiling > 0 ? min(1, Double(used) / Double(ceiling)) : 0
-  }
-
-  private var spent: Color {
-    fraction > 0.9 ? .orange : Color.reading
-  }
-
-  var body: some View {
-    ZStack {
-      Circle()
-        .fill(.clear)
-        .glassEffect(.clear, in: .circle)
-        .frame(width: 46, height: 46)
-
-      Circle()
-        .stroke(.quaternary, lineWidth: 4)
-        .frame(width: 32, height: 32)
-      Circle()
-        .trim(from: 0, to: fraction)
-        .stroke(spent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-        .rotationEffect(.degrees(-90))
-        .frame(width: 32, height: 32)
-
-      // The outer track is always there so the turn's progress has somewhere to appear.
-      Circle()
-        .stroke(.quaternary, lineWidth: 2.5)
-        .frame(width: 43, height: 43)
-      if let prefill {
-        Circle()
-          .trim(from: 0, to: max(0.015, min(1, prefill)))
-          .stroke(Color.reading, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-          .rotationEffect(.degrees(-90))
-          .frame(width: 43, height: 43)
-      } else if decoding {
-        Circle()
-          .stroke(Color.generating, lineWidth: 2.5)
-          .frame(width: 43, height: 43)
-      }
-
-      Text(ReadoutFormat.percent(fraction))
-        .font(.system(.footnote, design: .monospaced, weight: .semibold))
-        .foregroundStyle(.secondary)
-    }
-    .frame(width: 50, height: 50)
-    .animation(.easeOut(duration: 0.2), value: fraction)
-    .animation(.easeOut(duration: 0.2), value: prefill)
-    .help(helpText)
-  }
-
-  private var helpText: String {
-    var parts = ["\(ReadoutFormat.group(used)) of \(ReadoutFormat.group(ceiling)) tokens held"]
-    if let prefill {
-      parts.append("reading \(ReadoutFormat.percent(prefill))")
-    } else if decoding {
-      parts.append("writing")
-    }
-    return parts.joined(separator: " · ")
-  }
-}
 
 @available(macOS 27.0, *)
 struct ChatReadoutBar: View {
@@ -95,11 +26,6 @@ struct ChatReadoutBar: View {
         effortDial
       }
       .textPlate(radius: 9, horizontal: 9, vertical: 5)
-      ContextDial(
-        used: chat.readout?.context.peakTokens ?? 0,
-        ceiling: chat.readout?.context.ceilingTokens ?? 0,
-        prefill: chat.prefillFraction,
-        decoding: chat.isGenerating)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 6)

@@ -96,6 +96,52 @@ public final class AgentEngine: @unchecked Sendable {
     }
   }
 
+  /// Pictures already read for this pack, so a conversation carrying an image does not pay
+  /// the tower's price again on every turn that follows it.
+  private final class ImageCache: @unchecked Sendable {
+    private struct Key: Hashable {
+      var path: String
+      var modified: Date?
+      var size: Int?
+    }
+
+    private let lock = NSLock()
+    private var entries: [Key: ProcessedImage] = [:]
+    private var order: [Key] = []
+    private let limit = 24
+
+    private func key(for url: URL) -> Key {
+      let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+      return Key(
+        path: url.path, modified: values?.contentModificationDate, size: values?.fileSize)
+    }
+
+    func image(for url: URL, make: (URL) throws -> ProcessedImage) -> ProcessedImage? {
+      let key = key(for: url)
+      lock.lock()
+      let hit = entries[key]
+      lock.unlock()
+      if let hit { return hit }
+
+      guard let made = try? make(url) else { return nil }
+      lock.lock()
+      entries[key] = made
+      order.append(key)
+      if order.count > limit { entries[order.removeFirst()] = nil }
+      lock.unlock()
+      return made
+    }
+
+    func empty() {
+      lock.lock()
+      entries.removeAll()
+      order.removeAll()
+      lock.unlock()
+    }
+  }
+
+  private let imageCache = ImageCache()
+
   public let server: APIServer
   /// Whether the generation running now has stopped answering and started writing a tool
   /// call. Read by the window, which has no other way to tell the two apart mid-turn.
@@ -121,6 +167,8 @@ public final class AgentEngine: @unchecked Sendable {
   /// archives on disk that hold its prefix.
   public var lastPromptTokens: [Int] { promptTokens }
   private let systemCount = Counter()
+  private let instructionCount = Counter()
+  private let schemaCount = Counter()
   private let commandText = Text()
   private let reasoningText = Text()
   private let answerText = Text()
@@ -128,6 +176,10 @@ public final class AgentEngine: @unchecked Sendable {
   /// How much of a prompt is the instructions and the tool schemas — the part that is the same
   /// every turn, and the part someone waiting on a first answer is mostly waiting for.
   public var systemTokens: Int { systemCount.value }
+  /// The two halves of that, kept apart so the breakdown behind the context bar can say which
+  /// of them is the one worth doing something about.
+  public var instructionTokens: Int { instructionCount.value }
+  public var toolSchemaTokens: Int { schemaCount.value }
   /// Where generation stops when nothing else stops it first. Held high because an agent's
   /// turn is a tool call away from being long, and never shown to the model as a bound.
   public var maxTokens: Int
@@ -164,6 +216,13 @@ public final class AgentEngine: @unchecked Sendable {
           let id = server.stats.enqueue(api: "chat")
           defer { server.stats.end(id) }
           do {
+            // The pictures a turn came with are read here rather than earlier: opening one
+            // needs the resident pack's tower, and this is the queue that owns it. Anything
+            // that will not open is dropped from the prompt and from the count together, so a
+            // deleted file never leaves the template with a placeholder it cannot fill.
+            let opened = resolveImages(in: messages)
+            let messages = opened.messages
+
             let request = APIServer.Request(
               messages: messages,
               tools: tools.isEmpty ? nil : tools.map(\.templateValue),
@@ -171,7 +230,7 @@ public final class AgentEngine: @unchecked Sendable {
               temperature: nil,
               stream: onText != nil,
               thinking: thinking,
-              images: [],
+              images: opened.images,
               responseSchema: nil,
               model: nil,
               effort: effort)
@@ -205,11 +264,14 @@ public final class AgentEngine: @unchecked Sendable {
               if let withoutTools, let bare {
                 let schemas = max(0, tokens.count - withoutTools)
                 let instructions = max(0, withoutTools - bare)
+                schemaCount.set(schemas)
+                instructionCount.set(instructions)
                 systemCount.set(schemas + instructions)
                 server.log?(
                   "prompt: \(instructions) instructions + \(schemas) tool schemas "
                     + "+ \(bare) conversation = \(tokens.count)")
               } else if let bare {
+                instructionCount.set(max(0, tokens.count - bare))
                 systemCount.set(max(0, tokens.count - bare))
               }
               _ = schema
@@ -258,12 +320,47 @@ public final class AgentEngine: @unchecked Sendable {
       server.generationQueue.async { [self] in
         do {
           try server.activate(id)
+          imageCache.empty()
           continuation.resume()
         } catch {
           continuation.resume(throwing: error)
         }
       }
     }
+  }
+
+  /// Messages with every picture they name opened, and the pictures themselves in the order
+  /// the template will want them.
+  private func resolveImages(
+    in messages: [ChatMessage]
+  ) -> (messages: [ChatMessage], images: [ProcessedImage]) {
+    guard messages.contains(where: { !$0.imagePaths.isEmpty }) else { return (messages, []) }
+
+    var out: [ChatMessage] = []
+    var images: [ProcessedImage] = []
+    out.reserveCapacity(messages.count)
+
+    for message in messages {
+      guard !message.imagePaths.isEmpty else {
+        out.append(message)
+        continue
+      }
+      var opened: [ProcessedImage] = []
+      for path in message.imagePaths {
+        guard
+          let image = imageCache.image(for: URL(filePath: path), make: server.processImage)
+        else { continue }
+        opened.append(image)
+      }
+      images.append(contentsOf: opened)
+      out.append(.user(text: message.plainText, imageCount: opened.count))
+    }
+    return (out, images)
+  }
+
+  /// Dropped when the pack changes: a picture is processed for the tower that will read it.
+  public func forgetImages() {
+    imageCache.empty()
   }
 
   public var contextCeiling: Int { server.budget.maxContextTokens }

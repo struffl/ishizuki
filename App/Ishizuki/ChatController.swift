@@ -44,6 +44,15 @@ final class ChatController {
         }
       }
 
+      /// A step rather than something said. A run of these is what the transcript folds away
+      /// into one line; a thought is machinery too, but it is worth reading and stays out.
+      var isMachinery: Bool {
+        switch self {
+        case .toolCall, .toolOutput: true
+        default: false
+        }
+      }
+
       /// Which voice the row is in, which is what decides how tightly it sits under the row
       /// above it: a run of tool traffic reads as one block of machinery, not as six separate
       /// remarks, and only a change of voice earns a real gap.
@@ -63,6 +72,9 @@ final class ChatController {
     var id: String
     var kind: Kind
     var text: String
+    /// The pictures handed over with a prompt, as paths. Kept on the row so the transcript can
+    /// show what was attached without going back to the marker the prompt travelled with.
+    var images: [String] = []
 
     /// A tool output carries the id of the call it answers, so the two rows need telling apart
     /// before anything keys on one: sharing an id, only the call survived the list's identity.
@@ -123,11 +135,113 @@ final class ChatController {
     var tokens: Int?
     /// Reading for what went in, writing for what came out, which decides the wording.
     var wasRead: Bool
+    /// What this one step took, measured from when the row appeared to when the next one did.
+    /// The turn's own total is spread across every row it produced; this is the part that
+    /// belongs to this row alone, and it is what the badge beside a tool call shows.
+    var elapsed: Double?
+    /// Set on the last row of a turn, which is where the turn's total is worth saying.
+    var turnSeconds: Double?
   }
 
   private(set) var meta: [String: RowMeta] = [:]
 
   func meta(for row: Row) -> RowMeta? { meta[row.id] }
+
+  /// One file a turn changed, and by how much.
+  struct FileChange: Identifiable, Equatable {
+    var path: String
+    var added: Int
+    var removed: Int
+
+    var id: String { path }
+    var name: String { (path as NSString).lastPathComponent }
+  }
+
+  /// What a turn came to, which is the thing worth reading once a long stretch of tool traffic
+  /// has scrolled past: which files it touched and what it did to them.
+  struct TurnSummary: Equatable {
+    var files: [FileChange]
+    var added: Int
+    var removed: Int
+  }
+
+  /// Keyed by the id of a turn's last row, which is where the card is drawn. Built once when a
+  /// turn ends and once when a conversation is opened, never while one is streaming: diffing
+  /// every edit in a transcript is not work for a poll twenty times a second.
+  private(set) var turnSummaries: [String: TurnSummary] = [:]
+
+  func summary(after row: Row) -> TurnSummary? { turnSummaries[row.id] }
+
+  /// A turn runs from one prompt to the next, and its summary hangs off its final row.
+  private func rebuildSummaries() {
+    let rows = transcriptRows
+    var built: [String: TurnSummary] = [:]
+    var changes: [String: FileChange] = [:]
+    var order: [String] = []
+    var started = false
+
+    func close(at id: String?) {
+      defer {
+        changes = [:]
+        order = []
+      }
+      guard let id, !order.isEmpty else { return }
+      let files = order.compactMap { changes[$0] }
+      built[id] = TurnSummary(
+        files: files,
+        added: files.reduce(0) { $0 + $1.added },
+        removed: files.reduce(0) { $0 + $1.removed })
+    }
+
+    var lastID: String?
+    for row in rows {
+      if case .prompt = row.kind {
+        close(at: lastID)
+        started = true
+      }
+      if started, case .toolCall(let name) = row.kind,
+        let change = Self.change(from: name, arguments: row.text)
+      {
+        if var existing = changes[change.path] {
+          existing.added += change.added
+          existing.removed += change.removed
+          changes[change.path] = existing
+        } else {
+          changes[change.path] = change
+          order.append(change.path)
+        }
+      }
+      lastID = row.id
+    }
+    close(at: lastID)
+
+    if built != turnSummaries { turnSummaries = built }
+  }
+
+  /// What one call did to one file. An edit is a diff; a write is every line of what it wrote,
+  /// since the file it replaced is not in the call to compare against.
+  private static func change(from tool: String, arguments: String) -> FileChange? {
+    guard tool == "edit" || tool == "write" else { return nil }
+    guard
+      let object = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8)))
+        as? [String: Any],
+      let path = (object["path"] ?? object["file"]) as? String, !path.isEmpty
+    else { return nil }
+
+    if tool == "write" {
+      let body = (object["contents"] ?? object["content"] ?? object["text"]) as? String ?? ""
+      return FileChange(
+        path: path, added: body.isEmpty ? 0 : body.components(separatedBy: "\n").count,
+        removed: 0)
+    }
+    guard let old = object["old"] as? String, let new = object["new"] as? String else {
+      return FileChange(path: path, added: 0, removed: 0)
+    }
+    let oldLines = old.isEmpty ? [] : old.components(separatedBy: "\n")
+    let newLines = new.isEmpty ? [] : new.components(separatedBy: "\n")
+    let diff = newLines.difference(from: oldLines)
+    return FileChange(path: path, added: diff.insertions.count, removed: diff.removals.count)
+  }
 
   /// A turn in flight, held beside the conversation it belongs to rather than inside the one
   /// on screen. Switching away from a turn leaves it running; coming back picks it up where it
@@ -200,12 +314,57 @@ final class ChatController {
   private(set) var lastCached = 0
 
   var draft = ""
+  /// What is waiting to go out with the next turn: pictures for the tower, files for the agent.
+  private(set) var attachments: [Attachment] = []
+  /// Named rather than shown, for a drop the composer could make nothing of.
+  private(set) var refusedDrop: String?
+
+  /// The chosen folder as git sees it, watched so the strip above the composer is never stale.
+  let git = GitProbe()
+
   var workspace: URL? {
     didSet {
       // A session is bound to the folder it was made for, so changing the folder retires them
       // — except the one answering, which keeps the folder it started in.
       guard workspace != oldValue else { return }
       agents = agents.filter { $0.key == run?.chatID }
+      git.watch(workspace)
+      remember(workspace)
+    }
+  }
+
+  /// The folders worked in lately, so starting a chat somewhere is a menu rather than a panel.
+  private(set) var recentWorkspaces: [URL] = []
+
+  private func remember(_ url: URL?) {
+    guard let url else { return }
+    recentWorkspaces.removeAll { $0 == url }
+    recentWorkspaces.insert(url, at: 0)
+    if recentWorkspaces.count > 8 { recentWorkspaces.removeLast(recentWorkspaces.count - 8) }
+    defaults.set(recentWorkspaces.map(\.path), forKey: "chat.recentWorkspaces")
+  }
+
+  /// Conversations gathered under the folder each was had in, newest folder first. The sidebar
+  /// draws these instead of one flat list, which is what lets the window drop its folder bar.
+  struct FolderGroup: Identifiable {
+    var path: String?
+    var chats: [SavedChat]
+
+    var id: String { path ?? "\u{0}none" }
+    var url: URL? { path.map { URL(filePath: $0) } }
+    var name: String { url?.lastPathComponent ?? "No folder" }
+  }
+
+  var folders: [FolderGroup] {
+    var order: [String] = []
+    var grouped: [String: [SavedChat]] = [:]
+    for chat in chats {
+      let key = chat.workspace ?? "\u{0}none"
+      if grouped[key] == nil { order.append(key) }
+      grouped[key, default: []].append(chat)
+    }
+    return order.map { key in
+      FolderGroup(path: key == "\u{0}none" ? nil : key, chats: grouped[key] ?? [])
     }
   }
 
@@ -239,12 +398,16 @@ final class ChatController {
     let loaded = ChatStore().load()
     self.chats = loaded
     self.current = loaded.first ?? SavedChat(effort: effort)
+    self.recentWorkspaces =
+      (defaults.stringArray(forKey: "chat.recentWorkspaces") ?? []).map { URL(filePath: $0) }
     if let path = current.workspace ?? defaults.string(forKey: "chat.workspace") {
       self.workspace = URL(filePath: path)
+      self.git.watch(self.workspace)
     }
     if chats.isEmpty { chats = [current] }
     var builder = RowBuilder()
     self.transcriptRows = builder.rows(from: current.transcript)
+    rebuildSummaries()
 
     NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: nil
@@ -253,12 +416,24 @@ final class ChatController {
 
   // MARK: - Chats
 
-  func startNewChat() {
+  func startNewChat(in folder: URL? = nil) {
     persist()
+    if let folder {
+      workspace = folder
+      defaults.set(folder.path, forKey: "chat.workspace")
+    }
     let chat = SavedChat(
-      workspace: workspace?.path, model: server?.settings.activeModelID, effort: effort)
+      workspace: (folder ?? workspace)?.path, model: server?.settings.activeModelID,
+      effort: effort)
     chats.insert(chat, at: 0)
     open(chat)
+  }
+
+  /// A folder chosen from the panel, with a fresh conversation in it. The plus button in the
+  /// sidebar is the one place a folder is picked now, so picking one starts a chat there.
+  func startNewChatInChosenFolder() {
+    guard let url = askForWorkspace() else { return }
+    startNewChat(in: url)
   }
 
   func select(_ chat: SavedChat) {
@@ -299,6 +474,10 @@ final class ChatController {
     effort = chat.effort
     if let path = chat.workspace { workspace = URL(filePath: path) }
 
+    git.watch(workspace)
+    attachments.removeAll()
+    refusedDrop = nil
+
     if let state = parked.removeValue(forKey: chat.id) {
       // A conversation that was left mid-answer comes back as it was, rows and all: its turn
       // has been folding into that copy the whole time it was away.
@@ -316,6 +495,8 @@ final class ChatController {
       failure = nil
     }
     if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
+    turnSummaries = [:]
+    rebuildSummaries()
   }
 
   /// Set aside what the conversation being left looks like, but only while it is being
@@ -398,6 +579,32 @@ final class ChatController {
   /// turn and what is this turn's own.
   var systemTokens: Int { engine?.systemTokens ?? 0 }
 
+  /// Where the context has gone, in the four parts worth telling apart. The instructions and
+  /// the tool schemas are the same every turn and are the part that can actually be cut; the
+  /// conversation is what the turns themselves have cost.
+  struct ContextUse: Equatable {
+    var instructions = 0
+    var toolSchemas = 0
+    var conversation = 0
+    var used = 0
+    var ceiling = 0
+
+    var free: Int { max(0, ceiling - used) }
+    var fraction: Double { ceiling > 0 ? min(1, Double(used) / Double(ceiling)) : 0 }
+  }
+
+  var contextUse: ContextUse {
+    let used = readout?.context.peakTokens ?? 0
+    let instructions = engine?.instructionTokens ?? 0
+    let schemas = engine?.toolSchemaTokens ?? 0
+    return ContextUse(
+      instructions: min(instructions, used),
+      toolSchemas: min(schemas, max(0, used - instructions)),
+      conversation: max(0, used - instructions - schemas),
+      used: used,
+      ceiling: readout?.context.ceilingTokens ?? 0)
+  }
+
   /// The command being written, for the gap between a thought ending and a call landing.
   var writingCommand: String {
     (engine?.writingCommand ?? "")
@@ -448,7 +655,7 @@ final class ChatController {
     if isRunningTurn { return .busy }
     if server?.phase.isBusy == true { return .loading }
     if engine == nil { return .load }
-    if !typed.isEmpty || !pendingSteers.isEmpty { return .send }
+    if !typed.isEmpty || !pendingSteers.isEmpty || !attachments.isEmpty { return .send }
     return .nothingToSay
   }
 
@@ -527,33 +734,46 @@ final class ChatController {
   }
 
   func chooseWorkspace() {
+    guard let url = askForWorkspace() else { return }
+    workspace = url
+    defaults.set(url.path, forKey: "chat.workspace")
+    update(current.id) { $0.workspace = url.path }
+    if let chat = saved(current.id) { store.save(chat) }
+  }
+
+  private func askForWorkspace() -> URL? {
     let panel = NSOpenPanel()
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
     panel.prompt = "Work Here"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    workspace = url
-    defaults.set(url.path, forKey: "chat.workspace")
+    panel.directoryURL = workspace
+    guard panel.runModal() == .OK else { return nil }
+    return panel.url
   }
 
   func send() {
-    // Whatever was queued while the last turn ran goes out ahead of what was just typed.
-    let text = (pendingSteers.map(\.text) + [typed])
+    // Whatever was queued while the last turn ran goes out ahead of what was just typed, and
+    // what was dropped on the composer goes out ahead of both: a picture is context for the
+    // question, not an afterthought to it.
+    let bundle = AttachmentBundle.build(attachments, workspace: workspace)
+    let text = ([bundle.preamble] + pendingSteers.map(\.text) + [typed])
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
     guard !text.isEmpty, !isRunningTurn else { return }
     draft = ""
     failure = nil
+    refusedDrop = nil
     pendingSteers.removeAll()
-    send(text, in: current.id)
+    attachments.removeAll()
+    send(text, in: current.id, images: bundle.images)
   }
 
   /// A turn started against a named conversation, which may not be the one on screen: the
   /// companion sends this way, and its rows fold into a parked copy until someone opens it,
   /// exactly as a conversation left mid-answer does.
   @discardableResult
-  func send(_ text: String, in chatID: UUID) -> Bool {
+  func send(_ text: String, in chatID: UUID, images: [URL] = []) -> Bool {
     let queued = queuedSteers.removeValue(forKey: chatID)?.map(\.text) ?? []
     let text = (queued + [text])
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -577,9 +797,13 @@ final class ChatController {
     runToken += 1
     startPolling(run)
 
+    // The pictures travel on the front of the prompt, which is the one part of a turn a
+    // session stores exactly as it was given and hands back unchanged.
+    let payload = PromptAttachments.marker(for: images) + text
+
     run.task = Task { [weak self] in
       do {
-        _ = try await agent.send(text)
+        _ = try await agent.send(payload)
       } catch is CancellationError {
         // Stopping a turn is an ordinary thing to do, not a failure to report.
       } catch {
@@ -617,6 +841,76 @@ final class ChatController {
 
   func drop(_ row: Row) {
     pendingSteers.removeAll { $0.id == row.id }
+  }
+
+  // MARK: - Attachments
+
+  func attach(_ intake: AttachmentIntake) {
+    for attachment in intake.accepted
+    where !attachments.contains(where: {
+      $0.url == attachment.url
+    }) {
+      attachments.append(attachment)
+    }
+    refusedDrop = intake.refused.isEmpty ? nil : intake.refused.joined(separator: ", ")
+  }
+
+  func attach(_ urls: [URL]) {
+    attach(AttachmentIntake.read(urls))
+  }
+
+  func pasteAttachment() {
+    attach(AttachmentIntake.readPasteboard())
+  }
+
+  func detach(_ attachment: Attachment) {
+    attachments.removeAll { $0.id == attachment.id }
+    if attachment.isTemporary { try? FileManager.default.removeItem(at: attachment.url) }
+  }
+
+  func clearRefusedDrop() {
+    refusedDrop = nil
+  }
+
+  /// Whether anything attached needs eyes the resident pack does not have, which is worth
+  /// saying in the composer rather than discovering when the turn comes back short.
+  var needsVision: Bool {
+    attachments.contains { $0.kind == .image }
+  }
+
+  // MARK: - Worktrees
+
+  /// A checkout of its own for this conversation, so a turn that builds and commits is not
+  /// doing it in the same files someone else is editing. Only ever on request.
+  func makeWorktree(named name: String? = nil) {
+    guard let workspace else { return }
+    do {
+      let made = try Git.addWorktree(of: workspace, named: name ?? current.title)
+      use(made)
+    } catch {
+      failure = error.localizedDescription
+    }
+  }
+
+  func use(_ worktree: GitWorktree) {
+    workspace = worktree.path
+    defaults.set(worktree.path.path, forKey: "chat.workspace")
+    update(current.id) { $0.workspace = worktree.path.path }
+    if let chat = saved(current.id) { store.save(chat) }
+    git.refresh()
+  }
+
+  func removeWorktree(_ worktree: GitWorktree) {
+    guard let workspace else { return }
+    do {
+      try Git.removeWorktree(worktree, of: workspace)
+      if workspace.standardizedFileURL == worktree.path.standardizedFileURL {
+        self.workspace = git.status?.root
+      }
+      git.refresh()
+    } catch {
+      failure = error.localizedDescription
+    }
   }
 
   /// Cut the turn in flight short and send what is queued now. Cancelling is not instant, so
@@ -703,6 +997,8 @@ final class ChatController {
       self.run = nil
       runToken += 1
     }
+    closeClocks(run)
+    if run.chatID == current.id { rebuildSummaries() }
     recordTurnCost(run)
     persist(run.chatID, prompt: true)
 
@@ -731,18 +1027,43 @@ final class ChatController {
       // twenty polls a second that is a re-render of the whole transcript for nothing.
       guard rows != transcriptRows else { return }
       transcriptRows = rows
-      for row in rows where meta[row.id] == nil {
-        meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
-        run.rowsThisTurn.insert(row.id)
-      }
+      stamp(rows, into: &meta, for: run)
     } else {
       guard var state = parked[run.chatID], rows != state.rows else { return }
       state.rows = rows
-      for row in rows where state.meta[row.id] == nil {
-        state.meta[row.id] = RowMeta(at: Date(), wasRead: row.kind.isInput)
-        run.rowsThisTurn.insert(row.id)
-      }
+      stamp(rows, into: &state.meta, for: run)
       parked[run.chatID] = state
+    }
+  }
+
+  /// A row's clock starts when it appears and stops when the next one does. A transcript
+  /// carries no timestamps, so this is the only account of what each step cost — and it is the
+  /// one a badge beside a tool call is actually reporting.
+  private func stamp(_ rows: [Row], into meta: inout [String: RowMeta], for run: Run) {
+    let now = Date()
+    for (index, row) in rows.enumerated() where meta[row.id] == nil {
+      if index > 0, var earlier = meta[rows[index - 1].id], earlier.elapsed == nil {
+        earlier.elapsed = max(0, now.timeIntervalSince(earlier.at))
+        meta[rows[index - 1].id] = earlier
+      }
+      meta[row.id] = RowMeta(at: now, wasRead: row.kind.isInput)
+      run.rowsThisTurn.insert(row.id)
+    }
+  }
+
+  /// The last row of a turn has no row after it to stop its clock, so the turn's end does it —
+  /// and leaves the turn's own total there, which is what the footer under an answer shows.
+  private func closeClocks(_ run: Run) {
+    let now = Date()
+    let total = -run.started.timeIntervalSinceNow
+    let last = (run.chatID == current.id ? transcriptRows : parked[run.chatID]?.rows ?? []).last
+    withMeta(of: run.chatID) { meta in
+      for id in run.rowsThisTurn {
+        guard var record = meta[id] else { continue }
+        if record.elapsed == nil { record.elapsed = max(0, now.timeIntervalSince(record.at)) }
+        if id == last?.id { record.turnSeconds = total }
+        meta[id] = record
+      }
     }
   }
 
@@ -899,13 +1220,13 @@ final class ChatController {
   ) -> [Row] {
     var rows = existing
 
-    func add(_ id: String, _ kind: Row.Kind, _ text: String) {
-      guard !text.isEmpty else { return }
+    func add(_ id: String, _ kind: Row.Kind, _ text: String, images: [String] = []) {
+      guard !text.isEmpty || !images.isEmpty else { return }
       if let last = rows.last, last.kind.joins(kind) {
         rows[rows.count - 1].text += text
         return
       }
-      rows.append(Row(id: id, kind: kind, text: text))
+      rows.append(Row(id: id, kind: kind, text: text, images: images))
     }
 
     for entry in entries {
@@ -913,7 +1234,8 @@ final class ChatController {
       case .instructions(let instructions):
         add(instructions.id, .system, text(instructions.segments))
       case .prompt(let prompt):
-        add(prompt.id, .prompt, text(prompt.segments))
+        let split = PromptAttachments.split(text(prompt.segments))
+        add(prompt.id, .prompt, split.body, images: split.images)
       case .response(let response):
         let said = text(response.segments)
         // A reply that is really an unclosed thought is shown as one. The parser keeps the two

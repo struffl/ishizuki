@@ -890,6 +890,17 @@ public final class APIServer: @unchecked Sendable {
     return ""
   }
 
+  /// One picture off disk, processed by whatever the resident pack's tower expects. Reached by
+  /// the window as well as the port, so a conversation in the app sees what a client would.
+  /// Call it on the generation queue: it reads the model.
+  public func processImage(at url: URL) throws -> ProcessedImage {
+    let model = try self.model()
+    guard let visionConfig = model.config.visionConfig, model.hasVision else {
+      throw BonsaiError.missingComponent("this pack has no vision tower")
+    }
+    return try ImageProcessor(config: visionConfig).process(contentsOf: url)
+  }
+
   private func decodeImage(_ source: String) throws -> ProcessedImage {
     let model = try self.model()
     guard let visionConfig = model.config.visionConfig, model.hasVision else {

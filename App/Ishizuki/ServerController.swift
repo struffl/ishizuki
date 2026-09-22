@@ -3,6 +3,7 @@
 //
 // Owns the in-process APIServer: start, stop, switch pack, and poll its readout.
 
+import AppKit
 import Foundation
 import IshizukiKit
 import Observation
@@ -36,9 +37,25 @@ final class ServerController {
   private let logLimit = 200
 
   private var bootstrapped = false
+  /// The folders the catalog is built from, watched so a pack pulled in a terminal or thrown
+  /// away in the Finder reaches the list on its own.
+  private var watcher: FolderWatcher?
 
   init() {
     rescan()
+    let watcher = FolderWatcher { [weak self] in
+      MainActor.assumeIsolated { self?.rescan() }
+    }
+    self.watcher = watcher
+    watcher.watch(library.searchRoots())
+
+    // A pack that arrived while the window was in the background is worth a look on the way
+    // back in: a watcher can miss a move the file system reports to nobody.
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.rescan() }
+    }
   }
 
   func bootstrap() {
@@ -66,10 +83,15 @@ final class ServerController {
   }
 
   func rescan() {
-    catalog = ModelCatalog.discover(in: library.searchRoots())
+    let roots = library.searchRoots()
+    let found = ModelCatalog.discover(in: roots)
+    // Assigning an identical catalog would still redraw every row that reads it, and this now
+    // runs whenever anything under a root is written to.
+    if found.entries != catalog.entries { catalog = found }
     if catalog[settings.activeModelID] == nil {
       settings.activeModelID = catalog.entries.first?.id ?? ""
     }
+    watcher?.watch(roots)
   }
 
   func start() {

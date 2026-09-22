@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The conversation: the transcript as it fills, a composer under it, the readout in the corner.
+// The conversation: the transcript as it fills, a composer under it, and the line between them
+// that says where the context went and where the work is happening.
 
 import IshizukiKit
 import SwiftUI
@@ -32,6 +33,31 @@ struct ChatView: View {
   /// the two — which is why a chevron could not be clicked while a turn was streaming. The
   /// follow holds off until the button comes back up.
   @State private var isPressing = false
+  /// Runs of tool traffic someone has opened up. Held here rather than on the rows, because a
+  /// run is a thing the view makes and the transcript knows nothing about.
+  @State private var openRuns: Set<String> = []
+  /// The detail column's height — the window's, in effect — which is what the composer is
+  /// allowed to grow into.
+  ///
+  /// Measured here rather than on the transcript. The transcript is whatever the composer
+  /// leaves it, so feeding its height back into how tall the composer may grow is a loop:
+  /// the box grows, the transcript shrinks, the box is allowed less, and AppKit gives up
+  /// partway through a constraint pass. This column's height is the window's and does not
+  /// move when the composer does.
+  @State private var viewportHeight: CGFloat = 0
+
+  private struct ViewportHeightKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+  }
+
+  /// Three fifths of the window, in lines. Past that the box scrolls rather than grows: a
+  /// composer that can eat the whole window is not a composer any more.
+  private var composerLines: Int {
+    guard viewportHeight.isFinite, viewportHeight > 0 else { return 6 }
+    let line = max(8, fontSize + 5)
+    return min(48, max(3, Int(viewportHeight * 0.6 / line)))
+  }
 
   private struct BottomMarkerKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGFloat = 0
@@ -49,48 +75,38 @@ struct ChatView: View {
         .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 320)
     } detail: {
       VStack(spacing: 0) {
-        header
-        Divider().opacity(0.3)
         transcript
         Divider().opacity(0.3)
         ChatReadoutBar(chat: chat, controller: controller)
+        ContextStrip(chat: chat)
+        if let failure = chat.failure {
+          HStack(spacing: 5) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(failure)
+              .lineLimit(2)
+            Spacer(minLength: 0)
+          }
+          .font(.footnote)
+          .foregroundStyle(.orange)
+          .padding(.horizontal, 14)
+          .padding(.top, 2)
+        }
         queued
-        composer
+        Composer(chat: chat, controller: controller, mono: mono, maxLines: composerLines)
+      }
+      .background(
+        GeometryReader { column in
+          Color.clear.preference(key: ViewportHeightKey.self, value: column.size.height)
+        }
+      )
+      .onPreferenceChange(ViewportHeightKey.self) { height in
+        // Rounded to a coarse step, so a point of drift as a row settles is not a fresh pass
+        // over the whole window.
+        let stepped = (height / 40).rounded(.down) * 40
+        if stepped != viewportHeight { viewportHeight = stepped }
       }
     }
     .windowBackdrop()
-  }
-
-  @ViewBuilder private var header: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "folder")
-        .foregroundStyle(.secondary)
-        .font(.subheadline)
-      Button {
-        chat.chooseWorkspace()
-      } label: {
-        Text(chat.workspace?.lastPathComponent ?? "Choose a folder…")
-          .font(.system(.subheadline, design: .monospaced))
-          .lineLimit(1)
-      }
-      .buttonStyle(.plain)
-      .frame(minHeight: Metrics.hit)
-      .contentShape(.rect)
-      .accessibilityLabel("Working folder")
-      .help(chat.workspace?.path ?? "The one directory the agent may touch")
-
-      Spacer()
-
-      if let failure = chat.failure {
-        Text(failure)
-          .font(.footnote)
-          .foregroundStyle(.orange)
-          .lineLimit(1)
-      }
-    }
-    .textPlate(radius: 8)
-    .padding(.horizontal, 10)
-    .padding(.top, 8)
   }
 
   @ViewBuilder private var transcript: some View {
@@ -101,37 +117,27 @@ struct ChatView: View {
             // Spacing is set per row rather than once for the stack, so a run of tool traffic
             // closes up into one block and air is spent only where the voice changes.
             LazyVStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+              ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
                 // RowCost sits past the row's trailing edge rather than beside it, so the row
                 // never reports a width wider than the column actually is — the earlier
                 // version did that with negative padding, which left the true content wider
                 // than anything downstream believed, and that gap could paint past the window
                 // instead of hiding.
                 ZStack(alignment: .trailing) {
-                  // Equatable, and taken at its word: a poll twenty times a second replaces
-                  // the whole array, and without this every row in the transcript is built
-                  // again for the sake of the one being written into.
-                  ChatRowView(
-                    row: row, mono: mono, size: fontSize,
-                    live: chat.isResponding && row.id == rows.last?.id,
-                    caption: chat.captioner.caption(for: row.id),
-                    show: chat.display(for: row),
-                    onExpand: { chat.setExpanded($0, for: row.id) },
-                    onShowFull: { chat.setShowFull($0, for: row.id) }
-                  )
-                  .equatable()
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .offset(x: -reveal)
-                  RowCost(meta: chat.meta(for: row))
+                  content(for: block)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .offset(x: -reveal)
+                  RowCost(meta: chat.meta(for: block.last))
                     .frame(width: gutter, alignment: .leading)
                     .opacity(reveal / gutter)
                     .offset(x: gutter - reveal)
                 }
                 .clipped()
                 .padding(
-                  .top, Self.gap(after: index > 0 ? rows[index - 1].kind : nil, before: row.kind)
+                  .top,
+                  Self.gap(after: index > 0 ? blocks[index - 1] : nil, before: block)
                 )
-                .id(row.id)
+                .id(block.id)
               }
               if chat.isResponding {
                 TurnStatus(chat: chat)
@@ -218,6 +224,7 @@ struct ChatView: View {
             reveal = 0
             isPressing = false
             isAtBottom = true
+            openRuns.removeAll()
             scroller.scrollTo("bottomAnchor", anchor: .bottom)
           }
 
@@ -227,6 +234,58 @@ struct ChatView: View {
           }
         }
       }
+    }
+  }
+
+  @ViewBuilder private func content(for block: Block) -> some View {
+    switch block {
+    case .row(let row):
+      // Equatable, and taken at its word: a poll twenty times a second replaces the whole
+      // array, and without this every row in the transcript is built again for the sake of the
+      // one being written into.
+      ChatRowView(
+        row: row, mono: mono, size: fontSize,
+        live: chat.isResponding && row.id == rows.last?.id,
+        caption: chat.captioner.caption(for: row.id),
+        meta: chat.meta(for: row),
+        show: chat.display(for: row),
+        onExpand: { open in
+          withAnimation(.easeOut(duration: 0.18)) { chat.setExpanded(open, for: row.id) }
+        },
+        onShowFull: { full in
+          withAnimation(.easeOut(duration: 0.18)) { chat.setShowFull(full, for: row.id) }
+        }
+      )
+      .equatable()
+
+    case .summary(_, let summary):
+      TurnSummaryCard(summary: summary, workspace: chat.workspace)
+
+    case .run(let members):
+      ToolRunView(
+        members: members,
+        mono: mono,
+        size: fontSize,
+        open: openRuns.contains(block.id),
+        seconds: members.compactMap { chat.meta(for: $0)?.elapsed }.reduce(0, +),
+        onToggle: { open in
+          withAnimation(.easeOut(duration: 0.2)) {
+            if open { openRuns.insert(block.id) } else { openRuns.remove(block.id) }
+          }
+        },
+        rowView: { row in
+          ChatRowView(
+            row: row, mono: mono, size: fontSize, live: false,
+            caption: chat.captioner.caption(for: row.id),
+            meta: chat.meta(for: row),
+            show: chat.display(for: row),
+            onExpand: { open in
+              withAnimation(.easeOut(duration: 0.18)) { chat.setExpanded(open, for: row.id) }
+            },
+            onShowFull: { full in
+              withAnimation(.easeOut(duration: 0.18)) { chat.setShowFull(full, for: row.id) }
+            })
+        })
     }
   }
 
@@ -305,32 +364,86 @@ struct ChatView: View {
     }
   }
 
-  @ViewBuilder private var composer: some View {
-    HStack(alignment: .center, spacing: 8) {
-      TextField(
-        chat.isResponding ? "Steer the next turn…" : "What needs doing?",
-        text: $chat.draft, axis: .vertical
-      )
-      .textFieldStyle(.plain)
-      .font(mono)
-      .lineLimit(1...6)
-      .onSubmit { chat.submit() }
+  private var rows: [ChatController.Row] { chat.visibleRows }
 
-      if chat.isResponding {
-        Button("Stop", systemImage: "stop.fill") { chat.stop() }
-          .labelStyle(.iconOnly)
-          .help("Stop this turn")
+  /// A stretch of the transcript drawn as one thing. Most of it is one row per block; a run of
+  /// machinery nobody has opened is a single line saying how many steps it was, the way a long
+  /// turn reads once it has settled.
+  enum Block: Identifiable {
+    case row(ChatController.Row)
+    case run([ChatController.Row])
+    /// What a turn came to, drawn after its last row.
+    case summary(after: ChatController.Row, ChatController.TurnSummary)
+
+    var id: String {
+      switch self {
+      case .row(let row): row.id
+      case .run(let members): "run-" + (members.first?.id ?? "")
+      case .summary(let row, _): "summary-" + row.id
       }
-      Button(chat.submissionLabel) { chat.submit() }
-        .buttonStyle(.borderedProminent)
-        .disabled(!chat.canSubmit)
     }
-    .textPlate(radius: 10, horizontal: 12, vertical: 10)
-    .padding(.horizontal, 10)
-    .padding(.bottom, 10)
+
+    var first: ChatController.Row {
+      switch self {
+      case .row(let row): row
+      case .run(let members): members[0]
+      case .summary(let row, _): row
+      }
+    }
+
+    var last: ChatController.Row {
+      switch self {
+      case .row(let row): row
+      case .run(let members): members[members.count - 1]
+      case .summary(let row, _): row
+      }
+    }
   }
 
-  private var rows: [ChatController.Row] { chat.visibleRows }
+  /// Runs are gathered only out of shut machinery, and never out of the tail of a turn that is
+  /// still being written: folding away the row the model is working in is the one thing a live
+  /// transcript must not do.
+  private var blocks: [Block] {
+    let rows = self.rows
+    let liveTail = chat.isResponding ? rows.count - 1 : rows.count
+    var out: [Block] = []
+    var pending: [ChatController.Row] = []
+
+    func flush() {
+      defer { pending = [] }
+      guard pending.count >= Self.runThreshold else {
+        out.append(contentsOf: pending.map(Block.row))
+        return
+      }
+      let id = "run-" + (pending.first?.id ?? "")
+      if openRuns.contains(id) {
+        out.append(contentsOf: pending.map(Block.row))
+      } else {
+        out.append(.run(pending))
+      }
+    }
+
+    for (index, row) in rows.enumerated() {
+      let gatherable =
+        row.kind.isMachinery && index < liveTail && chat.display(for: row).expanded != true
+      if gatherable {
+        pending.append(row)
+      } else {
+        flush()
+        out.append(.row(row))
+      }
+      if let summary = chat.summary(after: row), !summary.files.isEmpty {
+        flush()
+        out.append(.summary(after: row, summary))
+      }
+    }
+    flush()
+    return out
+  }
+
+  /// Two rows is one tool call and its answer, which reads fine on its own. Three is where a
+  /// transcript starts to be mostly machinery.
+  private static let runThreshold = 4
 
   /// How much air a row gets above it. Sharing a voice with the row before means the two belong
   /// to one utterance and sit almost touching; only a change of voice earns a real gap.
@@ -341,6 +454,12 @@ struct ChatView: View {
     return previous.voice == current.voice ? 2 : 8
   }
 
+  private static func gap(after previous: Block?, before current: Block) -> CGFloat {
+    if case .summary = current { return 8 }
+    if case .summary = previous { return 8 }
+    return gap(after: previous?.last.kind, before: current.first.kind)
+  }
+
   private var mono: Font {
     monoFont.isEmpty
       ? .system(size: fontSize, design: .monospaced)
@@ -348,11 +467,89 @@ struct ChatView: View {
   }
 }
 
+/// A run of tool traffic as one line, with what it was and how long it took. Opening it puts
+/// every step back exactly as it would have been drawn on its own.
+@available(macOS 27.0, *)
+struct ToolRunView<Content: View>: View {
+  let members: [ChatController.Row]
+  let mono: Font
+  let size: Double
+  let open: Bool
+  let seconds: Double
+  let onToggle: (Bool) -> Void
+  @ViewBuilder let rowView: (ChatController.Row) -> Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Button {
+        onToggle(!open)
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: icon)
+            .font(.footnote)
+          Text(title)
+            .font(.system(.footnote, design: .monospaced, weight: .medium))
+          if seconds > 0 {
+            Text(ChatRowView.duration(seconds))
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.tertiary)
+          }
+          Image(systemName: open ? "chevron.down" : "chevron.right")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .foregroundStyle(.secondary)
+        .frame(minHeight: Metrics.hit)
+        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
+        .contentShape(.rect)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityAddTraits(.isToggle)
+
+      if open {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(members) { member in
+            rowView(member)
+          }
+        }
+        .padding(.leading, 15)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var names: [String] {
+    members.compactMap { if case .toolCall(let name) = $0.kind { name } else { nil } }
+  }
+
+  private var icon: String {
+    let unique = Set(names)
+    if unique == ["shell"] { return "terminal" }
+    if unique.isSubset(of: ["read", "grep", "glob"]) { return "magnifyingglass" }
+    if unique.isSubset(of: ["edit", "write"]) { return "pencil.line" }
+    return "wrench.and.screwdriver"
+  }
+
+  /// Named after what the run actually did, which is nearly always one of three things.
+  private var title: String {
+    let count = names.count
+    guard count > 0 else { return "\(members.count) steps" }
+    let unique = Set(names)
+    let plural = count == 1 ? "" : "s"
+    if unique == ["shell"] { return "Ran \(count) command\(plural)" }
+    if unique.isSubset(of: ["read", "grep", "glob"]) { return "Explored \(count) place\(plural)" }
+    if unique.isSubset(of: ["edit", "write"]) { return "Changed \(count) file\(plural)" }
+    return "Ran \(count) tool\(plural)"
+  }
+}
+
 @available(macOS 27.0, *)
 struct ChatRowView: View, Equatable {
   nonisolated static func == (a: ChatRowView, b: ChatRowView) -> Bool {
     a.row == b.row && a.mono == b.mono && a.size == b.size && a.live == b.live
-      && a.caption == b.caption && a.show == b.show
+      && a.caption == b.caption && a.show == b.show && a.meta == b.meta
   }
 
   let row: ChatController.Row
@@ -363,6 +560,8 @@ struct ChatRowView: View, Equatable {
   var live = false
   /// What the system model made of this, when it has had a look.
   var caption: String?
+  /// What this step cost, which is what the badge beside the title is reading.
+  var meta: ChatController.RowMeta?
   /// Whether this row is open, and whether a capped body has been let out in full. Held by the
   /// controller rather than here: a LazyVStack does not keep a row's own `@State` across a
   /// scroll, and a row that came back shut changed height under the scroll position.
@@ -396,54 +595,91 @@ struct ChatRowView: View, Equatable {
         rawBody: row.text, monospaced: false)
 
     case .prompt:
-      Text(row.text)
-        .font(.system(size: size))
-        .foregroundStyle(.white)
-        .textSelection(.enabled)
-        .bubble(mine: true)
-        .padding(.trailing, 10)
-        .padding(.leading, 44)
-        .frame(maxWidth: .infinity, alignment: .trailing)
+      VStack(alignment: .trailing, spacing: 4) {
+        if !row.images.isEmpty {
+          PromptImages(paths: row.images)
+        }
+        Text(row.text)
+          .font(.system(size: size))
+          .foregroundStyle(.white)
+          .textSelection(.enabled)
+      }
+      .bubble(mine: true)
+      .padding(.trailing, 10)
+      .padding(.leading, 44)
+      .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .steer:
       EmptyView()
 
     case .answer:
-      StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
-        .contextMenu {
-          Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
-          ShareLink(item: row.text)
+      VStack(alignment: .leading, spacing: 5) {
+        StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
+        if let total = meta?.turnSeconds, total >= 1 {
+          HStack(spacing: 3) {
+            Image(systemName: "stopwatch")
+              .font(.system(size: 9))
+            Text(Self.duration(total))
+              .font(.system(size: 10, design: .monospaced))
+          }
+          .foregroundStyle(.tertiary)
         }
-        .plateBubble()
-        .padding(.leading, 10)
-        .padding(.trailing, 44)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .contextMenu {
+        Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
+        ShareLink(item: row.text)
+      }
+      .plateBubble()
+      .padding(.leading, 10)
+      .padding(.trailing, 44)
+      .frame(maxWidth: .infinity, alignment: .leading)
 
     case .reasoning:
       disclosure(
-        title: live ? "thinking…" : "thought", icon: "brain", tint: .secondary,
+        title: thoughtTitle, icon: "brain", tint: .secondary,
         rawBody: row.text, monospaced: false)
 
     case .toolCall(let name):
       if name == "edit", let diff = Self.editDiff(from: row.text) {
-        editDisclosure(title: name, icon: icon(for: name), path: diff.path, lines: diff.lines)
+        editDisclosure(
+          title: verb(for: name), icon: icon(for: name), path: diff.path,
+          lines: diff.lines)
       } else {
+        let headline = Self.headline(tool: name, arguments: row.text)
         disclosure(
-          title: name, icon: icon(for: name), tint: .reading,
-          rawBody: Self.spelled(arguments: row.text), monospaced: true)
+          title: headline.verb, icon: icon(for: name), tint: .reading,
+          rawBody: Self.spelled(arguments: row.text), monospaced: true,
+          inlineDetail: headline.detail)
       }
 
     case .toolOutput(let name):
       disclosure(
-        title: "\(name) →", icon: "arrow.turn.down.right", tint: .secondary,
+        title: "\(verb(for: name)) →", icon: "arrow.turn.down.right", tint: .secondary,
         rawBody: row.text, monospaced: true)
     }
+  }
+
+  /// "Thought" once it has settled, and for how long when that is known — the same thing a
+  /// transcript of someone else's session tells you, and the one number worth having here.
+  private var thoughtTitle: String {
+    if live { return "thinking…" }
+    guard let seconds = meta?.elapsed, seconds >= 0.5 else { return "thought" }
+    return "thought for \(Self.duration(seconds))"
+  }
+
+  /// What a step took, in whichever unit reads as a number rather than a decimal.
+  static func duration(_ seconds: Double) -> String {
+    if seconds < 1 { return "\(Int((seconds * 1000).rounded()))ms" }
+    if seconds < 60 { return String(format: "%.1fs", seconds) }
+    let minutes = Int(seconds) / 60
+    return "\(minutes)m \(Int(seconds) % 60)s"
   }
 
   /// Collapsed by default: a coding turn is mostly tool traffic, and the answer is the part
   /// worth reading first.
   @ViewBuilder private func disclosure(
-    title: String, icon: String, tint: Color, rawBody: String, monospaced: Bool
+    title: String, icon: String, tint: Color, rawBody: String, monospaced: Bool,
+    inlineDetail: String? = nil
   ) -> some View {
     // Command output arrives with its trailing newlines, which a Text keeps as blank lines and
     // the plate then paints around: a shell row sat on a band of empty space no other row had.
@@ -457,7 +693,15 @@ struct ChatRowView: View, Equatable {
             .font(.footnote)
           Text(title)
             .font(.system(.footnote, design: .monospaced, weight: .medium))
-          if !open {
+          // A tool call says what it did on the line itself, open or shut: the command is the
+          // point of the row, not something to be found inside it.
+          if let inlineDetail, !inlineDetail.isEmpty {
+            Text(inlineDetail)
+              .font(.system(.footnote, design: .monospaced))
+              .foregroundStyle(.primary.opacity(0.75))
+              .lineLimit(1)
+              .truncationMode(.middle)
+          } else if !open {
             Text(caption ?? summary(of: body))
               .font(
                 caption == nil
@@ -465,6 +709,12 @@ struct ChatRowView: View, Equatable {
               )
               .foregroundStyle(.secondary)
               .lineLimit(1)
+              .truncationMode(.tail)
+          }
+          if let seconds = meta?.elapsed, seconds >= 0.02 {
+            Text(Self.duration(seconds))
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.tertiary)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
             .font(.footnote)
@@ -472,6 +722,7 @@ struct ChatRowView: View, Equatable {
         }
         .foregroundStyle(tint)
         .frame(minHeight: Metrics.hit)
+        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
         .contentShape(.rect)
       }
       .buttonStyle(.plain)
@@ -525,6 +776,7 @@ struct ChatRowView: View, Equatable {
         .textPlate(radius: 8, horizontal: 9, vertical: 5)
         // Indented to sit under its own title rather than beside it.
         .padding(.leading, 15)
+        .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -543,9 +795,45 @@ struct ChatRowView: View, Equatable {
     return all.suffix(lines).joined(separator: "\n")
   }
 
+  /// The body flattened onto one line. It is not cut to a length here: how much of it fits is
+  /// the window's business, and cutting it at eighty characters meant a wide window showed
+  /// exactly as little as a narrow one.
   private func summary(of body: String) -> String {
-    let flat = body.replacingOccurrences(of: "\n", with: " ")
-    return flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
+    body.replacingOccurrences(of: "\n", with: " ")
+      .replacing(/\s+/, with: " ")
+      .trimmingCharacters(in: .whitespaces)
+  }
+
+  /// What a call did, said as the thing it did rather than as the name of the tool that did it.
+  static func headline(tool: String, arguments: String) -> (verb: String, detail: String) {
+    let object =
+      (try? JSONSerialization.jsonObject(
+        with: Data(arguments.utf8))) as? [String: Any]
+
+    func field(_ names: String...) -> String? {
+      for name in names {
+        if let value = object?[name] as? String, !value.isEmpty { return value }
+      }
+      return nil
+    }
+
+    switch tool {
+    case "shell": return ("Ran", field("command", "cmd") ?? "")
+    case "read": return ("Read", field("path", "file") ?? "")
+    case "write": return ("Wrote", field("path", "file") ?? "")
+    case "edit": return ("Edited", field("path", "file") ?? "")
+    case "grep": return ("Searched", field("pattern", "query") ?? "")
+    case "glob": return ("Listed", field("pattern", "glob", "path") ?? "")
+    case "web_search", "search": return ("Searched the web", field("query", "q") ?? "")
+    default:
+      let spelled = spelled(arguments: arguments)
+      return (tool, spelled.split(separator: "\n").first.map(String.init) ?? "")
+    }
+  }
+
+  /// How a tool's output is introduced, which is the same verb its call was given.
+  private func verb(for tool: String) -> String {
+    Self.headline(tool: tool, arguments: "{}").verb
   }
 
   /// The arguments as the model wrote them, spelled out rather than left as the JSON they
@@ -585,6 +873,7 @@ struct ChatRowView: View, Equatable {
     case "grep": "magnifyingglass"
     case "glob": "folder.badge.questionmark"
     case "shell": "terminal"
+    case "web_search", "search": "globe"
     default: "wrench"
     }
   }
@@ -599,6 +888,8 @@ struct ChatRowView: View, Equatable {
     let long = lines.count > Self.bodyLineCap
     let capped = long && !show.showFull
     let shown = capped ? Array(lines.suffix(Self.bodyLineCap)) : lines
+    let added = lines.filter { $0.kind == .added }.count
+    let removed = lines.filter { $0.kind == .removed }.count
 
     VStack(alignment: .leading, spacing: 2) {
       Button {
@@ -609,11 +900,26 @@ struct ChatRowView: View, Equatable {
             .font(.footnote)
           Text(title)
             .font(.system(.footnote, design: .monospaced, weight: .medium))
-          if !open {
-            Text(path)
-              .font(.system(.footnote, design: .monospaced))
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
+          Text(path)
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.primary.opacity(0.75))
+            .lineLimit(1)
+            .truncationMode(.middle)
+          // What the patch came to, which is the part someone scanning a turn is after.
+          if added > 0 {
+            Text("+\(added)")
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(Color.diffAdded)
+          }
+          if removed > 0 {
+            Text("-\(removed)")
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(Color.diffRemoved)
+          }
+          if let seconds = meta?.elapsed, seconds >= 0.02 {
+            Text(Self.duration(seconds))
+              .font(.system(size: 10, design: .monospaced))
+              .foregroundStyle(.tertiary)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
             .font(.footnote)
@@ -621,6 +927,7 @@ struct ChatRowView: View, Equatable {
         }
         .foregroundStyle(Color.reading)
         .frame(minHeight: Metrics.hit)
+        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
         .contentShape(.rect)
       }
       .buttonStyle(.plain)
@@ -656,6 +963,7 @@ struct ChatRowView: View, Equatable {
         .textPlate(radius: 8, horizontal: 9, vertical: 5)
         // Indented to sit under its own title rather than beside it.
         .padding(.leading, 15)
+        .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -739,6 +1047,48 @@ struct ChatRowView: View, Equatable {
   }
 }
 
+/// The pictures a prompt came with, drawn in the bubble they were sent from. Read from disk,
+/// because that is where they still are: a transcript carries the path and nothing more.
+@available(macOS 27.0, *)
+struct PromptImages: View {
+  let paths: [String]
+
+  @State private var loaded: [String: Image] = [:]
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(paths, id: \.self) { path in
+        if let image = loaded[path] {
+          image
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 54, height: 54)
+            .clipShape(.rect(cornerRadius: 6))
+        } else {
+          RoundedRectangle(cornerRadius: 6)
+            .fill(.white.opacity(0.18))
+            .frame(width: 54, height: 54)
+            .overlay {
+              Image(systemName: "photo")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+      }
+    }
+    .task(id: paths) {
+      for path in paths where loaded[path] == nil {
+        let url = URL(filePath: path)
+        let data = await Task.detached(priority: .utility) {
+          Thumbnail.png(of: url, maxPixel: 160)
+        }.value
+        guard let data, let image = NSImage(data: data) else { continue }
+        loaded[path] = Image(nsImage: image)
+      }
+    }
+  }
+}
+
 /// What a row cost, shown in the gutter: when it happened, how long that side of the turn
 /// took, and how many tokens it was.
 @available(macOS 27.0, *)
@@ -762,5 +1112,126 @@ struct RowCost: View {
       .font(.system(.footnote, design: .monospaced))
       .foregroundStyle(.tertiary)
     }
+  }
+}
+
+/// What a turn came to, once its tool traffic has scrolled by: the files it changed and what it
+/// did to each of them. Three at a time, because the point of the card is to be read at a
+/// glance rather than to be the transcript over again.
+@available(macOS 27.0, *)
+struct TurnSummaryCard: View {
+  let summary: ChatController.TurnSummary
+  let workspace: URL?
+
+  @State private var showingAll = false
+
+  private static let shownByDefault = 3
+
+  private var shown: [ChatController.FileChange] {
+    showingAll ? summary.files : Array(summary.files.prefix(Self.shownByDefault))
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      header
+      ForEach(shown) { file in
+        Divider().opacity(0.25)
+        row(file)
+          .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+      if summary.files.count > Self.shownByDefault {
+        Divider().opacity(0.25)
+        Button {
+          withAnimation(.easeOut(duration: 0.2)) { showingAll.toggle() }
+        } label: {
+          HStack(spacing: 5) {
+            Text(
+              showingAll
+                ? "Show fewer"
+                : "Show \(summary.files.count - Self.shownByDefault) more")
+            Image(systemName: showingAll ? "chevron.up" : "chevron.down")
+              .font(.system(size: 9))
+            Spacer(minLength: 0)
+          }
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 10)
+          .frame(minHeight: Metrics.hit)
+          .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .background(.thinMaterial, in: .rect(cornerRadius: 10))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10)
+        .strokeBorder(Color.hairline, lineWidth: 0.5)
+    }
+    .padding(.leading, 10)
+    .padding(.trailing, 44)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder private var header: some View {
+    HStack(spacing: 7) {
+      Image(systemName: "plusminus.circle")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+      Text(
+        summary.files.count == 1
+          ? "Edited 1 file" : "Edited \(summary.files.count) files"
+      )
+      .font(.system(.footnote, weight: .medium))
+      Spacer(minLength: 8)
+      counts(added: summary.added, removed: summary.removed)
+    }
+    .padding(.horizontal, 10)
+    .frame(minHeight: 28)
+  }
+
+  @ViewBuilder private func row(_ file: ChatController.FileChange) -> some View {
+    Button {
+      NSWorkspace.shared.activateFileViewerSelecting([resolved(file)])
+    } label: {
+      HStack(spacing: 7) {
+        Image(systemName: "chevron.left.forwardslash.chevron.right")
+          .font(.system(size: 9))
+          .foregroundStyle(.tertiary)
+        Text(file.name)
+          .font(.system(.footnote, design: .monospaced))
+          .lineLimit(1)
+          .truncationMode(.middle)
+        Spacer(minLength: 8)
+        counts(added: file.added, removed: file.removed)
+      }
+      .padding(.horizontal, 10)
+      .frame(minHeight: 26)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .help(file.path)
+  }
+
+  @ViewBuilder private func counts(added: Int, removed: Int) -> some View {
+    HStack(spacing: 5) {
+      if added > 0 {
+        Text("+\(added)")
+          .foregroundStyle(Color.diffAdded)
+      }
+      if removed > 0 {
+        Text("-\(removed)")
+          .foregroundStyle(Color.diffRemoved)
+      }
+    }
+    .font(.system(.footnote, design: .monospaced))
+    .monospacedDigit()
+  }
+
+  /// A tool call spells a path the way the model wrote it, which is usually relative to the
+  /// folder the turn was working in.
+  private func resolved(_ file: ChatController.FileChange) -> URL {
+    file.path.hasPrefix("/")
+      ? URL(filePath: file.path)
+      : (workspace ?? URL(filePath: NSHomeDirectory())).appending(path: file.path)
   }
 }

@@ -19,11 +19,18 @@ public struct ChatMessage: Sendable {
   public var role: String
   public var content: Content
   public var toolCalls: [ToolCall]
+  /// Files on disk this message's pictures come from, in the order its image parts appear.
+  /// Carried so a turn can be rendered before the pictures have been read, and so a picture
+  /// that has since been deleted can be dropped from both lists at once.
+  public var imagePaths: [String]
 
-  public init(role: String, content: Content, toolCalls: [ToolCall] = []) {
+  public init(
+    role: String, content: Content, toolCalls: [ToolCall] = [], imagePaths: [String] = []
+  ) {
     self.role = role
     self.content = content
     self.toolCalls = toolCalls
+    self.imagePaths = imagePaths
   }
 
   public static func user(_ text: String) -> ChatMessage {
@@ -39,6 +46,17 @@ public struct ChatMessage: Sendable {
     ChatMessage(role: "assistant", content: .text(text), toolCalls: toolCalls)
   }
 
+  /// Whatever words this message carries, whichever shape it is in.
+  public var plainText: String {
+    switch content {
+    case .text(let text):
+      return text
+    case .parts(let parts):
+      return parts.compactMap { if case .text(let text) = $0 { text } else { nil } }
+        .joined(separator: "\n")
+    }
+  }
+
   public static func toolResult(_ text: String) -> ChatMessage {
     ChatMessage(role: "tool", content: .text(text))
   }
@@ -47,6 +65,15 @@ public struct ChatMessage: Sendable {
     var parts: [Part] = Array(repeating: .image, count: imageCount)
     if !text.isEmpty { parts.append(.text(text)) }
     return ChatMessage(role: "user", content: .parts(parts))
+  }
+
+  /// A turn that came with pictures, named rather than counted: the engine reads them when it
+  /// runs, and settles the count against however many it could actually open.
+  public static func user(text: String, imagePaths: [String]) -> ChatMessage {
+    guard !imagePaths.isEmpty else { return .user(text) }
+    var message = user(text: text, imageCount: imagePaths.count)
+    message.imagePaths = imagePaths
+    return message
   }
 }
 

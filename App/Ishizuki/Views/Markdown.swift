@@ -178,10 +178,22 @@ struct ProseText: View {
   }
 
   private func inline(_ source: String) -> AttributedString {
-    (try? AttributedString(
-      markdown: source,
-      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+    var attributed =
+      (try? AttributedString(
+        markdown: source,
+        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
       ?? AttributedString(source)
+
+    // A backtick span is given the chip it reads as everywhere else: the parser marks it, but
+    // draws it in the body face, which leaves a file name indistinguishable from prose.
+    let coded = attributed.runs.compactMap { run in
+      run.inlinePresentationIntent?.contains(.code) == true ? run.range : nil
+    }
+    for range in coded {
+      attributed[range].font = .system(size: size * 0.94, design: .monospaced)
+      attributed[range].backgroundColor = Color.primary.opacity(0.08)
+    }
+    return attributed
   }
 
   private func heading(_ line: String) -> (level: Int, text: String)? {

@@ -186,7 +186,8 @@ enum TranscriptBridge {
         let text = plainText(instructions.segments)
         if !text.isEmpty { messages.append(.system(text)) }
       case .prompt(let prompt):
-        messages.append(.user(plainText(prompt.segments)))
+        let split = PromptAttachments.split(plainText(prompt.segments))
+        messages.append(.user(text: split.body, imagePaths: split.images))
       case .response(let response):
         messages.append(.assistant(plainText(response.segments)))
       case .toolCalls(let calls):

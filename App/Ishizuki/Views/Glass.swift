@@ -157,6 +157,23 @@ extension View {
       .gloss(.rect(cornerRadius: radius))
   }
 
+  /// A plate for something short: a row's own header, the line over the composer. The sheen a
+  /// panel gets runs over the shape's whole height, which on a bubble is a highlight at the top
+  /// and on a chip two lines tall is a wash over the entire thing — and small secondary type
+  /// under that wash cannot be read at all. So this one takes a denser material and no sheen.
+  func chipPlate(
+    radius: CGFloat = 8, horizontal: CGFloat = 8, vertical: CGFloat = 2
+  ) -> some View {
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .background(.regularMaterial, in: .rect(cornerRadius: radius))
+      .overlay {
+        RoundedRectangle(cornerRadius: radius)
+          .strokeBorder(Color.hairline.opacity(0.5), lineWidth: 0.5)
+          .allowsHitTesting(false)
+      }
+  }
+
   /// The sheen that tells the eye "glass" rather than "blurred photo": a highlight pooling at
   /// the top of the shape, and a rim that catches the light the same way a real edge would.
   func gloss(_ shape: some Shape) -> some View {
@@ -176,7 +193,8 @@ extension View {
           LinearGradient(
             colors: [.white.opacity(0.6), .white.opacity(0.05)],
             startPoint: .top, endPoint: .bottom),
-          lineWidth: 1)
+          lineWidth: 1
+        )
         .allowsHitTesting(false)
     }
   }
