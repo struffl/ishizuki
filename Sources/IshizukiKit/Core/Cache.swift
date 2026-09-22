@@ -39,6 +39,7 @@ public enum CacheSnapshot: @unchecked Sendable {
 public final class KVCache: LayerCache, @unchecked Sendable {
   public private(set) var keys: MLXArray?
   public private(set) var values: MLXArray?
+  public var indexerKeys: MLXArray?
   public private(set) var offset = 0
   public let step: Int
 
@@ -49,6 +50,7 @@ public final class KVCache: LayerCache, @unchecked Sendable {
   public func reset() {
     keys = nil
     values = nil
+    indexerKeys = nil
     offset = 0
   }
 
@@ -65,10 +67,12 @@ public final class KVCache: LayerCache, @unchecked Sendable {
 
   public func export() -> [String: MLXArray]? {
     guard offset > 0, let keys, let values else { return nil }
-    return [
+    var arrays: [String: MLXArray] = [
       "keys": keys[0..., 0..., ..<offset, 0...],
       "values": values[0..., 0..., ..<offset, 0...],
     ]
+    if let indexerKeys { arrays["ik"] = indexerKeys[0..., ..<offset, 0...] }
+    return arrays
   }
 
   public func load(_ arrays: [String: MLXArray], offset: Int) -> Bool {
@@ -77,6 +81,7 @@ public final class KVCache: LayerCache, @unchecked Sendable {
     else { return false }
     self.keys = keys
     self.values = values
+    self.indexerKeys = arrays["ik"]
     self.offset = offset
     return true
   }

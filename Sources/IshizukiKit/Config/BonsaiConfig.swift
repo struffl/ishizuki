@@ -228,6 +228,10 @@ public struct BonsaiConfig: Codable, Sendable {
     /// How many tokens a query is allowed to attend to. A budget at or above the context is no
     /// budget at all, which is the only case this runtime reads.
     public var indexerBudget: Int?
+    public var indexerNumHeads: Int?
+    public var indexerKVHeads: Int?
+    public var indexerHeadDim: Int?
+    public var indexerCompressRatio: Int?
 
     enum CodingKeys: String, CodingKey {
       case modelType = "model_type"
@@ -270,6 +274,10 @@ public struct BonsaiConfig: Codable, Sendable {
       case ngramSize = "ngram_size"
       case headsPerNgram = "heads_per_ngram"
       case indexerBudget = "indexer_budget"
+      case indexerNumHeads = "indexer_n_heads"
+      case indexerKVHeads = "indexer_kv_heads"
+      case indexerHeadDim = "indexer_head_dim"
+      case indexerCompressRatio = "indexer_compress_ratio"
     }
 
     /// Whether the residual is widened. Every layer carries the streams, and the final norm is
@@ -385,7 +393,8 @@ public struct BonsaiConfig: Codable, Sendable {
       "shared_expert_intermediate_size", "norm_topk_prob", "decoder_sparse_step",
       "mlp_only_layers", "mtp_num_hidden_layers",
       "hc_count", "hc_lowrank", "ple_layer_ids", "ple_embed_dim", "ple_conv_kernel_size",
-      "ngram_size", "heads_per_ngram", "indexer_budget",
+      "ngram_size", "heads_per_ngram", "indexer_budget", "indexer_n_heads",
+      "indexer_kv_heads", "indexer_head_dim", "indexer_compress_ratio",
     ] where text[key] == nil {
       if let value = o[key] { text[key] = value }
     }
@@ -487,7 +496,8 @@ public struct BonsaiConfig: Codable, Sendable {
       "linear_num_value_heads", "linear_num_key_heads", "linear_value_head_dim",
       "linear_key_head_dim", "linear_conv_kernel_dim",
       "hc_count", "hc_lowrank", "ple_layer_ids", "ple_embed_dim", "ple_conv_kernel_size",
-      "ngram_size", "heads_per_ngram", "indexer_budget",
+      "ngram_size", "heads_per_ngram", "indexer_budget", "indexer_n_heads",
+      "indexer_kv_heads", "indexer_head_dim", "indexer_compress_ratio",
     ] {
       if let value = o[key] { text[key] = value }
     }

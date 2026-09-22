@@ -246,4 +246,68 @@ struct Qwen4ExpTests {
     }
   }
 
+  /// The same weights with a budget short of the context, so the indexer has to choose.
+  ///
+  /// At these models' shipped budget it selects every block there is and the mask says nothing
+  /// the causal one does not — which is why the attention skips building it. That makes this
+  /// the only thing that can tell a correct indexer from an absent one: a config with the
+  /// budget cut, against a reference run the same way.
+  @Test("attends to the blocks the indexer picks when the budget is short of the context")
+  func matchesTheIndexedReference() throws {
+    let scratch = try scratch()
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let source = try SourceCheckpoint(directory: fixture)
+    _ = try EngramRepack.run(source: source, destination: scratch)
+    var arrays: [String: MLXArray] = [:]
+    for name in source.tensorNames
+    where !name.hasPrefix("model.ngram_embedding.") && !name.hasPrefix("model.ple_embedding.") {
+      arrays[name] = TensorNaming.relayout(
+        name, try source.tensor(name), zeroCentredNorms: true
+      ).asType(.float32)
+    }
+    let store = try WeightStore(arrays: arrays).openingEngrams(at: scratch)
+
+    let raw = try Data(contentsOf: fixture.appending(path: "config-indexed.json"))
+    let object = try #require(
+      try JSONSerialization.jsonObject(with: raw) as? [String: Any])
+    let config = try BonsaiConfig.standard(object)
+    #expect(config.textConfig.indexerBudget == 8)
+
+    let factory = PackedModuleFactory(
+      store: store, config: config, tensorPrefix: "", dense: true, activationDType: .float32)
+    let model = try TextModel(config: config, factory: factory, store: store)
+
+    let reference = try loadArrays(
+      url: fixture.appending(path: "reference-indexed.safetensors"))
+    let dense = try loadArrays(url: fixture.appending(path: "reference.safetensors"))
+    let tokens = try #require(dense["tokens"]).asType(.int32).reshaped([1, -1])
+    let want = try #require(reference["hidden"])
+
+    // The budget has to actually bite, or this would pass against an indexer that does nothing.
+    let unindexed = try #require(dense["hidden"])
+    #expect((want - unindexed).abs().max().item(Float.self) > 1e-2)
+
+    let got = model.hidden(inputs: tokens, cache: model.makeCache())
+    eval(got)
+    let worst = (got - want).abs().max().item(Float.self)
+    #expect(
+      worst / want.abs().max().item(Float.self) < 2e-2,
+      "the indexed run drifted by \(worst)")
+
+    // And a decode step has to choose the same blocks a prefill of the same text chose, which
+    // means the indexer's own keys have to survive the step boundary.
+    let cache = model.makeCache()
+    var stepped: MLXArray?
+    for index in 0..<tokens.dim(1) {
+      stepped = model.hidden(inputs: tokens[0..., index..<(index + 1)], cache: cache)
+    }
+    let last = try #require(stepped).reshaped([-1])
+    eval(last)
+    let tail = got[0..., -1, 0...].reshaped([-1])
+    #expect(
+      (last - tail).abs().max().item(Float.self) / tail.abs().max().item(Float.self) < 1e-3,
+      "the indexer chose differently decoding than it did prefilling")
+  }
+
 }

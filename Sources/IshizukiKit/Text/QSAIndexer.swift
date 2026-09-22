@@ -81,3 +81,124 @@ public struct QSASelector: Sendable {
     return tokens(blocks: chosen, visible: visible)
   }
 }
+
+/// The indexer as a layer holds it: one small projection that reads the same activation the
+/// attention does, and produces the mask saying which keys each query may see.
+///
+/// It is a separate head geometry from the attention's — its own width, its own count, its own
+/// pair of norms — and it keeps its own keys, unnormalised and unrotated, because a block's key
+/// is the mean of its tokens' and a mean of rotated keys is not the rotation of their mean.
+public struct QSAIndexer: @unchecked Sendable {
+  let qkProj: any Projection
+  let qNorm: MLXArray
+  let kNorm: MLXArray
+  let rope: RotaryEmbedding
+  let heads: Int
+  let kvHeads: Int
+  let headDim: Int
+  let selector: QSASelector
+  let eps: Float
+
+  public init(
+    config: BonsaiConfig.TextConfig, module: String, factory: PackedModuleFactory,
+    store: WeightStore, rope: RotaryEmbedding
+  ) throws {
+    let prefix = factory.tensorPrefix + module + ".indexer"
+    guard let heads = config.indexerNumHeads, let headDim = config.indexerHeadDim,
+      let budget = config.indexerBudget, let ratio = config.indexerCompressRatio
+    else {
+      throw BonsaiError.unsupportedModel("\(module) indexes attention but says nothing of how")
+    }
+    self.qkProj = try factory.projection(module + ".indexer.index_qk_proj")
+    self.qNorm = try store(prefix + ".q_layernorm.weight")
+    self.kNorm = try store(prefix + ".k_layernorm.weight")
+    self.rope = rope
+    self.heads = heads
+    self.kvHeads = config.indexerKVHeads ?? 1
+    self.headDim = headDim
+    self.selector = QSASelector(headDim: headDim, compressRatio: ratio, budget: budget)
+    self.eps = config.rmsNormEps
+  }
+
+  /// Whether a context this long can spend the whole budget, in which case every block is
+  /// selected and the mask would say nothing the causal one does not. The check is worth making
+  /// — at the budgets these models ship, it is the only case that ever arises.
+  public func selectsEverything(upTo length: Int) -> Bool {
+    length / selector.compressRatio <= selector.blockTopK
+  }
+
+  /// One row per query, holding the key positions it may attend to. Nil when the budget
+  /// reaches the whole context and the ordinary causal mask already says it.
+  public func callAsFunction(
+    _ x: MLXArray, cache: AttentionKVCache?, offset: Int
+  ) -> MLXArray? {
+    let length = x.dim(1)
+    let seen = offset + length
+
+    // The keys are recorded whatever the answer turns out to be. A short context selects
+    // everything and needs no mask, but the tokens it saw are still what a later step pools —
+    // skipping the record here is a decode that indexes against the current token alone.
+    let projected = qkProj(x)
+    let queryWidth = heads * headDim
+    var queries = projected[.ellipsis, 0..<queryWidth]
+      .reshaped([x.dim(0), length, heads, headDim])
+    let fresh = projected[.ellipsis, queryWidth..<(queryWidth + kvHeads * headDim)]
+      .reshaped([x.dim(0), length, headDim])
+
+    var keys = fresh
+    if var cache { keys = cache.appendIndexerKeys(fresh, upTo: seen) }
+    eval(keys)
+    guard !selectsEverything(upTo: seen) else { return nil }
+
+    queries = MLXFast.rmsNorm(queries, weight: qNorm.asType(queries.dtype), eps: eps)
+    queries = rope(queries.transposed(0, 2, 1, 3), positions: Self.axes(Array(offset..<seen)))
+
+    // The selection is per query and the ranking is small, so it is done a query at a time and
+    // the answer is a list of positions rather than a tensor of them.
+    var rows: [[Int]] = []
+    rows.reserveCapacity(length)
+    let flatKeys = keys[0]
+    for query in 0..<length {
+      let visible = offset + query + 1
+      rows.append(
+        select(queries: queries[0, 0..., query, 0...], keys: flatKeys, visible: visible))
+    }
+    return mask(rows: rows, keyLength: seen, dtype: x.dtype)
+  }
+
+  /// Which positions one query keeps. The pooled block keys are normalised and rotated to the
+  /// position each block begins at, which is where its first token sat.
+  func select(queries: MLXArray, keys: MLXArray, visible: Int) -> [Int] {
+    let blocks = visible / selector.compressRatio
+    guard blocks > 0 else { return Array(0..<visible) }
+
+    var pooled = selector.pooled(keys[0..<visible, 0...])
+    pooled = MLXFast.rmsNorm(pooled, weight: kNorm.asType(pooled.dtype), eps: eps)
+    let starts = (0..<blocks).map { $0 * selector.compressRatio }
+    pooled = rope(pooled.reshaped([1, 1, blocks, headDim]), positions: Self.axes(starts))
+      .reshaped([blocks, headDim])
+
+    let chosen = selector.chooseBlocks(selector.scores(queries: queries, blockKeys: pooled))
+    return selector.tokens(blocks: chosen, visible: visible)
+  }
+
+  /// Rope here is the model's own, which is an mrope: it wants a position per axis, and text
+  /// puts the same one on all three.
+  static func axes(_ positions: [Int]) -> MLXArray {
+    let row = positions.map { Int32($0) }
+    return MLXArray(row + row + row, [3, positions.count])
+  }
+
+  /// The rows turned into something attention can add to its causal mask: zero where a key was
+  /// selected, and the floor of the dtype where it was not.
+  func mask(rows: [[Int]], keyLength: Int, dtype: DType) -> MLXArray {
+    var flat = [Bool](repeating: false, count: rows.count * keyLength)
+    for (query, kept) in rows.enumerated() {
+      let base = query * keyLength
+      for key in kept where key < keyLength { flat[base + key] = true }
+    }
+    let keep = MLXArray(flat, [1, 1, rows.count, keyLength])
+    return MLX.where(keep, MLXArray(Float(0)), MLXArray(-Float.greatestFiniteMagnitude))
+      .asType(dtype)
+  }
+}

@@ -197,16 +197,6 @@ public final class TextModel: @unchecked Sendable {
     }
     self.layers = built
 
-    // A full-attention layer of these models scores blocks of keys and attends to the best
-    // `indexer_budget` of them. At a budget that reaches the whole context it selects
-    // everything, which is ordinary causal attention — so the indexer is not built, and a pack
-    // that would actually need it is refused rather than served a different model quietly.
-    if let budget = text.indexerBudget, budget < text.maxPositionEmbeddings {
-      throw BonsaiError.unsupportedModel(
-        "this pack indexes attention down to \(budget) of \(text.maxPositionEmbeddings) "
-          + "tokens; the sparse-attention path is not implemented")
-    }
-
     if text.usesHyperConnections {
       self.norm = nil
       self.mixer = try DecoderLayer.residual(

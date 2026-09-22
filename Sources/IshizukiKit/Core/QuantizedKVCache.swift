@@ -15,6 +15,26 @@ public enum AttentionOperands {
 public protocol AttentionKVCache: LayerCache {
   func appendForAttention(keys: MLXArray, values: MLXArray) -> AttentionOperands
   var byteCount: Int { get }
+
+  /// The indexer's own keys, one small head's worth per token, kept unnormalised and
+  /// unrotated the way it wants to pool them. Only a layer that indexes writes here.
+  var indexerKeys: MLXArray? { get set }
+}
+
+extension AttentionKVCache {
+  /// Appends this chunk's indexer keys and hands back every key the query can see. Rewinding
+  /// a cache moves its offset rather than truncating it, so what comes back is cut to the
+  /// offset rather than to whatever the array happens to still hold.
+  public func appendIndexerKeys(_ new: MLXArray, upTo length: Int) -> MLXArray {
+    let all: MLXArray
+    if let held = indexerKeys, held.dim(1) >= length - new.dim(1) {
+      all = concatenated([held[0..., 0..<(length - new.dim(1)), 0...], new], axis: 1)
+    } else {
+      all = new
+    }
+    indexerKeys = all
+    return all
+  }
 }
 
 public struct KVCacheConfig: Sendable, Equatable {
@@ -76,6 +96,8 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
   private var windowKeys: MLXArray?
   private var windowValues: MLXArray?
 
+  public var indexerKeys: MLXArray?
+
   public private(set) var offset = 0
 
   public init(config: KVCacheConfig) {
@@ -89,6 +111,7 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
     quantizedCapacity = 0
     windowKeys = nil
     windowValues = nil
+    indexerKeys = nil
     offset = 0
   }
 
@@ -231,6 +254,7 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
       arrays["wk"] = windowKeys
       arrays["wv"] = windowValues
     }
+    if let indexerKeys { arrays["ik"] = indexerKeys[0..., 0..<offset, 0...] }
     return arrays.isEmpty ? nil : arrays
   }
 
@@ -262,6 +286,7 @@ public final class QuantizedKVCache: AttentionKVCache, @unchecked Sendable {
     quantizedCapacity = restoredQuantized
     windowKeys = window?.0
     windowValues = window?.1
+    indexerKeys = arrays["ik"]
     self.offset = offset
     return true
   }

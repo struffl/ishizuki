@@ -118,4 +118,20 @@ save_file(
     {"tokens": tokens.to(torch.int32), "hidden": hidden.to(torch.float32),
      "logits": logits.to(torch.float32), **stages},
     os.path.join(OUT, "reference.safetensors"))
+
+# The same weights with a budget short of the context, so the indexer actually has to choose.
+# At ratio 4 and budget 8 a query near the end sees two blocks of the three it could.
+indexed = Qwen4ExpTextConfig(**{**config.to_dict(), "indexer_budget": 8})
+probe = Qwen4ExpTextModel(indexed).eval()
+probe.load_state_dict(model.state_dict())
+with torch.no_grad():
+    sparse = probe(input_ids=tokens, use_cache=False).last_hidden_state
+save_file(
+    {"hidden": sparse.to(torch.float32), "logits": head(sparse).to(torch.float32)},
+    os.path.join(OUT, "reference-indexed.safetensors"))
+settings_indexed = dict(settings)
+settings_indexed["indexer_budget"] = 8
+with open(os.path.join(OUT, "config-indexed.json"), "w") as f:
+    json.dump(settings_indexed, f, indent=1, sort_keys=True, default=str)
+print("indexed differs from dense:", (sparse - hidden).abs().max().item())
 print("layers", config.num_hidden_layers, "tensors", len(tensors), "hidden", tuple(hidden.shape))

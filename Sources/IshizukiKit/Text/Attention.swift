@@ -21,6 +21,10 @@ public final class Attention: @unchecked Sendable {
   private let scale: Float
   private let normEps: Float
   private let outputGate: Bool
+  /// Present only when the pack indexes attention and its budget is short of its context.
+  /// A budget that reaches the context selects every block, which is what the causal mask
+  /// already says, so there is nothing to build.
+  private let indexer: QSAIndexer?
 
   public init(
     config: BonsaiConfig.TextConfig, layer: Int,
@@ -44,6 +48,15 @@ public final class Attention: @unchecked Sendable {
     self.oProj = try factory.linear(prefix + ".o_proj")
     self.qNorm = try store(tensorPrefix + ".q_norm.weight")
     self.kNorm = try store(tensorPrefix + ".k_norm.weight")
+
+    if let budget = config.indexerBudget, budget < config.maxPositionEmbeddings,
+      store.has(tensorPrefix + ".indexer.index_qk_proj.weight")
+    {
+      self.indexer = try QSAIndexer(
+        config: config, module: prefix, factory: factory, store: store, rope: rope)
+    } else {
+      self.indexer = nil
+    }
   }
 
   public func callAsFunction(
@@ -74,9 +87,15 @@ public final class Attention: @unchecked Sendable {
 
     // The residual stream is wider than the modules, so the mask arrives in whichever dtype the
     // trunk built it with.
-    let mask = mask.map { $0.dtype == .bool ? $0 : $0.asType(queries.dtype) }
+    var mask = mask.map { $0.dtype == .bool ? $0 : $0.asType(queries.dtype) }
 
     let offset = cache?.offset ?? 0
+    // What the indexer refuses is added to what the causal mask refuses. It has to be read
+    // before the keys are appended, since it keeps keys of its own against the same offset.
+    if let indexer, let selected = indexer(x, cache: cache, offset: offset) {
+      let causal = mask.map { $0.dtype == .bool ? floor(of: $0, like: selected) : $0 }
+      mask = causal.map { $0 + selected } ?? selected
+    }
     if let positions {
       queries = rope(queries, positions: positions)
       keys = rope(keys, positions: positions)
@@ -254,6 +273,12 @@ func sharesRotation(_ a: PackedLinear, _ b: PackedLinear) -> Bool {
   guard let left = a.signs, let right = b.signs else { return a.signs == nil && b.signs == nil }
   guard left.shape == right.shape else { return false }
   return (left .!= right).sum().item(Int.self) == 0
+}
+
+/// A boolean mask as the additive one the indexer's answer can be added to.
+func floor(of allowed: MLXArray, like other: MLXArray) -> MLXArray {
+  MLX.where(allowed, MLXArray(Float(0)), MLXArray(-Float.greatestFiniteMagnitude))
+    .asType(other.dtype)
 }
 
 public func causalMask(length: Int, offset: Int, dtype: DType) -> MLXArray? {
