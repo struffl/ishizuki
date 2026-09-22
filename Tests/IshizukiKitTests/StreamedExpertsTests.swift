@@ -18,7 +18,13 @@ struct StreamedExpertsTests {
   private let hidden = 64
   private let intermediate = 96
   private let groupSize = 32
-  private let bits = 4
+  /// Mixed on purpose, the way an imatrix-weighted pack lifts one projection above its
+  /// neighbours: a source that reads all three at one width fails here.
+  private let quants = [
+    "gate_proj": BonsaiConfig.ModuleQuant(bits: 4, groupSize: 32),
+    "up_proj": BonsaiConfig.ModuleQuant(bits: 3, groupSize: 32),
+    "down_proj": BonsaiConfig.ModuleQuant(bits: 2, groupSize: 32),
+  ]
 
   private struct Bank {
     var resident: ResidentExperts
@@ -35,6 +41,7 @@ struct StreamedExpertsTests {
       ("gate_proj", intermediate, hidden), ("up_proj", intermediate, hidden),
       ("down_proj", hidden, intermediate),
     ] {
+      let bits = quants[name]!.bits
       let dense = MLXRandom.normal([experts, out, into], dtype: .float32) * 0.1
       let (weight, scales, biases) = quantized(
         dense, groupSize: groupSize, bits: bits, mode: .affine)
@@ -84,14 +91,14 @@ struct StreamedExpertsTests {
     let bank = bank()
     try write(bank, to: url)
     let streamed = StreamedExperts(
-      store: try ExpertStore(url: url, layout: bank.layout, slots: slots))
+      store: try ExpertStore(url: url, layout: bank.layout, slots: slots), quants: quants)
 
     for chosen in routing {
       let x = MLXRandom.normal([chosen.count / 2, hidden], dtype: .float32)
       let indices = MLXArray(chosen, [chosen.count / 2, 2])
 
-      let want = bank.resident.swiglu(x, chosen: indices, groupSize: groupSize, bits: bits)
-      let got = try streamed.swiglu(x, chosen: indices, groupSize: groupSize, bits: bits)
+      let want = bank.resident.swiglu(x, chosen: indices)
+      let got = try streamed.swiglu(x, chosen: indices)
       eval(want, got)
 
       #expect(got.shape == want.shape)
@@ -124,7 +131,7 @@ struct StreamedExpertsTests {
     let bank = bank()
     try write(bank, to: url)
     let streamed = StreamedExperts(
-      store: try ExpertStore(url: url, layout: bank.layout, slots: 2))
+      store: try ExpertStore(url: url, layout: bank.layout, slots: 2), quants: quants)
 
     let tokens = 32
     let x = MLXRandom.normal([tokens, hidden], dtype: .float32)
@@ -134,8 +141,8 @@ struct StreamedExpertsTests {
     }
     let chosen = MLXArray(routing, [tokens, 2])
 
-    let want = bank.resident.swiglu(x, chosen: chosen, groupSize: groupSize, bits: bits)
-    let got = try streamed.swiglu(x, chosen: chosen, groupSize: groupSize, bits: bits)
+    let want = bank.resident.swiglu(x, chosen: chosen)
+    let got = try streamed.swiglu(x, chosen: chosen)
     eval(want, got)
 
     #expect(got.shape == want.shape)
@@ -153,12 +160,12 @@ struct StreamedExpertsTests {
     let bank = bank()
     try write(bank, to: url)
     let streamed = StreamedExperts(
-      store: try ExpertStore(url: url, layout: bank.layout, slots: 2))
+      store: try ExpertStore(url: url, layout: bank.layout, slots: 2), quants: quants)
 
     let x = MLXRandom.normal([1, hidden], dtype: .float32)
     let chosen = MLXArray([Int32](arrayLiteral: 0, 1, 2, 3), [1, 4])
     #expect(throws: BonsaiError.self) {
-      _ = try streamed.swiglu(x, chosen: chosen, groupSize: groupSize, bits: bits)
+      _ = try streamed.swiglu(x, chosen: chosen)
     }
   }
 }
