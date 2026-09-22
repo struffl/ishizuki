@@ -221,12 +221,10 @@ struct SandboxSection: View {
       Text(
         SandboxArtifacts.isReady || !settings.kernelPath.isEmpty
           ? "A container boots in this process through Containerization; the folder is shared in at /workspace."
-          : "No kernel found. Install apple/container, which leaves one on this Mac, or give a path here."
+          : "No kernel found yet — one is fetched automatically the first time a container boots. Give a path here to use one already on this Mac instead."
       )
       .font(.footnote)
-      .foregroundStyle(
-        SandboxArtifacts.isReady || !settings.kernelPath.isEmpty
-          ? Color.secondary : Color.orange)
+      .foregroundStyle(.secondary)
     }
   }
 }

@@ -63,7 +63,7 @@ actor ContainerSandbox: ExecTransport {
   private func boot() async throws {
     let platform: SystemPlatform =
       choice.architecture == .amd64 ? .linuxAmd : .linuxArm
-    let kernel = try artifacts.kernel(for: platform)
+    let kernel = try await artifacts.kernel(for: platform, report: report)
 
     report(.starting("fetching \(choice.image)"))
 

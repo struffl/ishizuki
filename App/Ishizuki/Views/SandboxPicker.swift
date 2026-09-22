@@ -109,11 +109,9 @@ struct SandboxPicker: View {
           + "\(memoryRange.upperBound) GB spare after the pack and the system")
 
       if !SandboxArtifacts.isReady, chat.sandboxes.settings.kernelPath.isEmpty {
-        Text(
-          "No Linux kernel found. Install apple/container, or point Settings at a vmlinux."
-        )
-        .font(.footnote)
-        .foregroundStyle(.orange)
+        Text("First boot fetches a Linux kernel automatically; after that it's cached.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
       }
     }
   }
