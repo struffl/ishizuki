@@ -27,6 +27,12 @@ final class LocalSession {
   var availability: SystemLanguageModel.Availability { SystemLanguageModel.default.availability }
   var isAvailable: Bool { SystemLanguageModel.default.isAvailable }
 
+  /// The name the system gives the model it serves this phone. Nothing here chooses it —
+  /// `SystemLanguageModel` takes a use case and guardrails and nothing else — so this reports
+  /// what was handed over.
+  @available(iOS 27.0, *)
+  var variantName: String { SystemLanguageModel.default.variant.displayName }
+
   /// Why the on-device model cannot answer, in the words the person can act on.
   var blocker: String? {
     switch availability {

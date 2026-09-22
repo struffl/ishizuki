@@ -188,7 +188,9 @@ private struct AppleModelRow: View {
       .help(isActive ? "This model is answering" : "Answer with this model")
       VStack(alignment: .leading, spacing: 2) {
         Text(model.displayName).font(.system(.callout, weight: .medium))
-        Text(model.subtitle).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
+        Text(AppleModelVariant.subtitle(for: model))
+          .font(.system(.footnote, design: .monospaced))
+          .foregroundStyle(.secondary)
       }
       Spacer()
       if !isActive {

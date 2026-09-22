@@ -38,7 +38,7 @@ struct ChatListView: View {
             Label {
               VStack(alignment: .leading, spacing: 2) {
                 Text("Ask this iPhone")
-                Text(local.blocker ?? "Apple's on-device model, no files, no shell")
+                Text(local.blocker ?? Self.readyDetail(local))
                   .font(.caption)
                   .foregroundStyle(.secondary)
               }
@@ -108,6 +108,12 @@ struct ChatListView: View {
           model: ConversationModel(id: chat.id, summary: chat, store: store), chats: chats)
       }
     }
+  }
+
+  /// What the phone is answering with, named where the system names it.
+  private static func readyDetail(_ local: LocalSession) -> String {
+    guard #available(iOS 27.0, *) else { return "Apple's on-device model, no files, no shell" }
+    return "\(local.variantName), no files, no shell"
   }
 }
 

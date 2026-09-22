@@ -86,8 +86,7 @@ struct PhoneSettingsView: View {
         }
 
         Section("This iPhone") {
-          LabeledContent(
-            "On-device model", value: local.isAvailable ? "ready" : (local.blocker ?? "off"))
+          LabeledContent("On-device model", value: Self.modelValue(local))
         }
 
         Section {
@@ -116,6 +115,13 @@ struct PhoneSettingsView: View {
     case .ready: "connected"
     case .offline(let why): why
     }
+  }
+
+  /// Ready, and which model is ready — the system names it, nothing here picks it.
+  private static func modelValue(_ local: LocalSession) -> String {
+    guard local.isAvailable else { return local.blocker ?? "off" }
+    guard #available(iOS 27.0, *) else { return "ready" }
+    return local.variantName
   }
 
   private func refresh() async {
