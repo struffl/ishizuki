@@ -31,8 +31,10 @@ struct ChatReadoutBar: View {
     .padding(.vertical, 6)
   }
 
+  /// The dial belongs to the conversation on screen: a turn being answered elsewhere is that
+  /// conversation's, and showing its rate here would be about a transcript nobody is reading.
   private var live: ServeStats.Request? {
-    guard let request = chat.inFlight, request.rate > 0 else { return nil }
+    guard chat.isResponding, let request = chat.inFlight, request.rate > 0 else { return nil }
     return request
   }
 
@@ -68,30 +70,48 @@ struct ChatReadoutBar: View {
 
   @ViewBuilder private var modelSwitcher: some View {
     Menu {
-      ForEach(controller.catalog.entries, id: \.id) { entry in
-        Button {
-          controller.activate(entry.id)
-        } label: {
-          if entry.id == controller.settings.activeModelID {
-            Label(entry.displayName, systemImage: "checkmark")
-          } else {
-            Text(entry.displayName)
+      Section("Apple Intelligence") {
+        ForEach(AppleFoundationModel.allCases) { model in
+          Button {
+            controller.settings.appleModel = model
+          } label: {
+            if controller.settings.appleModel == model {
+              Label(model.displayName, systemImage: "checkmark")
+            } else {
+              Text(model.displayName)
+            }
+          }
+        }
+      }
+      if !controller.catalog.entries.isEmpty {
+        Section("Packs on this Mac") {
+          ForEach(controller.catalog.entries, id: \.id) { entry in
+            Button {
+              controller.activate(entry.id)
+            } label: {
+              if controller.settings.appleModel == nil && entry.id == controller.settings.activeModelID
+              {
+                Label(entry.displayName, systemImage: "checkmark")
+              } else {
+                Text(entry.displayName)
+              }
+            }
           }
         }
       }
     } label: {
-      Text(controller.activeEntry?.displayName ?? "No pack")
+      Text(controller.settings.appleModel?.displayName ?? controller.activeEntry?.displayName ?? "No pack")
         .font(.subheadline)
         .lineLimit(1)
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
     .frame(minHeight: Metrics.hit)
-    .disabled(controller.catalog.entries.isEmpty || chat.isRunningTurn)
-    .accessibilityLabel("Model pack")
+    .disabled(chat.isRunningTurn)
+    .accessibilityLabel("Model")
     .help(
       chat.isRunningTurn
-        ? "Finish or stop the turn before switching packs" : "Which pack answers")
+        ? "Finish or stop the turn before switching models" : "Which model answers")
   }
 
   @ViewBuilder private var effortDial: some View {

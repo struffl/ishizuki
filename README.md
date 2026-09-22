@@ -176,6 +176,11 @@ The Tools tab carries the work that is not serving:
 - **Quantize** — build a mixed-width pack from a full-precision checkpoint. The plan names its
   destination and estimates its size before it starts, and it can measure real activations
   first rather than quantizing blind to them.
+- **Stream Experts** — split a mixture-of-experts pack in two: the shared half stays in memory,
+  the routed experts move to a file per sparse layer and are read a few at a time. The values
+  are copied through untouched, so a streamed pack answers token for token like the pack it
+  came from — slower, on a machine that could not otherwise hold it. How many experts a layer
+  keeps resident is the slot budget under Settings › Model.
 - **Prefix cache** — what is archived between runs, and getting rid of it.
 
 ## Benchmarks

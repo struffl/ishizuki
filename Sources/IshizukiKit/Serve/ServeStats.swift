@@ -47,10 +47,11 @@ public final class ServeStats: @unchecked Sendable {
       let tokens = phaseTokens()
       let span = -rateWindowStart.timeIntervalSince(now)
       let batch = tokens - rateWindowTokens
-      // Only refresh once a batch has landed — enough tokens, or enough time —
-      // so the displayed rate is a batch average, not a per-poll number.
-      guard batch >= 8 || span >= 0.5 else { return }
-      rate = Double(batch) / max(span, 0.05)
+      // A rate needs a batch and long enough to have timed it. A prompt that was
+      // already cached arrives whole in one callback, and dividing it by a span
+      // that never happened invents a number to put on the dial.
+      guard batch > 0, span >= 0.25 else { return }
+      rate = Double(batch) / span
       rateWindowStart = now
       rateWindowTokens = tokens
     }

@@ -28,6 +28,7 @@ final class ServerController {
 
   let settings = ServerSettings()
   let library = ModelLibrary()
+  let samplerSettings = SamplerSettingsStore()
 
   private var server: APIServer?
   /// Made once per loaded server, so the chat borrows the same weights the port is serving.
@@ -123,6 +124,9 @@ final class ServerController {
     let name = entry.id
 
     let neural = settings.neuralEngine
+    // Read as the pack is opened, so a streamed model's slot budget is whatever the dial said
+    // when it was started rather than whatever it says now.
+    BonsaiRuntime.expertSlots = settings.expertSlots
 
     Task {
       do {
@@ -140,6 +144,7 @@ final class ServerController {
         server.log = { [weak self] message in
           Task { @MainActor in self?.append(message) }
         }
+        server.samplingOptions = self.samplerSettings.samplingOptions(for: name)
         try server.listen(port: port)
         self.server = server
         self.engine = AgentEngine(server: server)
@@ -167,15 +172,25 @@ final class ServerController {
   }
 
   func activate(_ id: String) {
+    settings.appleModel = nil
     settings.activeModelID = id
     guard phase.isRunning, let server else { return }
+    let options = samplerSettings.samplingOptions(for: id)
     Task.detached { [weak self] in
       do {
         try server.activate(id)
+        server.samplingOptions = options
       } catch {
         await MainActor.run { self?.append("switch to \(id) failed: \(error)") }
       }
     }
+  }
+
+  /// Called as the sampler sheet is edited, so a pack already answering picks up the new
+  /// numbers on its next turn rather than waiting for the next activation.
+  func updateSamplerSettings(_ new: SamplerSettings, for id: String) {
+    samplerSettings.set(new, for: id)
+    if id == settings.activeModelID { server?.samplingOptions = new.samplingOptions }
   }
 
   private func append(_ message: String) {

@@ -30,9 +30,28 @@ struct TranscriptRowView: View {
       folded(title: row.tool ?? "tool", icon: "terminal", tint: Color.reading)
     case .toolOutput:
       folded(title: "\(row.tool ?? "tool") said", icon: "text.alignleft", tint: .secondary)
+    case .notice:
+      notice
     case .system, .steer:
       EmptyView()
     }
+  }
+
+  /// Where a turn stopped or came apart, in the conversation at the point it happened.
+  private var notice: some View {
+    let stopped = row.tool == "stopped"
+    return HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Image(systemName: stopped ? "stop.circle" : "exclamationmark.triangle")
+        .font(.footnote)
+      Text(row.text)
+        .font(.footnote)
+        .textSelection(.enabled)
+      Spacer(minLength: 0)
+    }
+    .foregroundStyle(stopped ? Color.secondary : .orange)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .background(.thinMaterial, in: .rect(cornerRadius: 10))
   }
 
   private var prompt: some View {

@@ -24,6 +24,8 @@ final class ChatController {
       case answer
       case toolCall(name: String)
       case toolOutput(name: String)
+      /// What became of a turn when it was not an answer: stopped, or failed.
+      case notice(tone: ChatNotice.Tone)
 
       /// Everything the model had to read before it could answer, which is what the token
       /// count on a prompt row is explaining.
@@ -40,7 +42,7 @@ final class ChatController {
       var isInput: Bool {
         switch self {
         case .system, .prompt, .steer, .toolOutput: true
-        case .reasoning, .answer, .toolCall: false
+        case .reasoning, .answer, .toolCall, .notice: false
         }
       }
 
@@ -57,7 +59,7 @@ final class ChatController {
       /// above it: a run of tool traffic reads as one block of machinery, not as six separate
       /// remarks, and only a change of voice earns a real gap.
       enum Voice {
-        case mine, said, machinery
+        case mine, said, machinery, aside
       }
 
       var voice: Voice {
@@ -65,6 +67,8 @@ final class ChatController {
         case .prompt, .steer: .mine
         case .answer: .said
         case .system, .reasoning, .toolCall, .toolOutput: .machinery
+        // Its own voice, so it never closes up against the row it is explaining.
+        case .notice: .aside
         }
       }
     }
@@ -79,15 +83,6 @@ final class ChatController {
     /// A tool output carries the id of the call it answers, so the two rows need telling apart
     /// before anything keys on one: sharing an id, only the call survived the list's identity.
     static func outputID(_ callID: String) -> String { callID + "\u{2192}" }
-  }
-
-  struct Meter {
-    var turns = 0
-    var seconds = 0.0
-    var tokens = 0
-
-    var averageSeconds: Double { turns > 0 ? seconds / Double(turns) : 0 }
-    var averageTokens: Int { turns > 0 ? tokens / turns : 0 }
   }
 
   /// The transcript's own rows, replaced wholesale as it fills.
@@ -308,7 +303,10 @@ final class ChatController {
     return run?.chatID == chat.id
   }
   private(set) var failure: String?
-  private(set) var meter = Meter()
+
+  /// What the conversation on screen has cost, which moves with it: every chat keeps its own
+  /// tally, so switching to another one shows that one's turns rather than the window's.
+  var meter: TurnMeter { current.meter }
   /// What the last turn put in front of the model, so the dial can show the prefill against it.
   private(set) var lastPrompt = 0
   private(set) var lastCached = 0
@@ -408,7 +406,7 @@ final class ChatController {
     }
     if chats.isEmpty { chats = [current] }
     var builder = RowBuilder()
-    self.transcriptRows = builder.rows(from: current.transcript)
+    self.transcriptRows = builder.rows(from: current.transcript, notices: current.notes)
     rebuildSummaries()
 
     NotificationCenter.default.addObserver(
@@ -498,7 +496,8 @@ final class ChatController {
       failure = state.failure
     } else {
       var builder = RowBuilder()
-      transcriptRows = builder.rows(from: agents[chat.id]?.transcript ?? chat.transcript)
+      transcriptRows = builder.rows(
+        from: agents[chat.id]?.transcript ?? chat.transcript, notices: chat.notes)
       meta.removeAll()
       display.removeAll()
       pendingSteers = queuedSteers.removeValue(forKey: chat.id) ?? []
@@ -663,8 +662,12 @@ final class ChatController {
     if workspace == nil { return .chooseFolder }
     if isResponding { return .steer }
     if isRunningTurn { return .busy }
-    if server?.phase.isBusy == true { return .loading }
-    if engine == nil { return .load }
+    // One of Apple's own models needs nothing loaded: it answers whether or not a pack is
+    // resident, so none of the pack's own gating applies while it is the one chosen.
+    if server?.settings.appleModel == nil {
+      if server?.phase.isBusy == true { return .loading }
+      if engine == nil { return .load }
+    }
     if !typed.isEmpty || !pendingSteers.isEmpty || !attachments.isEmpty { return .send }
     return .nothingToSay
   }
@@ -795,8 +798,8 @@ final class ChatController {
       var builder = RowBuilder()
       let transcript = agent.transcript.isEmpty ? chat.transcript : agent.transcript
       parked[chatID] = Parked(
-        rows: builder.rows(from: transcript), meta: [:], display: [:], steers: [],
-        failure: nil)
+        rows: builder.rows(from: transcript, notices: chat.notes), meta: [:], display: [:],
+        steers: [], failure: nil)
     }
     engine?.effort = chatID == current.id ? effort : chat.effort
 
@@ -815,9 +818,11 @@ final class ChatController {
       do {
         _ = try await agent.send(payload)
       } catch is CancellationError {
-        // Stopping a turn is an ordinary thing to do, not a failure to report.
+        // Stopping a turn is an ordinary thing to do, but it still leaves a mark where it
+        // happened rather than a gap someone has to remember the reason for.
+        self?.note("Stopped", tone: .stopped, for: run.chatID)
       } catch {
-        self?.report(error.localizedDescription, for: run.chatID)
+        self?.note(ChatController.plainly(error), tone: .failed, for: run.chatID)
       }
       guard let self else { return }
       self.finish(run)
@@ -829,13 +834,39 @@ final class ChatController {
     run?.task?.cancel()
   }
 
-  /// A failure belongs to the conversation that earned it, not to whichever one is being read
-  /// when it lands.
-  private func report(_ message: String, for chatID: UUID) {
+  /// What became of a turn, written into the conversation that earned it — not into a bar
+  /// under whichever one is being read when it lands. It sits after the last row there is, so
+  /// a stop lands under the half-written answer it cut off.
+  private func note(_ text: String, tone: ChatNotice.Tone, for chatID: UUID) {
+    let notice = ChatNotice(tone: tone, text: text, after: rows(of: chatID).last?.id)
+    update(chatID) { $0.notes.append(notice) }
+    if let chat = saved(chatID) { store.save(chat) }
+    refreshRows(of: chatID)
+  }
+
+  /// A framework error said in one line. A tool that throws arrives with its whole declaration
+  /// printed into the message, which is a paragraph of Swift where a sentence would do.
+  nonisolated static func plainly(_ error: Error) -> String {
+    let whole = error.localizedDescription
+    let message =
+      whole.range(of: "Underlying error: ").map { String(whole[$0.upperBound...]) } ?? whole
+    return
+      message
+      .replacing(/\s+/, with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// The rows of a conversation folded again, notices and all, wherever they are held.
+  private func refreshRows(of chatID: UUID) {
+    guard let chat = saved(chatID) else { return }
+    var builder = RowBuilder()
+    let rows = builder.rows(
+      from: agents[chatID]?.transcript ?? chat.transcript, notices: chat.notes)
     if chatID == current.id {
-      failure = message
-    } else {
-      parked[chatID]?.failure = message
+      transcriptRows = Self.keeping(transcriptRows, with: rows)
+    } else if var state = parked[chatID] {
+      state.rows = Self.keeping(state.rows, with: rows)
+      parked[chatID] = state
     }
   }
 
@@ -950,11 +981,24 @@ final class ChatController {
   /// whichever one the window happens to be pointed at.
   private func resolveAgent(for chatID: UUID) -> CodingAgent? {
     if let agent = agents[chatID] { return agent }
-    guard let engine, let chat = saved(chatID) else { return nil }
+    guard let chat = saved(chatID) else { return nil }
     let folder =
       (chatID == current.id ? workspace : nil)
       ?? chat.workspace.map { URL(filePath: $0) }
-    engine.effort = chatID == current.id ? effort : chat.effort
+
+    let choiceModel: CodingAgent.ModelChoice
+    if let apple = server?.settings.appleModel {
+      // Reasoning level and guardrails live beside every pack's own sampler knobs, keyed the
+      // same way — one settings sheet, whichever kind of model it is a sheet for.
+      let sampler = server?.samplerSettings.settings(for: apple.id) ?? .default
+      choiceModel = .apple(
+        apple, reasoningLevel: sampler.resolvedAppleReasoningLevel,
+        guardrails: sampler.resolvedAppleGuardrails)
+    } else {
+      guard let engine else { return nil }
+      engine.effort = chatID == current.id ? effort : chat.effort
+      choiceModel = .resident(engine)
+    }
 
     // A sandbox needs a folder to share in. Without one there is nothing to sandbox, so the
     // choice quietly becomes this Mac rather than failing on the first command.
@@ -962,7 +1006,7 @@ final class ChatController {
     if folder == nil { choice.kind = .native }
 
     let made = CodingAgent(
-      engine: engine,
+      model: choiceModel,
       workspace: Workspace(
         host: sandboxes.host(
           for: chatID, choice: choice,
@@ -1025,6 +1069,10 @@ final class ChatController {
     run.lastCheckpoint = Date()
     let transcript = run.agent.transcript
     guard !transcript.isEmpty, var saved = saved(run.chatID) else { return }
+    // A turn that comes apart can hand back a transcript shorter than the one already on disk.
+    // Whatever else that costs, it must not cost the conversation: the checkpoint waits for a
+    // transcript that is at least as long as the one it would be writing over.
+    guard transcript.count >= saved.transcript.count else { return }
     saved.transcript = transcript
     saved.updated = Date()
     if run.chatID == current.id {
@@ -1055,19 +1103,25 @@ final class ChatController {
     closeClocks(run)
     if run.chatID == current.id { rebuildSummaries() }
     recordTurnCost(run)
+    let seconds = -run.started.timeIntervalSinceNow
+    let generated = server?.readout.map { max(0, $0.totals.generatedTokens - run.tokensAtStart) }
+    update(run.chatID) { chat in
+      chat.meter.turns += 1
+      chat.meter.seconds += seconds
+      chat.meter.tokens += generated ?? 0
+    }
     persist(run.chatID, prompt: true)
 
-    meter.turns += 1
-    meter.seconds += -run.started.timeIntervalSinceNow
     if let readout = server?.readout {
-      meter.tokens += max(0, readout.totals.generatedTokens - run.tokensAtStart)
       lastPrompt = readout.context.peakTokens
       lastCached = readout.prefix?.hits ?? 0
     }
   }
 
   private func absorbTranscript(of run: Run) {
-    absorb(run.builder.rows(from: run.agent.transcript), for: run)
+    absorb(
+      run.builder.rows(from: run.agent.transcript, notices: saved(run.chatID)?.notes ?? []),
+      for: run)
   }
 
   /// A row's clock starts the first time it is seen, which is as close to when it happened as
@@ -1076,7 +1130,9 @@ final class ChatController {
   /// Where the rows land depends on whether the turn is the one being watched: the conversation
   /// on screen takes them through the observed properties, and one left running takes them into
   /// its parked copy, which draws nothing until it is opened again.
-  private func absorb(_ rows: [Row], for run: Run) {
+  private func absorb(_ folded: [Row], for run: Run) {
+    let shown = run.chatID == current.id ? transcriptRows : (parked[run.chatID]?.rows ?? [])
+    let rows = Self.keeping(shown, with: folded)
     if run.chatID == current.id {
       // Assigning an identical array would still be a change to everything watching it, and at
       // twenty polls a second that is a re-render of the whole transcript for nothing.
@@ -1089,6 +1145,25 @@ final class ChatController {
       stamp(rows, into: &state.meta, for: run)
       parked[run.chatID] = state
     }
+  }
+
+  /// The rows as they now stand, with nothing lost that was on screen a moment ago.
+  ///
+  /// The session's transcript is asked to survive a failed turn, but it is the framework's to
+  /// keep and a conversation is too expensive to lose on that promise alone. When a fold comes
+  /// back missing rows that were already drawn, the older ones stay and whatever is new is
+  /// added to them; a fold that only grows replaces them outright, which is every ordinary
+  /// poll.
+  nonisolated static func keeping(_ shown: [Row], with folded: [Row]) -> [Row] {
+    guard !shown.isEmpty else { return folded }
+    let arrived = Set(folded.map(\.id))
+    guard !shown.allSatisfy({ arrived.contains($0.id) }) else { return folded }
+
+    let latest = Dictionary(folded.map { ($0.id, $0) }, uniquingKeysWith: { _, second in second })
+    var out = shown.map { latest[$0.id] ?? $0 }
+    let held = Set(shown.map(\.id))
+    out.append(contentsOf: folded.filter { !held.contains($0.id) })
+    return out
   }
 
   /// A row's clock starts when it appears and stops when the next one does. A transcript
@@ -1190,7 +1265,7 @@ final class ChatController {
     if let parked = parked[id] { return parked.rows }
     guard let chat = saved(id) else { return [] }
     var builder = RowBuilder()
-    return builder.rows(from: agents[id]?.transcript ?? chat.transcript)
+    return builder.rows(from: agents[id]?.transcript ?? chat.transcript, notices: chat.notes)
   }
 
   func meta(of id: UUID) -> [String: RowMeta] {
@@ -1329,9 +1404,30 @@ final class ChatController {
   /// Always fold the current snapshot so an earlier row cannot retain a partial streamed value.
   /// `absorb` avoids publishing unchanged rows to the view.
   struct RowBuilder {
-    func rows(from transcript: Transcript) -> [Row] {
-      ChatController.fold(transcript, into: [])
+    func rows(from transcript: Transcript, notices: [ChatNotice] = []) -> [Row] {
+      ChatController.weave(notices, into: ChatController.fold(transcript, into: []))
     }
+  }
+
+  /// A notice back into the rows at the point it happened, or at the end when the row it
+  /// followed is no longer there.
+  nonisolated static func weave(_ notices: [ChatNotice], into rows: [Row]) -> [Row] {
+    guard !notices.isEmpty else { return rows }
+    var out = rows
+    for notice in notices.sorted(by: { $0.at < $1.at }) {
+      let row = Row(
+        id: notice.id.uuidString, kind: .notice(tone: notice.tone), text: notice.text)
+      guard let anchor = notice.after,
+        var index = out.lastIndex(where: { $0.id == anchor })
+      else {
+        out.append(row)
+        continue
+      }
+      // Past anything already sitting under that row, so two notices keep their order.
+      while index + 1 < out.count, case .notice = out[index + 1].kind { index += 1 }
+      out.insert(row, at: index + 1)
+    }
+    return out
   }
 
   nonisolated private static func text(_ segments: [Transcript.Segment]) -> String {

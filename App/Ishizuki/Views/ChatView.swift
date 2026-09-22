@@ -704,6 +704,26 @@ struct ChatRowView: View, Equatable {
       disclosure(
         title: "\(verb(for: name)) →", icon: "arrow.turn.down.right", tint: .secondary,
         rawBody: row.text, monospaced: true)
+
+    // Where a turn stopped or came apart, drawn in the conversation at the point it happened
+    // rather than in a bar under it that the next turn wipes.
+    case .notice(let tone):
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: tone == .stopped ? "stop.circle" : "exclamationmark.triangle")
+          .font(.footnote)
+        Text(row.text)
+          .font(.footnote)
+          .textSelection(.enabled)
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(tone == .stopped ? Color.secondary : .orange)
+      .chipPlate(radius: 8, horizontal: 10, vertical: 5)
+      .contextMenu {
+        Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
+      }
+      .padding(.leading, 10)
+      .padding(.trailing, 44)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 

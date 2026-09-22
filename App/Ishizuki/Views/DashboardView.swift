@@ -12,6 +12,7 @@ struct DashboardView: View {
   @Bindable var controller: ServerController
   @State private var runner = JobRunner()
   @State private var quantize = QuantizeController()
+  @State private var split = ExpertSplitController()
   @State private var bench = BenchController()
   @State private var tab: Tab
   var chat: ChatController
@@ -35,7 +36,9 @@ struct DashboardView: View {
       ModelsView(controller: controller)
         .tabItem { Label("Models", systemImage: "shippingbox") }
         .tag(Tab.models)
-      ToolsView(controller: controller, runner: runner, quantize: quantize, bench: bench)
+      ToolsView(
+        controller: controller, runner: runner, quantize: quantize, bench: bench,
+        split: split)
         .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
         .tag(Tab.tools)
     }

@@ -24,6 +24,12 @@ final class ServerSettings {
   var activeModelID: String { didSet { write(activeModelID, "activeModelID") } }
   var startOnLaunch: Bool { didSet { write(startOnLaunch, "startOnLaunch") } }
   var neuralEngine: Bool { didSet { write(neuralEngine, "neuralEngine") } }
+  var expertSlots: Int { didSet { write(expertSlots, "expertSlots") } }
+
+  /// Empty when the resident pack is answering; an `AppleFoundationModel` raw value when one of
+  /// Apple's own models has been chosen instead. Reasoning level and guardrails for that choice
+  /// live in `SamplerSettingsStore` beside every pack's own knobs, keyed the same way.
+  var appleModelID: String { didSet { write(appleModelID, "appleModelID") } }
 
   private let defaults = UserDefaults.standard
 
@@ -43,6 +49,8 @@ final class ServerSettings {
     activeModelID = defaults.object(forKey: "activeModelID") as? String ?? ""
     startOnLaunch = defaults.object(forKey: "startOnLaunch") as? Bool ?? false
     neuralEngine = defaults.object(forKey: "neuralEngine") as? Bool ?? false
+    appleModelID = defaults.object(forKey: "appleModelID") as? String ?? ""
+    expertSlots = defaults.object(forKey: "expertSlots") as? Int ?? BonsaiRuntime.expertSlots
   }
 
   private func write(_ value: Any, _ key: String) {
@@ -59,5 +67,11 @@ final class ServerSettings {
 
   var maxContextTokens: Int {
     Int(262_144 * max(contextScale, 1))
+  }
+
+  /// nil when the resident pack is answering.
+  var appleModel: AppleFoundationModel? {
+    get { AppleFoundationModel(rawValue: appleModelID) }
+    set { appleModelID = newValue?.rawValue ?? "" }
   }
 }

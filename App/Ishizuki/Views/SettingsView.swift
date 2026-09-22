@@ -122,6 +122,17 @@ private struct ModelPane: View {
         AmountSlider(
           label: "Wired memory", value: Bindable(settings).wireGB, range: 0...64,
           reading: settings.wireGB == 0 ? "off" : "\(Int(settings.wireGB)) GB")
+        LabeledContent("Expert slots") {
+          Stepper(value: Bindable(settings).expertSlots, in: 4...256, step: 4) {
+            Text("\(settings.expertSlots)")
+              .font(.system(.subheadline, design: .monospaced))
+              .foregroundStyle(.secondary)
+          }
+        }
+        .help(
+          "How many routed experts a streamed pack keeps in memory per sparse layer. It has "
+            + "to exceed what a token routes to before the cache saves a single read; packs "
+            + "that hold all their experts ignore it.")
       }
 
       Section("Let go when idle") {

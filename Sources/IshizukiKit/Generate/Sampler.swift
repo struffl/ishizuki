@@ -12,11 +12,15 @@ public struct SamplingOptions: Sendable {
   public var minP: Float
   public var repetitionPenalty: Float
   public var repetitionContext: Int
+  /// A flat penalty subtracted from any token that has already appeared in the window,
+  /// regardless of how many times — unlike `repetitionPenalty`, which scales with recurrence.
+  public var presencePenalty: Float
   public var seed: UInt64?
 
   public init(
     temperature: Float = 0.7, topP: Float = 1.0, topK: Int = 0, minP: Float = 0.0,
-    repetitionPenalty: Float = 1.0, repetitionContext: Int = 64, seed: UInt64? = nil
+    repetitionPenalty: Float = 1.0, repetitionContext: Int = 64, presencePenalty: Float = 0.0,
+    seed: UInt64? = nil
   ) {
     self.temperature = temperature
     self.topP = topP
@@ -24,6 +28,7 @@ public struct SamplingOptions: Sendable {
     self.minP = min(max(minP, 0), 1)
     self.repetitionPenalty = repetitionPenalty
     self.repetitionContext = repetitionContext
+    self.presencePenalty = presencePenalty
     self.seed = seed
   }
 
@@ -68,6 +73,9 @@ public struct Sampler {
     if options.repetitionPenalty != 1.0, !recentTokens.isEmpty {
       scores = applyRepetitionPenalty(scores, tokens: recentTokens)
     }
+    if options.presencePenalty != 0, !recentTokens.isEmpty {
+      scores = applyPresencePenalty(scores, tokens: recentTokens)
+    }
 
     guard options.temperature > 0 else { return scores }
 
@@ -88,6 +96,15 @@ public struct Sampler {
       selected * options.repetitionPenalty)
     let updated = scores
     updated[0..., indices] = penalized
+    return updated
+  }
+
+  private func applyPresencePenalty(_ scores: MLXArray, tokens: [Int]) -> MLXArray {
+    let window = Array(Set(tokens.suffix(options.repetitionContext)))
+    guard !window.isEmpty else { return scores }
+    let indices = MLXArray(window.map { Int32($0) })
+    let updated = scores
+    updated[0..., indices] = scores[0..., indices] - options.presencePenalty
     return updated
   }
 

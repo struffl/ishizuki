@@ -35,6 +35,14 @@ struct ModelsView: View {
           }
         }
 
+        if #available(macOS 27.0, *) {
+          section("Apple Intelligence") {
+            ForEach(AppleFoundationModel.allCases) { model in
+              AppleModelRow(model: model, controller: controller)
+            }
+          }
+        }
+
         section("Installed") {
           if controller.catalog.entries.isEmpty {
             GlassCard {
@@ -157,12 +165,65 @@ struct ModelsView: View {
   }
 }
 
+@available(macOS 27.0, *)
+private struct AppleModelRow: View {
+  let model: AppleFoundationModel
+  @Bindable var controller: ServerController
+  @State private var settingsShown = false
+
+  private var isActive: Bool { controller.settings.appleModel == model }
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Button {
+        controller.settings.appleModel = model
+      } label: {
+        Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+          .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+          .contentShape(.circle)
+      }
+      .buttonStyle(.plain)
+      .disabled(isActive)
+      .accessibilityLabel(isActive ? "\(model.displayName), in use" : "Use \(model.displayName)")
+      .help(isActive ? "This model is answering" : "Answer with this model")
+      VStack(alignment: .leading, spacing: 2) {
+        Text(model.displayName).font(.system(.callout, weight: .medium))
+        Text(model.subtitle).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
+      }
+      Spacer()
+      if !isActive {
+        Button("Use") { controller.settings.appleModel = model }.controlSize(.small)
+      }
+      Button {
+        settingsShown = true
+      } label: {
+        Image(systemName: "slider.horizontal.3")
+          .hitTarget()
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Settings for \(model.displayName)")
+    }
+    .padding(10)
+    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .overlay {
+      RoundedRectangle(cornerRadius: 12)
+        .strokeBorder(Color.hairline, lineWidth: 1)
+    }
+    .sheet(isPresented: $settingsShown) {
+      AppleModelSettingsView(model: model, controller: controller) { settingsShown = false }
+    }
+  }
+}
+
 private struct InstalledRow: View {
   let entry: ModelCatalog.Entry
   @Bindable var controller: ServerController
   @Binding var deleteTarget: ModelCatalog.Entry?
+  @State private var samplerSettings = false
 
-  private var isActive: Bool { controller.settings.activeModelID == entry.id }
+  private var isActive: Bool {
+    controller.settings.appleModel == nil && controller.settings.activeModelID == entry.id
+  }
 
   private var detail: String {
     var parts = [entry.format.rawValue, entry.quantization]
@@ -203,6 +264,8 @@ private struct InstalledRow: View {
         Button("Use") { controller.activate(entry.id) }.controlSize(.small)
       }
       Menu {
+        Button("Sampler Settings…") { samplerSettings = true }
+        Divider()
         Button("Reveal in Finder") {
           NSWorkspace.shared.activateFileViewerSelecting([entry.directory])
         }
@@ -222,6 +285,9 @@ private struct InstalledRow: View {
     .overlay {
       RoundedRectangle(cornerRadius: 12)
         .strokeBorder(Color.hairline, lineWidth: 1)
+    }
+    .sheet(isPresented: $samplerSettings) {
+      SamplerSettingsView(entry: entry, controller: controller) { samplerSettings = false }
     }
   }
 }

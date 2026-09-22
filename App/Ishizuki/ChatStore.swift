@@ -9,6 +9,17 @@ import FoundationModels
 import IshizukiKit
 
 @available(macOS 27.0, *)
+/// What a conversation's turns have cost: how long they took and what they wrote. Kept with
+/// the conversation rather than the window, so the corner readout is about what is on screen.
+struct TurnMeter: Codable, Equatable {
+  var turns = 0
+  var seconds = 0.0
+  var tokens = 0
+
+  var averageSeconds: Double { turns > 0 ? seconds / Double(turns) : 0 }
+  var averageTokens: Int { turns > 0 ? tokens / turns : 0 }
+}
+
 struct SavedChat: Codable, Identifiable, Equatable {
   var id: UUID
   var title: String
@@ -27,6 +38,23 @@ struct SavedChat: Codable, Identifiable, Equatable {
   /// Where this conversation's commands run. Absent means whatever the app defaults to, which
   /// is what every conversation saved before there was a choice gets.
   var sandbox: SandboxChoice?
+  /// What happened to a turn rather than in it. Optional so a chat written before there were
+  /// any still decodes; read through `notes`.
+  var notices: [ChatNotice]?
+
+  var notes: [ChatNotice] {
+    get { notices ?? [] }
+    set { notices = newValue.isEmpty ? nil : newValue }
+  }
+
+  /// What this conversation's turns have cost. Optional so a chat written before there was a
+  /// tally still decodes; read through `meter`.
+  var turnMeter: TurnMeter?
+
+  var meter: TurnMeter {
+    get { turnMeter ?? TurnMeter() }
+    set { turnMeter = newValue.turns > 0 ? newValue : nil }
+  }
 
   init(
     id: UUID = UUID(), title: String = "New chat", workspace: String? = nil,
@@ -66,6 +94,34 @@ struct SavedChat: Codable, Identifiable, Equatable {
       return text.count > 42 ? String(text.prefix(42)) + "…" : text
     }
     return nil
+  }
+}
+
+/// A turn that stopped or failed, kept beside the transcript.
+///
+/// The model's transcript has no entry for either — a stop leaves a half-written answer and a
+/// failure leaves nothing at all — so the account of it lives here and is woven back into the
+/// rows at the point it happened. It is shown in the conversation rather than in a bar under
+/// it: what went wrong belongs where it went wrong, and it should still be there tomorrow.
+struct ChatNotice: Codable, Equatable, Identifiable {
+  enum Tone: String, Codable, Sendable {
+    case stopped
+    case failed
+  }
+
+  var id: UUID
+  var tone: Tone
+  var text: String
+  var at: Date
+  /// The row it follows, so it keeps its place when the transcript is folded again.
+  var after: String?
+
+  init(tone: Tone, text: String, after: String?, at: Date = Date()) {
+    self.id = UUID()
+    self.tone = tone
+    self.text = text
+    self.at = at
+    self.after = after
   }
 }
 

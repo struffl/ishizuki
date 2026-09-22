@@ -32,8 +32,10 @@ public struct ReadFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.readSlice(
-      path: arguments.path, offset: arguments.offset, limit: arguments.limit)
+    try await recovered {
+      try await workspace.readSlice(
+        path: arguments.path, offset: arguments.offset, limit: arguments.limit)
+    }
   }
 }
 
@@ -60,7 +62,9 @@ public struct WriteFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.writeWhole(path: arguments.path, contents: arguments.contents)
+    try await recovered {
+      try await workspace.writeWhole(path: arguments.path, contents: arguments.contents)
+    }
   }
 }
 
@@ -91,9 +95,11 @@ public struct EditFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.edit(
-      path: arguments.path, old: arguments.old, new: arguments.new,
-      all: arguments.all ?? false)
+    try await recovered {
+      try await workspace.edit(
+        path: arguments.path, old: arguments.old, new: arguments.new,
+        all: arguments.all ?? false)
+    }
   }
 }
 
@@ -126,9 +132,11 @@ public struct GrepTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.grep(
-      pattern: arguments.pattern, glob: arguments.glob, path: arguments.path,
-      ignoreCase: arguments.ignoreCase ?? false, limit: limit)
+    try await recovered {
+      try await workspace.grep(
+        pattern: arguments.pattern, glob: arguments.glob, path: arguments.path,
+        ignoreCase: arguments.ignoreCase ?? false, limit: limit)
+    }
   }
 }
 
@@ -152,7 +160,9 @@ public struct GlobTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.glob(pattern: arguments.pattern, limit: limit)
+    try await recovered {
+      try await workspace.glob(pattern: arguments.pattern, limit: limit)
+    }
   }
 }
 
@@ -184,9 +194,11 @@ public struct ShellTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.shell(
-      command: arguments.command, timeout: Double(arguments.timeout ?? 15),
-      byteLimit: byteLimit, background: arguments.background ?? false)
+    try await recovered {
+      try await workspace.shell(
+        command: arguments.command, timeout: Double(arguments.timeout ?? 15),
+        byteLimit: byteLimit, background: arguments.background ?? false)
+    }
   }
 }
 
@@ -208,7 +220,9 @@ public struct JobsTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.jobs()
+    try await recovered {
+      try await workspace.jobs()
+    }
   }
 }
 
@@ -237,8 +251,10 @@ public struct JobOutputTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.jobOutput(
-      arguments.job, wait: Double(arguments.wait ?? 0), byteLimit: byteLimit)
+    try await recovered {
+      try await workspace.jobOutput(
+        arguments.job, wait: Double(arguments.wait ?? 0), byteLimit: byteLimit)
+    }
   }
 }
 
@@ -265,7 +281,9 @@ public struct KillJobTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await workspace.killJob(arguments.job, force: arguments.force ?? false)
+    try await recovered {
+      try await workspace.killJob(arguments.job, force: arguments.force ?? false)
+    }
   }
 }
 
@@ -283,4 +301,25 @@ public func codingTools(for workspace: Workspace) -> [any Tool] {
     JobOutputTool(workspace: workspace),
     KillJobTool(workspace: workspace),
   ]
+}
+
+/// A tool that fails hands the failure back as its output rather than throwing it.
+///
+/// A thrown tool error ends the whole turn: the session unwinds, the answer in flight is lost,
+/// and the transcript is left holding a call with nothing under it. Almost none of what these
+/// tools refuse is worth that — a missing path or a stale edit is a step the model can take
+/// again, and the refusals are already written to be read. Only cancellation still throws,
+/// because stopping a turn is the one failure that is meant to end it.
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+func recovered(_ work: () async throws -> String) async throws -> String {
+  do {
+    return try await work()
+  } catch is CancellationError {
+    throw CancellationError()
+  } catch let refusal as LedgerRefusal {
+    return refusal.message
+  } catch {
+    if Task.isCancelled { throw CancellationError() }
+    return "error: \(error.localizedDescription)"
+  }
 }

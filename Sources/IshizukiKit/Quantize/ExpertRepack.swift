@@ -14,12 +14,32 @@ import MLX
 /// values are copied through unchanged, never dequantized and requantized.
 public enum ExpertRepack {
   public static let layoutFile = "experts/layout.json"
+  public static let folder = "experts"
+
+  /// Two gigabytes of shard, rather than the quantizer's four: a machine reaching for this is
+  /// short of memory, and a shard is held whole until it is flushed.
+  public static let shardLimit = 2 << 30
 
   public struct Plan: Sendable {
     public var layers: [Int]
     public var layout: ExpertLayout
     public var residentBytes: Int
     public var expertBytes: Int
+
+    public var expertCount: Int { layout.expertCount }
+  }
+
+  /// What a split would produce, read from the source's tensor metadata alone.
+  public struct Preview: Sendable {
+    public var layers: [Int]
+    public var expertCount: Int
+    public var residentBytes: Int
+    public var expertBytes: Int
+  }
+
+  public struct Progress: Sendable {
+    public var detail: String
+    public var fraction: Double
   }
 
   /// The three projections an expert owns, each with its quantized companions.
@@ -40,11 +60,90 @@ public enum ExpertRepack {
     "\(prefix)model.layers.\(layer).mlp.switch_mlp.\(projection).\(component)"
   }
 
+  static func isExpert(_ name: String) -> Bool { name.contains(".switch_mlp.") }
+
+  static func layerFile(_ layer: Int) -> String {
+    "\(folder)/layer_\(String(format: "%02d", layer)).bin"
+  }
+
+  /// Whether a pack already keeps its experts beside itself.
+  public static func isSplit(_ directory: URL) -> Bool {
+    FileManager.default.fileExists(atPath: directory.appending(path: layoutFile).path)
+  }
+
+  /// Reads the source's shapes and says what the halves would weigh. Safetensors are mapped,
+  /// not read, so this costs a header parse rather than a pass over the weights.
+  public static func preview(source: URL) throws -> Preview {
+    let (store, layers, layout) = try survey(source: source)
+    var expertBytes = 0
+    var residentBytes = 0
+    for (name, array) in store.arrays {
+      let bytes = array.size * array.itemSize
+      if isExpert(name) { expertBytes += bytes } else { residentBytes += bytes }
+    }
+    return Preview(
+      layers: layers, expertCount: layout.expertCount,
+      residentBytes: residentBytes,
+      expertBytes: max(expertBytes, layers.count * layout.expertCount * layout.stride))
+  }
+
   /// Splits `source` into `destination`, returning what it wrote.
   public static func run(
-    source: URL, destination: URL,
-    log: @escaping (String) -> Void = { _ in }
+    source: URL, destination: URL, shardLimit: Int = ExpertRepack.shardLimit,
+    log: (String) -> Void = { _ in },
+    progress: (Progress) throws -> Void = { _ in }
   ) throws -> Plan {
+    guard source.standardizedFileURL != destination.standardizedFileURL else {
+      throw BonsaiError.unsupportedModel("a pack cannot be split over itself")
+    }
+    guard !isSplit(source) else {
+      throw BonsaiError.unsupportedModel(
+        "\(source.lastPathComponent) already keeps its experts on disk")
+    }
+
+    let (store, layers, layout) = try survey(source: source)
+    let tensorPrefix = prefix(store)
+
+    let fm = FileManager.default
+    try fm.createDirectory(
+      at: destination.appending(path: folder), withIntermediateDirectories: true)
+
+    let resident = store.arrays.keys.filter { !isExpert($0) }.sorted()
+    let steps = Double(layers.count + resident.count)
+    var done = 0.0
+
+    var expertBytes = 0
+    for layer in layers {
+      expertBytes += try write(
+        layer: layer, prefix: tensorPrefix, store: store, layout: layout,
+        to: destination.appending(path: layerFile(layer)))
+      done += 1
+      log("experts: layer \(layer) written")
+      try progress(Progress(detail: "layer \(layer)", fraction: done / steps))
+    }
+
+    var writer = PackWriter(directory: destination, shardLimit: shardLimit)
+    for name in resident {
+      try writer.add(name, store.arrays[name]!)
+      done += 1
+      try progress(Progress(detail: name, fraction: done / steps))
+    }
+    let summary = try writer.finish()
+    log("resident: \(summary.shards) shard\(summary.shards == 1 ? "" : "s")")
+
+    try carrySidecars(from: source, to: destination)
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(layout).write(to: destination.appending(path: layoutFile))
+
+    return Plan(
+      layers: layers, layout: layout, residentBytes: summary.byteCount,
+      expertBytes: expertBytes)
+  }
+
+  /// The sparse layers, and the geometry every one of them shares.
+  private static func survey(source: URL) throws -> (WeightStore, [Int], ExpertLayout) {
     let config = try BonsaiConfig.load(directory: source)
     let text = config.textConfig
     guard let expertCount = text.numExperts, expertCount > 0 else {
@@ -54,84 +153,108 @@ public enum ExpertRepack {
     let store = try WeightStore(directory: source)
     let tensorPrefix = prefix(store)
     let sparse = text.isSparse
-    let layers = (0..<text.numHiddenLayers).filter { sparse[$0] }
-
-    let fm = FileManager.default
-    try fm.createDirectory(
-      at: destination.appending(path: "experts"), withIntermediateDirectories: true)
-
-    // Every sparse layer has the same expert geometry, so the first one describes the file.
-    var described: [(name: String, shape: [Int], dtype: DType)] = []
+    let layers = (0..<text.numHiddenLayers).filter {
+      sparse[$0] && store.has(expertPath(tensorPrefix, $0, "gate_proj", "weight"))
+    }
     guard let first = layers.first else {
       throw BonsaiError.unsupportedModel("no sparse layers to split out")
     }
+
+    var described: [(name: String, shape: [Int], dtype: DType)] = []
     for projection in projections {
       for component in components {
         let name = expertPath(tensorPrefix, first, projection, component)
         guard store.has(name) else { continue }
         let array = try store(name)
+        guard array.dim(0) == expertCount else {
+          throw BonsaiError.shapeMismatch(
+            "\(name) stacks \(array.dim(0)) experts, not \(expertCount)")
+        }
         described.append(
           (
             name: "\(projection).\(component)",
-            // The leading axis is the expert; one blob holds one expert's slice of it.
             shape: Array(array.shape.dropFirst()), dtype: array.dtype
           ))
       }
     }
-    let layout = ExpertLayout.plan(expertCount: expertCount, tensors: described)
+    return (store, layers, ExpertLayout.plan(expertCount: expertCount, tensors: described))
+  }
 
-    var expertBytes = 0
-    for layer in layers {
-      let url = destination.appending(path: "experts/layer_\(String(format: "%02d", layer)).bin")
-      var blob = Data(count: expertCount * layout.stride)
-      for (name, part) in layout.parts {
-        let pieces = name.split(separator: ".")
-        let full = expertPath(tensorPrefix, layer, String(pieces[0]), String(pieces[1]))
-        let array = try store(full)
-        guard array.dim(0) == expertCount else {
-          throw BonsaiError.shapeMismatch(
-            "\(full) stacks \(array.dim(0)) experts, not \(expertCount)")
-        }
-        let bytes = array.asData().data
-        for expert in 0..<expertCount {
-          let from = expert * part.byteCount
-          let to = expert * layout.stride + part.offset
-          blob.replaceSubrange(
-            to..<(to + part.byteCount),
-            with: bytes[bytes.startIndex + from..<bytes.startIndex + from + part.byteCount])
-        }
+  /// One layer's blobs, an expert at a time, so a layer larger than memory still converts.
+  private static func write(
+    layer: Int, prefix: String, store: WeightStore, layout: ExpertLayout, to url: URL
+  ) throws -> Int {
+    let ordered = layout.parts.sorted { $0.value.offset < $1.value.offset }
+    var sources: [(part: ExpertLayout.Part, array: MLXArray)] = []
+    for (name, part) in ordered {
+      let pieces = name.split(separator: ".")
+      let full = expertPath(prefix, layer, String(pieces[0]), String(pieces[1]))
+      let array = try store(full)
+      guard array.dim(0) == layout.expertCount, Array(array.shape.dropFirst()) == part.shape,
+        array.dtype == (try part.type)
+      else {
+        throw BonsaiError.shapeMismatch("\(full) is not shaped like layer \(layer)'s experts")
       }
-      try blob.write(to: url)
-      expertBytes += blob.count
-      log("experts: layer \(layer) written")
+      sources.append((part, array))
     }
 
-    // Everything the experts are not, saved once.
-    var resident: [String: MLXArray] = [:]
-    for name in store.arrays.keys where !name.contains(".switch_mlp.") {
-      resident[name] = store.arrays[name]
+    let packed = (ordered.last?.value.offset ?? 0) + (ordered.last?.value.byteCount ?? 0)
+    let padding = Data(count: layout.stride - packed)
+
+    let fm = FileManager.default
+    if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+    fm.createFile(atPath: url.path, contents: nil)
+    let handle = try FileHandle(forWritingTo: url)
+    defer { try? handle.close() }
+
+    for expert in 0..<layout.expertCount {
+      for (part, array) in sources {
+        let slice = array[expert]
+        eval(slice)
+        let bytes = slice.asData().data
+        guard bytes.count == part.byteCount else {
+          throw BonsaiError.shapeMismatch(
+            "expert \(expert) of layer \(layer) is \(bytes.count) bytes, not \(part.byteCount)")
+        }
+        try handle.write(contentsOf: bytes)
+      }
+      if !padding.isEmpty { try handle.write(contentsOf: padding) }
     }
-    try save(arrays: resident, url: destination.appending(path: "model.safetensors"))
+    return layout.expertCount * layout.stride
+  }
 
-    // A pack straight out of the HuggingFace cache is a tree of symlinks into a blob store,
-    // and a link copied out of it points at nothing. What the sidecars say has to be copied,
-    // not where they say it.
-    for name in ["config.json", "tokenizer.json", "chat_template.jinja", "tokenizer_config.json"]
-    where fm.fileExists(atPath: source.appending(path: name).path) {
-      try? fm.removeItem(at: destination.appending(path: name))
-      try fm.copyItem(
-        at: source.appending(path: name).resolvingSymlinksInPath(),
-        to: destination.appending(path: name))
+  /// Everything a pack needs that is not a weight: the config, the tokenizer, and any table
+  /// the pack already streams.
+  ///
+  /// A pack straight out of the HuggingFace cache is a tree of symlinks into a blob store, and
+  /// a link copied out of it points at nothing. What the sidecars say has to be copied, not
+  /// where they say it.
+  private static func carrySidecars(from source: URL, to destination: URL) throws {
+    let fm = FileManager.default
+    let skipped: Set<String> = ["bin", "pt", "pth", "gguf", "h5", "msgpack", "onnx"]
+    for name in (try? fm.contentsOfDirectory(atPath: source.path))?.sorted() ?? [] {
+      guard !name.hasPrefix("."), name != folder else { continue }
+      guard !name.hasSuffix(".safetensors"), !name.hasSuffix(".safetensors.index.json") else {
+        continue
+      }
+      let from = source.appending(path: name)
+      var isDirectory: ObjCBool = false
+      _ = fm.fileExists(atPath: from.resolvingSymlinksInPath().path, isDirectory: &isDirectory)
+      let suffix = (name as NSString).pathExtension.lowercased()
+      if !isDirectory.boolValue, skipped.contains(suffix) { continue }
+      let to = destination.appending(path: name)
+      if fm.fileExists(atPath: to.path) { try fm.removeItem(at: to) }
+      if isDirectory.boolValue {
+        try fm.createDirectory(at: to, withIntermediateDirectories: true)
+        for inner in (try? fm.contentsOfDirectory(atPath: from.path))?.sorted() ?? []
+        where !inner.hasPrefix(".") {
+          try fm.copyItem(
+            at: from.appending(path: inner).resolvingSymlinksInPath(),
+            to: to.appending(path: inner))
+        }
+      } else {
+        try fm.copyItem(at: from.resolvingSymlinksInPath(), to: to)
+      }
     }
-
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    try encoder.encode(layout).write(to: destination.appending(path: layoutFile))
-
-    let residentBytes =
-      (try? destination.appending(path: "model.safetensors").resourceValues(
-        forKeys: [.fileSizeKey]))?.fileSize ?? 0
-    return Plan(
-      layers: layers, layout: layout, residentBytes: residentBytes, expertBytes: expertBytes)
   }
 }

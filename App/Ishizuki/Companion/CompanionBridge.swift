@@ -369,6 +369,9 @@ final class CompanionBridge {
     case .toolOutput(let name):
       kind = .toolOutput
       tool = name
+    case .notice(let tone):
+      kind = .notice
+      tool = tone.rawValue
     }
     return TranscriptRow(
       id: row.id, kind: kind, tool: tool, text: row.text, at: meta?.at,

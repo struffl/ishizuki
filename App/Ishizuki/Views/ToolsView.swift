@@ -11,6 +11,7 @@ struct ToolsView: View {
   @Bindable var runner: JobRunner
   @Bindable var quantize: QuantizeController
   @Bindable var bench: BenchController
+  @Bindable var split: ExpertSplitController
 
   var body: some View {
     ScrollView {
@@ -18,12 +19,16 @@ struct ToolsView: View {
         ConsoleView(runner: runner)
         benchSection
         quantizeSection
+        expertsSection
         CacheSection(controller: controller)
       }
       .padding(16)
     }
     .scrollContentBackground(.hidden)
-    .task { quantize.rescan(roots: controller.library.searchRoots()) }
+    .task {
+      quantize.rescan(roots: controller.library.searchRoots())
+      split.rescan(catalog: controller.catalog)
+    }
   }
 
   @ViewBuilder private var benchSection: some View {
@@ -61,6 +66,90 @@ struct ToolsView: View {
           }
           .buttonStyle(.glassProminent)
           .disabled(runner.isRunning || !bench.canRun(controller.activeEntry))
+        }
+      }
+    }
+  }
+
+  /// A sparse pack's routed experts are most of its weight and a sixth of its work. Moving
+  /// them onto disk is the difference between a model this machine can hold and one it cannot.
+  @ViewBuilder private var expertsSection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      SectionHeader(title: "Stream Experts")
+
+      GlassCard {
+        if split.candidates.isEmpty {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("No packs here route through experts they still hold.")
+              .font(.callout.weight(.medium))
+            Text(
+              "This splits a mixture-of-experts pack in two: the shared half stays in memory, "
+                + "the routed experts are read off disk a few at a time. Packs already split "
+                + "are not offered again."
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+          }
+        } else {
+          VStack(alignment: .leading, spacing: 10) {
+            Picker("Pack", selection: $split.sourceID) {
+              ForEach(split.candidates) { candidate in
+                Text("\(candidate.id)  ·  \(ReadoutFormat.bytes(candidate.byteCount))")
+                  .tag(candidate.id)
+              }
+            }
+
+            if let source = split.source {
+              VStack(alignment: .leading, spacing: 2) {
+                Field(label: "experts") {
+                  Text(
+                    "\(source.expertCount) across \(source.layers) sparse layer"
+                      + (source.layers == 1 ? "" : "s")
+                  )
+                  .foregroundStyle(.secondary)
+                }
+                Field(label: "resident") {
+                  Text(
+                    "\(ReadoutFormat.bytes(source.residentBytes)) stays in memory"
+                      + "  ·  \(ReadoutFormat.bytes(source.expertBytes)) moves to disk"
+                  )
+                  .foregroundStyle(.secondary)
+                }
+                Field(label: "output") {
+                  Text(source.destination.lastPathComponent).foregroundStyle(.secondary)
+                }
+                if source.destinationExists {
+                  Field(label: "") {
+                    Label("that pack already exists", systemImage: "exclamationmark.triangle")
+                      .foregroundStyle(.orange)
+                  }
+                }
+              }
+            }
+
+            Text(
+              "Streaming trades speed for room: the same answers, token for token, at a "
+                + "fraction of the rate. The slot budget is under Settings › Model."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            Toggle("Replace an existing pack of that name", isOn: $split.replace)
+              .font(.subheadline)
+
+            HStack {
+              Button("Split Pack") {
+                split.start(on: runner) {
+                  controller.rescan()
+                  split.rescan(catalog: controller.catalog)
+                }
+              }
+              .buttonStyle(.glassProminent)
+              .disabled(runner.isRunning || split.source == nil)
+              Button("Rescan") { split.rescan(catalog: controller.catalog) }
+                .buttonStyle(.glass)
+            }
+          }
         }
       }
     }

@@ -103,6 +103,8 @@ public struct ChatSummary: Codable, Sendable, Hashable, Identifiable {
 public struct TranscriptRow: Codable, Sendable, Equatable, Identifiable {
   public enum Kind: String, Codable, Sendable {
     case system, prompt, steer, reasoning, answer, toolCall, toolOutput
+    /// What became of a turn rather than what was in it: stopped, or failed.
+    case notice
   }
 
   public var id: String
