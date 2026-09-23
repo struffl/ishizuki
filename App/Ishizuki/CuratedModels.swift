@@ -35,10 +35,15 @@ struct CuratedModel: Identifiable, Sendable {
       summary: "2-bit Hadamard-rotated. Vision, tool calling, the pack ishizuki was built for.",
       bytes: 8_600_000_000),
     CuratedModel(
+      repo: "dealignai/Bonsai-2-27B-CRACK-Ternary-JANG",
+      name: "Bonsai 2 27B CRACK",
+      summary: "The same ternary weights with refusals ablated, repacked as JANG. 6-bit vision.",
+      bytes: 8_220_000_000),
+    CuratedModel(
       repo: "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF",
       name: "Qwen3.8 27B GSQ-RCO",
-      summary: "IQ2_XS with the MTP head, for speculative decoding.",
-      bytes: 8_770_000_000,
-      only: ["Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf"]),
+      summary: "IQ2_XS with the MTP head, for speculative decoding. BF16 vision projector.",
+      bytes: 9_700_000_000,
+      only: ["Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf", "mmproj-Qwen3.8-27B-BF16.gguf"]),
   ]
 }
