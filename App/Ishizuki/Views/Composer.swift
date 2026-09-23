@@ -49,7 +49,9 @@ struct Composer: View {
       }
       field
     }
-    .textPlate(radius: 10, horizontal: 12, vertical: 10)
+    .padding(.horizontal, 14)
+    .padding(.top, 6)
+    .padding(.bottom, 10)
     .overlay(alignment: .top) {
       if let flying {
         FlightBubble(text: flying.text, mono: mono)
@@ -61,7 +63,7 @@ struct Composer: View {
     .animation(.easeOut(duration: 0.22), value: chat.refusedDrop)
     .overlay {
       if targeted {
-        RoundedRectangle(cornerRadius: 11)
+        RoundedRectangle(cornerRadius: 14)
           .strokeBorder(
             Color.reading, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
       }
@@ -72,8 +74,6 @@ struct Composer: View {
     } isTargeted: {
       targeted = $0
     }
-    .padding(.horizontal, 11)
-    .padding(.bottom, 11)
   }
 
   @ViewBuilder private var field: some View {
@@ -86,12 +86,12 @@ struct Composer: View {
         ZStack {
           Circle()
             .fill(Color.ink.opacity(0.08))
-            .frame(width: 27, height: 30)
+            .frame(width: 30, height: 30)
           Image(systemName: "paperclip")
             .font(.system(size: 14.5, weight: .medium))
             .foregroundStyle(.secondary)
         }
-        .frame(width: 38, height: 42)
+        .frame(width: 42, height: 42)
         .contentShape(.circle)
       }
       .buttonStyle(.plain)
@@ -133,15 +133,15 @@ struct Composer: View {
           ZStack {
             Circle()
               .fill(Color.primary.opacity(0.1))
-              .frame(width: 27, height: 30)
+              .frame(width: 30, height: 30)
             Circle()
               .stroke(.quaternary, lineWidth: 2.5)
-              .frame(width: 34, height: 37)
+              .frame(width: 37, height: 37)
             Image(systemName: "stop.fill")
               .font(.system(size: 12, weight: .semibold))
               .foregroundStyle(.secondary)
           }
-          .frame(width: 38, height: 42)
+          .frame(width: 42, height: 42)
           .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -216,13 +216,13 @@ struct AttachmentChip: View {
         thumbnail
           .resizable()
           .aspectRatio(contentMode: .fill)
-          .frame(width: 22, height: 24)
+          .frame(width: 24, height: 24)
           .clipShape(.rect(cornerRadius: 4))
       } else {
         Image(systemName: attachment.icon)
           .font(.subheadline)
           .foregroundStyle(.secondary)
-          .frame(width: 22, height: 24)
+          .frame(width: 24, height: 24)
       }
       VStack(alignment: .leading, spacing: 0) {
         Text(attachment.name)
@@ -295,28 +295,28 @@ struct SendRing: View {
       ZStack {
         Circle()
           .fill(chat.canSubmit ? Color.mine : Color.ink.opacity(0.08))
-          .frame(width: 27, height: 30)
+          .frame(width: 30, height: 30)
 
         Circle()
           .stroke(.quaternary, lineWidth: 2.5)
-          .frame(width: 34, height: 37)
+          .frame(width: 37, height: 37)
         if let prefill = chat.prefillFraction {
           Circle()
             .trim(from: 0, to: max(0.02, min(1, prefill)))
             .stroke(Color.reading, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             .rotationEffect(.degrees(-90))
-            .frame(width: 34, height: 37)
+            .frame(width: 37, height: 37)
         } else if chat.isGenerating {
           Circle()
             .stroke(Color.generating, lineWidth: 2.5)
-            .frame(width: 34, height: 37)
+            .frame(width: 37, height: 37)
         }
 
         Image(systemName: glyph)
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(chat.canSubmit ? .white : Color.secondary)
       }
-      .frame(width: 38, height: 42)
+      .frame(width: 42, height: 42)
       .contentShape(.circle)
     }
     .buttonStyle(.plain)

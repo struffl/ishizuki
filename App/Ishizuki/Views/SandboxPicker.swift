@@ -25,12 +25,12 @@ struct SandboxPicker: View {
       ZStack {
         Circle()
           .fill(Color.primary.opacity(choice.isSandboxed ? 0.14 : 0.08))
-          .frame(width: 27, height: 30)
+          .frame(width: 30, height: 30)
         Image(systemName: choice.kind.glyph)
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(choice.isSandboxed ? Color.reading : .secondary)
       }
-      .frame(width: 38, height: 42)
+      .frame(width: 42, height: 42)
       .contentShape(.circle)
     }
     .buttonStyle(.plain)

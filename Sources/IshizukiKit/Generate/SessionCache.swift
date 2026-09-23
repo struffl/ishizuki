@@ -67,6 +67,10 @@ public final class SessionCache: @unchecked Sendable {
   private var store: PrefixStore?
   private var modelID = ""
   public private(set) var diskHits = 0
+  /// How far each conversation's archive reaches, so a turn writes one only once it has grown
+  /// by `archiveStride` tokens since the last.
+  private var archivedTokens: [String: Int] = [:]
+  public var archiveStride = 8192
 
   /// Backs the pool with a disk tier. `modelID` identifies the pack, so an archive is never
   /// read into a model it was not built from.
@@ -102,9 +106,12 @@ public final class SessionCache: @unchecked Sendable {
       slot.checkpoints.removeAll { $0.tokens > point.tokens }
     }
     guard slot.tokens.count == slot.cache.offset else { return }
-    store.save(
-      cache: slot.cache, tokens: slot.tokens, modelID: modelID, kvConfig: slot.cache.kvConfig,
-      tag: slot.tag)
+    guard
+      store.save(
+        cache: slot.cache, tokens: slot.tokens, modelID: modelID, kvConfig: slot.cache.kvConfig,
+        tag: slot.tag) != nil
+    else { return }
+    if let tag = slot.tag { archivedTokens[tag] = slot.tokens.count }
   }
 
   /// The pool at a glance, for a readout that must never wait on a request holding the lock.
@@ -137,6 +144,30 @@ public final class SessionCache: @unchecked Sendable {
 
   /// Keeps the shared prefix a slot has just laid down on disk as well, so every conversation
   /// can start from it after a restart. Written once per model; later calls find it there.
+  /// Writes the first `count` tokens of a lease to the disk tier, at the moment the cache holds
+  /// exactly them: the boundary the next prompt continues from. Done as a turn goes rather than
+  /// only when the pool is dropped, so a crash or a kill loses at most one stride of prefill.
+  public func archivePrefix(_ lease: Lease, count: Int) {
+    lock.lock()
+    let store = self.store
+    let modelID = self.modelID
+    let tag = lease.slot.tag
+    let tokens = Array(lease.slot.tokens.prefix(count))
+    let last = tag.flatMap { archivedTokens[$0] } ?? 0
+    lock.unlock()
+    guard let store, let tag, lease.cache.offset == count, tokens.count == count,
+      count >= store.minimumTokens, count - last >= archiveStride || count < last
+    else { return }
+    guard
+      store.save(
+        cache: lease.cache, tokens: tokens, modelID: modelID, kvConfig: lease.cache.kvConfig,
+        tag: tag) != nil
+    else { return }
+    lock.lock()
+    archivedTokens[tag] = count
+    lock.unlock()
+  }
+
   public func pin(_ lease: Lease, tokens: [Int]) {
     lock.lock()
     let store = self.store

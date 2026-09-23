@@ -378,11 +378,13 @@ public final class APIServer: @unchecked Sendable {
         onCheckpoint: { [sessions = self.sessions] in
           if let promptLease, let checkpointAt {
             sessions.checkpointPrefill(promptLease, at: checkpointAt)
+            sessions.archivePrefix(promptLease, count: checkpointAt)
           }
         },
         onPrefilled: { [sessions = self.sessions] in
           if let promptLease, checkpointAt == nil {
             sessions.checkpointPrompt(promptLease)
+            sessions.archivePrefix(promptLease, count: promptLease.cache.offset)
           }
         },
         onProgress: { [stats = self.stats] progress in
@@ -493,10 +495,16 @@ public final class APIServer: @unchecked Sendable {
       cachedPrefixLength: lease.reused, checkpointAt: checkpointAt,
       isCancelled: isCancelled,
       onCheckpoint: { [sessions = self.sessions] in
-        if let checkpointAt { sessions.checkpointPrefill(lease, at: checkpointAt) }
+        if let checkpointAt {
+          sessions.checkpointPrefill(lease, at: checkpointAt)
+          sessions.archivePrefix(lease, count: checkpointAt)
+        }
       },
       onPrefilled: { [sessions = self.sessions] in
-        if checkpointAt == nil { sessions.checkpointPrompt(lease) }
+        if checkpointAt == nil {
+          sessions.checkpointPrompt(lease)
+          sessions.archivePrefix(lease, count: lease.cache.offset)
+        }
       },
       onProgress: { [stats = self.stats] progress in
         guard case .prefill(let done, let total) = progress else { return }

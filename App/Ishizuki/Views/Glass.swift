@@ -114,6 +114,8 @@ extension View {
   /// Paper for the window itself.
   func paperBackground() -> some View {
     containerBackground(for: .window) { Color.paper }
+      .toolbarBackground(Color.paper, for: .windowToolbar)
+      .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
       .tint(.moss)
       .fontDesign(.serif)
   }
@@ -152,6 +154,68 @@ extension View {
     padding(.horizontal, horizontal)
       .padding(.vertical, vertical)
       .background(Color.surface, in: .rect(cornerRadius: radius))
+  }
+}
+
+/// Where a bubble sits in a run from one voice. Bubbles in a run close up into one stack: round
+/// at its two ends, tight where they meet.
+enum StackPosition {
+  case only, first, middle, last
+
+  init(joinsAbove: Bool, joinsBelow: Bool) {
+    switch (joinsAbove, joinsBelow) {
+    case (false, false): self = .only
+    case (false, true): self = .first
+    case (true, true): self = .middle
+    case (true, false): self = .last
+    }
+  }
+
+  var joinsAbove: Bool { self == .middle || self == .last }
+  var joinsBelow: Bool { self == .first || self == .middle }
+}
+
+extension EnvironmentValues {
+  @Entry var stackPosition: StackPosition = .only
+}
+
+private struct StackBubble: ViewModifier {
+  var mine: Bool
+  var fill: Color
+  var horizontal: CGFloat
+  var vertical: CGFloat
+  @Environment(\.stackPosition) private var position
+
+  private static let round: CGFloat = 17
+  private static let tight: CGFloat = 5
+
+  func body(content: Content) -> some View {
+    let above = position.joinsAbove ? Self.tight : Self.round
+    let below = position.joinsBelow ? Self.tight : Self.round
+    let shape = UnevenRoundedRectangle(
+      topLeadingRadius: mine ? Self.round : above,
+      bottomLeadingRadius: mine ? Self.round : below,
+      bottomTrailingRadius: mine ? below : Self.round,
+      topTrailingRadius: mine ? above : Self.round,
+      style: .continuous)
+    content
+      .padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .background(fill, in: shape)
+      .overlay {
+        if !mine { shape.strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5) }
+      }
+  }
+}
+
+extension View {
+  /// One bubble of a stack, on the side of whoever said it.
+  func stackBubble(
+    mine: Bool, horizontal: CGFloat = 14, vertical: CGFloat = 9
+  ) -> some View {
+    modifier(
+      StackBubble(
+        mine: mine, fill: mine ? .mine : .surface, horizontal: horizontal, vertical: vertical))
   }
 }
 

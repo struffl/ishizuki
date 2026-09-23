@@ -76,9 +76,7 @@ struct ChatView: View {
     } detail: {
       VStack(spacing: 0) {
         transcript
-        Divider().opacity(0.3)
         ChatReadoutBar(chat: chat, controller: controller)
-        ContextStrip(chat: chat)
         if let failure = chat.failure {
           HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
@@ -88,12 +86,19 @@ struct ChatView: View {
           }
           .font(.subheadline)
           .foregroundStyle(Color.clay)
-          .padding(.horizontal, 15)
+          .padding(.horizontal, 14)
           .padding(.top, 2)
         }
         asking
         queued
-        Composer(chat: chat, controller: controller, mono: mono, maxLines: composerLines)
+        VStack(spacing: 0) {
+          ContextStrip(chat: chat)
+          Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.horizontal, 14)
+          Composer(chat: chat, controller: controller, mono: mono, maxLines: composerLines)
+        }
+        .paperCard(radius: 14)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 14)
       }
       .background(
         GeometryReader { column in
@@ -138,6 +143,7 @@ struct ChatView: View {
                     .offset(x: gutter - reveal)
                 }
                 .clipped()
+                .environment(\.stackPosition, Self.position(of: index, in: blocks))
                 .padding(
                   .top,
                   Self.gap(after: index > 0 ? blocks[index - 1] : nil, before: block)
@@ -162,7 +168,8 @@ struct ChatView: View {
                   }
                 )
             }
-            .padding(15)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
               GeometryReader { content in
@@ -305,7 +312,7 @@ struct ChatView: View {
       Image(systemName: "arrow.down")
         .font(.system(.body, weight: .semibold))
         .foregroundStyle(.secondary)
-        .frame(width: 30, height: 33)
+        .frame(width: 33, height: 33)
     }
     .buttonStyle(.plain)
     .glassEffect(.clear, in: .circle)
@@ -525,17 +532,30 @@ struct ChatView: View {
 
   /// How much air a row gets above it. Sharing a voice with the row before means the two belong
   /// to one utterance and sit almost touching; only a change of voice earns a real gap.
-  private static func gap(
-    after previous: ChatController.Row.Kind?, before current: ChatController.Row.Kind
-  ) -> CGFloat {
-    guard let previous else { return 0 }
-    return previous.voice == current.voice ? 2 : 8
+  /// Which side of the page a block speaks from, or nil for one that stands alone: a notice,
+  /// a turn's summary.
+  private static func side(of block: Block?) -> Bool? {
+    guard let block else { return nil }
+    if case .summary = block { return nil }
+    switch block.first.kind.voice {
+    case .mine: return true
+    case .said, .machinery: return false
+    case .aside: return nil
+    }
+  }
+
+  private static func position(of index: Int, in blocks: [Block]) -> StackPosition {
+    let here = side(of: blocks[index])
+    guard let here else { return .only }
+    let above = index > 0 && side(of: blocks[index - 1]) == here
+    let below = index + 1 < blocks.count && side(of: blocks[index + 1]) == here
+    return StackPosition(joinsAbove: above, joinsBelow: below)
   }
 
   private static func gap(after previous: Block?, before current: Block) -> CGFloat {
-    if case .summary = current { return 8 }
-    if case .summary = previous { return 8 }
-    return gap(after: previous?.last.kind, before: current.first.kind)
+    guard previous != nil else { return 0 }
+    if let here = side(of: current), side(of: previous) == here { return 3 }
+    return 14
   }
 
   private var mono: Font {
@@ -578,7 +598,6 @@ struct ToolRunView<Content: View>: View {
         }
         .foregroundStyle(.secondary)
         .frame(minHeight: Metrics.hit)
-        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
         .contentShape(.rect)
       }
       .buttonStyle(.plain)
@@ -591,10 +610,13 @@ struct ToolRunView<Content: View>: View {
             rowView(member)
           }
         }
-        .padding(.leading, 17)
+        .padding(.bottom, 3)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
+    .stackBubble(mine: false, horizontal: 11, vertical: 4)
+    .padding(.leading, 11)
+    .padding(.trailing, 48)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
@@ -682,9 +704,9 @@ struct ChatRowView: View, Equatable {
           .foregroundStyle(.white)
           .textSelection(.enabled)
       }
-      .bubble(mine: true)
+      .stackBubble(mine: true)
       .padding(.trailing, 11)
-      .padding(.leading, 48)
+      .padding(.leading, 64)
       .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .steer:
@@ -709,8 +731,8 @@ struct ChatRowView: View, Equatable {
       }
       .environment(\.proseDesign, .serif)
       .foregroundStyle(Color.ink)
-      .padding(.vertical, 6)
-      .padding(.leading, 18)
+      .stackBubble(mine: false, horizontal: 16, vertical: 11)
+      .padding(.leading, 11)
       .padding(.trailing, 64)
       .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -821,7 +843,6 @@ struct ChatRowView: View, Equatable {
         }
         .foregroundStyle(tint)
         .frame(minHeight: Metrics.hit)
-        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
         .contentShape(.rect)
       }
       .buttonStyle(.plain)
@@ -873,12 +894,16 @@ struct ChatRowView: View, Equatable {
           // One line long enough to wrap past the cap would otherwise slip through it.
           .lineLimit(capped ? Self.bodyLineCap : nil)
         }
-        .textPlate(radius: 8, horizontal: 9, vertical: 5)
-        // Indented to sit under its own title rather than beside it.
-        .padding(.leading, 17)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.ink.opacity(0.045), in: .rect(cornerRadius: 7, style: .continuous))
+        .padding(.bottom, 3)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
+    .stackBubble(mine: false, horizontal: 11, vertical: 4)
+    .padding(.leading, 11)
+    .padding(.trailing, 48)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
@@ -1028,7 +1053,6 @@ struct ChatRowView: View, Equatable {
         }
         .foregroundStyle(Color.reading)
         .frame(minHeight: Metrics.hit)
-        .chipPlate(radius: 8, horizontal: 8, vertical: 1)
         .contentShape(.rect)
       }
       .buttonStyle(.plain)
@@ -1061,12 +1085,16 @@ struct ChatRowView: View, Equatable {
           }
           .textSelection(.enabled)
         }
-        .textPlate(radius: 8, horizontal: 9, vertical: 5)
-        // Indented to sit under its own title rather than beside it.
-        .padding(.leading, 17)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.ink.opacity(0.045), in: .rect(cornerRadius: 7, style: .continuous))
+        .padding(.bottom, 3)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
+    .stackBubble(mine: false, horizontal: 11, vertical: 4)
+    .padding(.leading, 11)
+    .padding(.trailing, 48)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 

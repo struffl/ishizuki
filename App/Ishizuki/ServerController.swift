@@ -49,6 +49,9 @@ final class ServerController {
   /// The folders the catalog is built from, watched so a pack pulled in a terminal or thrown
   /// away in the Finder reaches the list on its own.
   private var watcher: FolderWatcher?
+  /// A signal to quit becomes an ordinary quit, so the cache is written on the way out rather
+  /// than lost with the process.
+  private var signals: [DispatchSourceSignal] = []
 
   init() {
     rescan()
@@ -69,6 +72,19 @@ final class ServerController {
       }
     }
     probeAppleIntelligence()
+
+    NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.stop() }
+    }
+    for number in [SIGTERM, SIGINT, SIGHUP] {
+      signal(number, SIG_IGN)
+      let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+      source.setEventHandler { NSApp.terminate(nil) }
+      source.resume()
+      signals.append(source)
+    }
   }
 
   func probeAppleIntelligence() {

@@ -25,10 +25,12 @@ struct ChatReadoutBar: View {
         Divider().frame(height: 13)
         effortDial
       }
-      .textPlate(radius: 9, horizontal: 9, vertical: 5)
+      .padding(.horizontal, 11)
+      .padding(.vertical, 5)
+      .paperCard(radius: Radius.card)
     }
-    .padding(.horizontal, 11)
-    .padding(.vertical, 7)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
   }
 
   /// The dial belongs to the conversation on screen: a turn being answered elsewhere is that
@@ -53,7 +55,10 @@ struct ChatReadoutBar: View {
             request.phase == .prefill ? "reading" : "writing")
         }
       }
-      .textPlate(radius: 9, horizontal: 9, vertical: 4)
+      .fixedSize()
+      .padding(.horizontal, 11)
+      .padding(.vertical, 4)
+      .paperCard(radius: Radius.card)
     }
   }
 

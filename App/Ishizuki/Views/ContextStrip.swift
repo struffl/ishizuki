@@ -176,7 +176,7 @@ struct ContextBreakdown: View {
     HStack(spacing: 9) {
       RoundedRectangle(cornerRadius: 2)
         .fill(part.tint)
-        .frame(width: 10, height: 11)
+        .frame(width: 11, height: 11)
       Text(part.label)
         .font(.callout)
       Spacer(minLength: 12)
@@ -366,8 +366,9 @@ struct ContextStrip: View {
         WorktreeChip(chat: chat)
       }
     }
-    .chipPlate(radius: 9, horizontal: 10, vertical: 2)
-    .padding(.horizontal, 11)
+    .padding(.horizontal, 14)
+    .padding(.top, 7)
+    .padding(.bottom, 5)
   }
 
   /// The folder, still reachable but no longer a bar of its own: picking one is the sidebar's
