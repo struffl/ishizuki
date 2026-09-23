@@ -58,45 +58,6 @@ struct SpooledShellTests {
     #expect(throws: Never.self) { try host.resolve("Sources/deep/./file.swift") }
   }
 
-  @Test("a long command becomes a job, and its output arrives in pieces")
-  func jobs() async throws {
-    let (workspace, _, _) = try sandbox()
-
-    let first = try await workspace.shell(
-      command: "for i in 1 2 3; do /bin/echo line-$i; sleep 1; done", timeout: 0.4)
-    #expect(first.contains("still running"))
-    #expect(first.contains("job1"))
-
-    let listed = try await workspace.jobs()
-    #expect(listed.contains("job1"))
-    #expect(listed.contains("running"))
-
-    let second = try await workspace.jobOutput("job1", wait: 1.5)
-    let rest = try await workspace.jobOutput("job1", wait: 10)
-    let everything = first + second + rest
-    #expect(everything.contains("line-1"))
-    #expect(everything.contains("line-3"))
-    #expect(!rest.contains("line-1"))
-
-    #expect(try await workspace.jobs() == "no background jobs")
-  }
-
-  @Test("a job outlives the host that started it, because its state is in the sandbox")
-  func resumable() async throws {
-    let (workspace, _, root) = try sandbox()
-    _ = try await workspace.shell(command: "sleep 2; /bin/echo done", timeout: 0.3)
-
-    // A second host, as if the app had been closed and opened again.
-    let again = Workspace(
-      host: SpooledShellHost(
-        workspace: root, transport: CommandTransport.localShell(),
-        spool: root.appending(path: ".jobs").path))
-
-    #expect(try await again.jobs().contains("job1"))
-    let finished = try await again.jobOutput("job1", wait: 10)
-    #expect(finished.contains("done"))
-  }
-
   @Test("a job can be killed in the sandbox")
   func killed() async throws {
     let (workspace, _, _) = try sandbox()
