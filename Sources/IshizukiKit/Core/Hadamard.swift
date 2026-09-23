@@ -172,6 +172,22 @@ public final class PackedLinear: @unchecked Sendable {
       }
     }
 
+    return quantized(h)
+  }
+
+  private func quantized(_ h: MLXArray) -> MLXArray {
+    if BonsaiRuntime.useVerifyMatmul {
+      let shape = h.shape
+      let width = shape[shape.count - 1]
+      let rows = h.size / width
+      if VerifyMatmul.supportedRows.contains(rows),
+        let y = VerifyMatmul.apply(
+          h.reshaped([rows, width]), weight, scales: scales, biases: biases,
+          groupSize: groupSize, bits: bits)
+      {
+        return y.reshaped(Array(shape.dropLast()) + [outputDim])
+      }
+    }
     return quantizedMM(
       h, weight, scales: scales, biases: biases,
       transpose: true, groupSize: groupSize, bits: bits, mode: .affine)
@@ -194,9 +210,7 @@ public final class PackedLinear: @unchecked Sendable {
     if isDense {
       return matmul(h, weight.T.asType(h.dtype))
     }
-    return quantizedMM(
-      h, weight, scales: scales, biases: biases,
-      transpose: true, groupSize: groupSize, bits: bits, mode: .affine)
+    return quantized(h)
   }
 
   // Output channels are rows of the packed weight, so the half Metal keeps is a row slice.

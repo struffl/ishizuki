@@ -145,3 +145,25 @@ MLX 0.31.1 (what mlx-swift 0.31.6 vendors). Kept for other MLX versions.
 | Fused Hadamard | `--fused-hadamard` | 18.8–19.0 vs 19.8 tok/s |
 
 Verify with `ishizuki kernel-check`.
+
+## Speculative verify
+
+MLX's affine matmul costs close to one full weight read per row until it switches to its tiled
+path past eight rows: on the 2-bit Bonsai pack an 8-token forward took 279 ms against 52 ms for
+one, so a longer draft bought nothing. `VerifyMatmul` decodes each weight once, straight into a
+simdgroup matrix fragment, and applies it to up to eight rows. It is on by default for 5–8 rows,
+where it wins; below that MLX's own path is faster.
+
+| Verify width | MLX | `VerifyMatmul` |
+|---|---|---|
+| 6 tokens | 281 ms | 207 ms |
+| 8 tokens | 279 ms | 134 ms |
+
+| n-gram drafts (98% accepted) | MLX verify | `VerifyMatmul` |
+|---|---|---|
+| 4 per round | 17.6 tok/s | 18.2 tok/s |
+| 7 per round | 15.8 tok/s | **29.5 tok/s** |
+
+Lossless: every run matches greedy token for token. M1 Max, 2026-09-23. An M1 has no GPU
+matrix units, so eight rows cost about twice one at best; chips with neural accelerators in the
+GPU should close more of that.
