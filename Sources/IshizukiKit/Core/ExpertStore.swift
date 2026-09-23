@@ -122,6 +122,9 @@ public final class ExpertStore: @unchecked Sendable {
   /// What the slots of this layer occupy, which is the memory the budget buys.
   public var heldBytes: Int { slotCount * layout.stride }
 
+  /// Whether the slots are locked in memory, which `BonsaiRuntime.lockExpertSlots` asks for.
+  public var isLocked: Bool { buffer.isLocked }
+
   /// Every streamed layer's traffic at once: what a readout needs to say whether the slot
   /// budget is buying anything.
   public struct Summary: Sendable, Equatable {
@@ -167,7 +170,7 @@ public final class ExpertStore: @unchecked Sendable {
       total += Self.pageRounded(self.slotCount * layout.parts[name]!.byteCount)
     }
     self.base = base
-    self.buffer = try ResidentBuffer(byteCount: total)
+    self.buffer = try ResidentBuffer(byteCount: total, locked: BonsaiRuntime.lockExpertSlots)
     self.occupant = Array(repeating: -1, count: self.slotCount)
     self.lastTouched = Array(repeating: 0, count: self.slotCount)
   }

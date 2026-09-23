@@ -18,6 +18,7 @@ struct StreamedPrefillProbe {
     if let slots = env["ISHIZUKI_EXPERT_SLOTS"].flatMap(Int.init) {
       BonsaiRuntime.expertSlots = slots
     }
+    BonsaiRuntime.lockExpertSlots = env["ISHIZUKI_LOCK_SLOTS"] != "0"
     let residency = ResidencyManager(
       options: .init(wiredBytes: (Int(env["ISHIZUKI_WIRED_GB"] ?? "") ?? 0) << 30))
     residency.wire()
@@ -38,7 +39,8 @@ struct StreamedPrefillProbe {
     let out = URL(filePath: env["ISHIZUKI_PREFILL_OUT"] ?? NSTemporaryDirectory() + "prefill.txt")
     var report =
       "prompt source \(all.count) tokens, chunk \(chunk), slots \(BonsaiRuntime.expertSlots), "
-      + "wired \(residency.options.wiredBytes >> 30) GB\n"
+      + "wired \(residency.options.wiredBytes >> 30) GB, slots locked "
+      + "\(model.store.experts(layer: 0).map(\.isLocked) ?? false)\n"
 
     for length in lengths where length <= all.count {
       let ids = Array(all.suffix(length))

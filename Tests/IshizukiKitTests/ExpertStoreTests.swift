@@ -119,4 +119,19 @@ struct ExpertStoreTests {
     _ = try store.residency(of: [0])
     #expect(store.misses == 4)
   }
+
+  @Test("slots asked to be locked are locked, and read the same")
+  func lockedSlots() throws {
+    let url = temporary()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let layout = try write(to: url)
+
+    let store = try ExpertStore(url: url, layout: layout, slots: 2)
+    #expect(store.isLocked)
+    let slots = try store.residency(of: [3, 1])
+    let resident = try store.array("gate_proj.weight")
+    eval(resident)
+    #expect(resident[slots[0], 0].item(Float.self) == 3)
+    #expect(resident[slots[1], 0].item(Float.self) == 1)
+  }
 }

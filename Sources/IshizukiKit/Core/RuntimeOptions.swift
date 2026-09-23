@@ -60,6 +60,11 @@ public enum BonsaiRuntime {
   /// streamed model.
   public nonisolated(unsafe) static var expertSlots = 16
 
+  /// Locks each streamed layer's slots in memory. Unlocked, the system compresses slots it
+  /// sees go idle, and an expert then waits on decompression rather than on the disk: on the
+  /// 125B-A6B the step after a prefill took 4.6 s rather than 1.7, and 192 slots stalled.
+  public nonisolated(unsafe) static var lockExpertSlots = true
+
   /// Handed each sparse layer's chosen experts, still unevaluated, when set. A probe records
   /// routes with it; nothing in the runtime sets it.
   public nonisolated(unsafe) static var onRoute: ((Int, MLXArray) -> Void)?

@@ -17,11 +17,16 @@ public final class ResidentBuffer: @unchecked Sendable {
   public let pointer: UnsafeMutableRawPointer
   public let byteCount: Int
   private let alignment: Int
+  /// Whether the pages are locked in memory, where the system can neither swap nor compress
+  /// them. A lock that fails leaves an ordinary buffer rather than no buffer.
+  public let isLocked: Bool
 
   /// Metal wants its allocations page aligned; 16 KiB is the page size on Apple silicon.
   public static let pageSize = 16384
 
-  public init(byteCount: Int, alignment: Int = ResidentBuffer.pageSize) throws {
+  public init(
+    byteCount: Int, alignment: Int = ResidentBuffer.pageSize, locked: Bool = false
+  ) throws {
     guard byteCount > 0 else {
       throw BonsaiError.shapeMismatch("a resident buffer needs a size")
     }
@@ -33,9 +38,13 @@ public final class ResidentBuffer: @unchecked Sendable {
     self.pointer = raw
     self.byteCount = rounded
     self.alignment = alignment
+    self.isLocked = locked && mlock(raw, rounded) == 0
   }
 
-  deinit { free(pointer) }
+  deinit {
+    if isLocked { munlock(pointer, byteCount) }
+    free(pointer)
+  }
 
   /// Fills `range` of this buffer from `descriptor` at `offset`, in one read.
   @discardableResult

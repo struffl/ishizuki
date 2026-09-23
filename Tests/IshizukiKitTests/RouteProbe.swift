@@ -28,6 +28,7 @@ struct RouteProbe {
     if let slots = env["ISHIZUKI_EXPERT_SLOTS"].flatMap(Int.init) {
       BonsaiRuntime.expertSlots = slots
     }
+    BonsaiRuntime.lockExpertSlots = env["ISHIZUKI_LOCK_SLOTS"] != "0"
     let model = try BonsaiModel(path: URL(filePath: env["ISHIZUKI_ROUTE_PACK"]!))
     let prompts = Array(Self.prompts.prefix(Int(env["ISHIZUKI_PROMPTS"] ?? "") ?? Self.prompts.count))
     let output = URL(filePath: env["ISHIZUKI_ROUTE_OUT"] ?? NSTemporaryDirectory() + "routes.json")
