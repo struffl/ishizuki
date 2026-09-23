@@ -188,7 +188,8 @@ public struct BonsaiConfig: Codable, Sendable {
   public struct TextConfig: Codable, Sendable {
     public var modelType: String
     public var hiddenSize: Int
-    public var intermediateSize: Int
+    /// Absent from a model whose every layer is sparse, which has no dense MLP to size.
+    public var intermediateSize: Int?
     public var numHiddenLayers: Int
     public var numAttentionHeads: Int
     public var numKeyValueHeads: Int
@@ -218,6 +219,11 @@ public struct BonsaiConfig: Codable, Sendable {
     public var numExpertsPerTok: Int?
     public var moeIntermediateSize: Int?
     public var sharedExpertIntermediateSize: Int?
+
+    /// The widest MLP a layer runs whole: the dense one, else the shared expert, else a routed one.
+    public var mlpWidth: Int {
+      intermediateSize ?? sharedExpertIntermediateSize ?? moeIntermediateSize ?? hiddenSize * 4
+    }
     public var normTopkProb: Bool?
     /// Every `decoderSparseStep`-th layer is sparse; the rest are dense, as are any layer named
     /// in `mlpOnlyLayers`.

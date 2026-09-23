@@ -64,7 +64,7 @@ public struct PrefillBench: Sendable {
         "layers",
         "\(text.numHiddenLayers)  (\(linearLayers) linear_attention, "
           + "\(attentionLayers) full_attention)"))
-    log(field("hidden", "\(text.hiddenSize)   mlp \(text.intermediateSize)"))
+    log(field("hidden", "\(text.hiddenSize)   mlp \(text.mlpWidth)"))
     log(
       field(
         "gdn",
@@ -114,20 +114,20 @@ public struct PrefillBench: Sendable {
 
     rows.append(
       Row(
-        label: "MLP  gate_proj   \(text.hiddenSize)→\(text.intermediateSize)",
+        label: "MLP  gate_proj   \(text.hiddenSize)→\(text.mlpWidth)",
         layers: text.numHiddenLayers,
         seconds: time(options) { eval(gate(hidden)) }, bucket: .offloadable))
     rows.append(
       Row(
-        label: "MLP  up_proj     \(text.hiddenSize)→\(text.intermediateSize)",
+        label: "MLP  up_proj     \(text.hiddenSize)→\(text.mlpWidth)",
         layers: text.numHiddenLayers,
         seconds: time(options) { eval(up(hidden)) }, bucket: .offloadable))
 
-    let wide = MLXRandom.normal([1, chunk, text.intermediateSize]).asType(.float16)
+    let wide = MLXRandom.normal([1, chunk, text.mlpWidth]).asType(.float16)
     eval(wide)
     rows.append(
       Row(
-        label: "MLP  down_proj   \(text.intermediateSize)→\(text.hiddenSize)",
+        label: "MLP  down_proj   \(text.mlpWidth)→\(text.hiddenSize)",
         layers: text.numHiddenLayers,
         seconds: time(options) { eval(down(wide)) }, bucket: .other))
 

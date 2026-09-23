@@ -49,9 +49,9 @@ public enum ExpertRepack {
   /// A multimodal pack nests the language model; a text-only one does not. Reading the wrong
   /// one finds no experts at all, which reads as a model that routes through none.
   static func prefix(_ store: WeightStore) -> String {
-    store.has("language_model.model.norm.weight")
-      || store.names(prefix: "language_model.model.layers.").first != nil
-      ? "language_model." : ""
+    store.languageModelPrefix.isEmpty
+      && store.names(prefix: "language_model.model.layers.").first == nil
+      ? "" : "language_model."
   }
 
   static func expertPath(

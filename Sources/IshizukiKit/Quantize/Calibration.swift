@@ -81,7 +81,7 @@ public final class CalibrationModel: @unchecked Sendable {
     let store = try Self.denseStore(from: source)
     let collector = ActivationCollector()
     self.collector = collector
-    self.tensorPrefix = store.has("language_model.model.norm.weight") ? "language_model." : ""
+    self.tensorPrefix = store.languageModelPrefix
     let factory = PackedModuleFactory(
       store: store, config: config, tensorPrefix: tensorPrefix,
       dense: true, collector: collector)

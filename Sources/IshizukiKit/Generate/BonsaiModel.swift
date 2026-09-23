@@ -106,8 +106,7 @@ public final class BonsaiModel: @unchecked Sendable {
     self.store = store
     self.tokenizer = tokenizer
 
-    let nested = store.has("language_model.model.norm.weight")
-    self.tensorPrefix = nested ? "language_model." : ""
+    self.tensorPrefix = store.languageModelPrefix
 
     let factory = PackedModuleFactory(
       store: store, config: config, tensorPrefix: tensorPrefix)
@@ -125,8 +124,13 @@ public final class BonsaiModel: @unchecked Sendable {
       config: config, factory: factory, store: store, ropeScaling: scaling)
 
     // The head is optional twice over: the config has to declare it and the pack has to ship
-    // the tensors. A pack that declares it and omits them still loads, without drafting.
-    if config.components?.mtp == true, !store.names(prefix: tensorPrefix + "mtp").isEmpty {
+    // the tensors. A pack that declares it and omits them still loads, without drafting, and so
+    // does one whose head is not the single-`fc` kind `MTPHead` reads: qwen4_exp's is split
+    // into `fc_embedding` and `fc_hidden` behind a mixer of its own.
+    let head = tensorPrefix + "mtp.fc"
+    if config.components?.mtp == true,
+      store.has(head + ".weight") || store.has(head + ".trellis")
+    {
       self.mtp = try MTPHead(
         config: config.textConfig, factory: factory, store: store, rope: text.rope)
     } else {

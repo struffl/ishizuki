@@ -41,6 +41,14 @@ public final class WeightStore: @unchecked Sendable {
 
   public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
 
+  /// Where the language model's tensors sit: nested under `language_model.` in a multimodal
+  /// pack, at the top in a text-only one. Asked of the embedding as well as the final norm,
+  /// because a hyper-connected model folds its streams through a mixer and ships no norm.
+  public var languageModelPrefix: String {
+    has("language_model.model.norm.weight") || has("language_model.model.embed_tokens.weight")
+      ? "language_model." : ""
+  }
+
   public func canonical(zeroCentredNorms: Bool) -> WeightStore {
     let names = Array(arrays.keys)
     guard TensorNaming.isHuggingFaceLayout(names) else { return self }

@@ -39,10 +39,13 @@ public final class Attention: @unchecked Sendable {
     self.headDim = config.headDim
     self.scale = 1.0 / Float(config.headDim).squareRoot()
     self.normEps = config.rmsNormEps
-    self.outputGate = config.attnOutputGate ?? false
     self.rope = rope
 
     self.qProj = try factory.linear(prefix + ".q_proj")
+    // Upstream qwen4_exp configs gate every attention output without saying so; the Whittle
+    // grafts write `attn_output_gate`. A query projection twice the heads' width is the gate.
+    self.outputGate =
+      config.attnOutputGate ?? (qProj.outputDim == 2 * config.numAttentionHeads * config.headDim)
     self.kProj = try factory.linear(prefix + ".k_proj")
     self.vProj = try factory.linear(prefix + ".v_proj")
     self.oProj = try factory.linear(prefix + ".o_proj")

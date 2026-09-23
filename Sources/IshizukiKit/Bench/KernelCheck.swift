@@ -22,7 +22,7 @@ public struct KernelCheck: Sendable {
     let config = try BonsaiConfig.load(directory: packURL)
     try config.validate()
     let store = try WeightStore(directory: packURL)
-    let prefix = store.has("language_model.model.norm.weight") ? "language_model." : ""
+    let prefix = store.languageModelPrefix
     let factory = PackedModuleFactory(store: store, config: config, tensorPrefix: prefix)
 
     let cases: [(String, String)] = [
