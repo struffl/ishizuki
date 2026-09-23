@@ -104,6 +104,26 @@ struct HostGapProbe {
       return (all.count, min(once(), once()))
     }
 
+    func generator(pipelined: Bool) -> ([Int], Double) {
+      BonsaiRuntime.pipelineDecode = pipelined
+      defer { BonsaiRuntime.pipelineDecode = true }
+      let result = Generator(model: model, politeness: .normal).generate(
+        promptTokens: prompt, options: .greedy, maxTokens: steps)
+      return (result.tokens, result.stats.generationTokensPerSecond)
+    }
+    _ = generator(pipelined: true)
+    var rates: [Bool: Double] = [:]
+    var outputs: [Bool: [Int]] = [:]
+    for round in 0..<4 {
+      let pipelined = round % 2 == 1
+      let (tokens, rate) = generator(pipelined: pipelined)
+      rates[pipelined] = max(rates[pipelined] ?? 0, rate)
+      outputs[pipelined] = tokens
+    }
+    print(String(format: "Generator serial   : %6.2f tok/s", rates[false]!))
+    print(String(format: "Generator pipelined: %6.2f tok/s", rates[true]!))
+    print("Generator tokens identical: \(outputs[false]! == outputs[true]!)")
+
     _ = sync()
     let (a, syncSeconds) = sync()
     let (b, pipeSeconds) = pipelined()

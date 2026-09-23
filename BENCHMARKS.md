@@ -146,6 +146,21 @@ MLX 0.31.1 (what mlx-swift 0.31.6 vendors). Kept for other MLX versions.
 
 Verify with `ishizuki kernel-check`.
 
+## Pipelined decode
+
+The unconstrained decode loop queues the next forward, and the pick after it, before reading
+the token it is about to emit, so the GPU is never idle while the host samples, detokenizes and
+streams. The serial loop waited on the GPU twice a token, once for the step and once for the
+pick. A constrained decode still runs serially: it needs the allowed set on the host each step.
+
+| Greedy, 96 tokens | tok/s |
+|---|---|
+| serial | 14.35 |
+| pipelined | 22.48 |
+
+Same tokens, and the cache is left exactly where the serial loop leaves it. Bonsai 2-bit, M1 Max,
+2026-09-23; `BonsaiRuntime.pipelineDecode` turns it off.
+
 ## Speculative verify
 
 MLX's affine matmul costs close to one full weight read per row until it switches to its tiled

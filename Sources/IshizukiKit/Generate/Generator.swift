@@ -137,51 +137,91 @@ public final class Generator: @unchecked Sendable {
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
 
-    for _ in 0..<maxTokens {
-      if isCancelled?() == true {
-        cancelled = true
-        break
-      }
-      let token: Int
-      if let constraint {
-        // A complete document may stop here; an exhausted one must.
-        guard
-          let picked = sampler(
-            nextLogits, allowed: constraint.allowedTokens(tokenizer: model.tokenizer))
-        else {
-          stoppedOnEOS = constraint.isComplete
+    func stepPositions() -> MLXArray? {
+      decodePosition.map { MLXArray([Int32($0), Int32($0), Int32($0)]).reshaped([3, 1]) }
+    }
+
+    if constraint == nil, BonsaiRuntime.pipelineDecode {
+      var pending = sampler.token(nextLogits, recentTokens: promptTokens)
+      asyncEval(pending)
+      for _ in 0..<maxTokens {
+        if isCancelled?() == true {
+          cancelled = true
           break
         }
-        constraint.accept(model.tokenizer.tokenBytes(picked))
-        token = picked
-      } else {
-        token = sampler(nextLogits, recentTokens: promptTokens + generated)
-      }
+        let snapshot = cache.snapshot()
+        let step = model.text(pending.reshaped([1, 1]), cache: cache, positions: stepPositions())
+        if decodePosition != nil { decodePosition! += 1 }
+        let following = sampler.token(
+          step[0..., -1, 0...], recentTokens: promptTokens + generated, pending: pending)
+        asyncEval(following)
 
-      if model.tokenizer.eosTokenIds.contains(token) {
-        stoppedOnEOS = true
-        break
-      }
-      generated.append(token)
-      onProgress?(.decode(count: generated.count))
+        let token = pending.item(Int.self)
+        if model.tokenizer.eosTokenIds.contains(token) {
+          cache.restore(snapshot)
+          stoppedOnEOS = true
+          break
+        }
+        generated.append(token)
+        onProgress?(.decode(count: generated.count))
 
-      let fragment = detokenizer.append(token)
-      if !fragment.isEmpty {
-        text += fragment
-        if let onToken, !onToken(fragment) { break }
-      }
+        let fragment = detokenizer.append(token)
+        if !fragment.isEmpty {
+          text += fragment
+          if let onToken, !onToken(fragment) {
+            cache.restore(snapshot)
+            break
+          }
+        }
 
-      let delay = Politeness.throttleDelay(for: politeness)
-      if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-
-      let input = MLXArray([Int32(token)]).reshaped([1, 1])
-      let stepPositions = decodePosition.map {
-        MLXArray([Int32($0), Int32($0), Int32($0)]).reshaped([3, 1])
+        let delay = Politeness.throttleDelay(for: politeness)
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        pending = following
       }
-      let step = model.text(input, cache: cache, positions: stepPositions)
-      eval(step)
-      if decodePosition != nil { decodePosition! += 1 }
-      nextLogits = step[0..., -1, 0...]
+    } else {
+      for _ in 0..<maxTokens {
+        if isCancelled?() == true {
+          cancelled = true
+          break
+        }
+        let token: Int
+        if let constraint {
+          // A complete document may stop here; an exhausted one must.
+          guard
+            let picked = sampler(
+              nextLogits, allowed: constraint.allowedTokens(tokenizer: model.tokenizer))
+          else {
+            stoppedOnEOS = constraint.isComplete
+            break
+          }
+          constraint.accept(model.tokenizer.tokenBytes(picked))
+          token = picked
+        } else {
+          token = sampler(nextLogits, recentTokens: promptTokens + generated)
+        }
+
+        if model.tokenizer.eosTokenIds.contains(token) {
+          stoppedOnEOS = true
+          break
+        }
+        generated.append(token)
+        onProgress?(.decode(count: generated.count))
+
+        let fragment = detokenizer.append(token)
+        if !fragment.isEmpty {
+          text += fragment
+          if let onToken, !onToken(fragment) { break }
+        }
+
+        let delay = Politeness.throttleDelay(for: politeness)
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+
+        let input = MLXArray([Int32(token)]).reshaped([1, 1])
+        let step = model.text(input, cache: cache, positions: stepPositions())
+        eval(step)
+        if decodePosition != nil { decodePosition! += 1 }
+        nextLogits = step[0..., -1, 0...]
+      }
     }
     let generationSeconds = -generationStart.timeIntervalSinceNow
 

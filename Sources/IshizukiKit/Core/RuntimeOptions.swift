@@ -46,6 +46,8 @@ public enum BonsaiRuntime {
 
   public nonisolated(unsafe) static var useVerifyMatmul = true
 
+  public nonisolated(unsafe) static var pipelineDecode = true
+
   /// Routed experts held in memory per sparse layer, when the model keeps them on disk. More
   /// slots means fewer reads and more resident bytes; this is the whole memory dial for a
   /// streamed model.

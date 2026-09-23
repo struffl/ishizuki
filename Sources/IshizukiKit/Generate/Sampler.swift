@@ -44,12 +44,20 @@ public struct Sampler {
   }
 
   public func callAsFunction(_ logits: MLXArray, recentTokens: [Int] = []) -> Int {
-    let scores = truncatedScores(logits, recentTokens: recentTokens)
+    token(logits, recentTokens: recentTokens).item(Int.self)
+  }
+
+  /// The pick left on the GPU, so the next step can be queued before it is read. `pending` is a
+  /// token already sampled but not yet read back, counted as the newest entry of the window.
+  public func token(
+    _ logits: MLXArray, recentTokens: [Int] = [], pending: MLXArray? = nil
+  ) -> MLXArray {
+    let scores = truncatedScores(logits, recentTokens: recentTokens, pending: pending)
 
     guard options.temperature > 0 else {
-      return scores.argMax(axis: -1).item(Int.self)
+      return scores.argMax(axis: -1)
     }
-    return MLXRandom.categorical(scores / options.temperature, axis: -1).item(Int.self)
+    return MLXRandom.categorical(scores / options.temperature, axis: -1)
   }
 
   /// Sample restricted to `allowed`, by gathering just those logits. The allowed set is small,
@@ -67,14 +75,18 @@ public struct Sampler {
     return allowed[choice]
   }
 
-  public func truncatedScores(_ logits: MLXArray, recentTokens: [Int] = []) -> MLXArray {
+  public func truncatedScores(
+    _ logits: MLXArray, recentTokens: [Int] = [], pending: MLXArray? = nil
+  ) -> MLXArray {
     var scores = logits.asType(.float32)
 
-    if options.repetitionPenalty != 1.0, !recentTokens.isEmpty {
-      scores = applyRepetitionPenalty(scores, tokens: recentTokens)
-    }
-    if options.presencePenalty != 0, !recentTokens.isEmpty {
-      scores = applyPresencePenalty(scores, tokens: recentTokens)
+    if let window = window(recentTokens, pending: pending) {
+      if options.repetitionPenalty != 1.0 {
+        scores = applyRepetitionPenalty(scores, window: window)
+      }
+      if options.presencePenalty != 0 {
+        scores = applyPresencePenalty(scores, window: window)
+      }
     }
 
     guard options.temperature > 0 else { return scores }
@@ -86,26 +98,34 @@ public struct Sampler {
     return scores
   }
 
-  private func applyRepetitionPenalty(_ scores: MLXArray, tokens: [Int]) -> MLXArray {
-    let window = Array(tokens.suffix(options.repetitionContext))
-    guard !window.isEmpty else { return scores }
-    let indices = MLXArray(window.map { Int32($0) })
-    let selected = scores[0..., indices]
+  private func window(_ tokens: [Int], pending: MLXArray?) -> MLXArray? {
+    let context = options.repetitionContext
+    guard context > 0 else { return nil }
+    let known = tokens.suffix(pending == nil ? context : context - 1).map { Int32($0) }
+    let recent = known.isEmpty ? nil : MLXArray(known)
+    switch (recent, pending) {
+    case (let recent?, let pending?):
+      return concatenated([recent, pending.reshaped([-1]).asType(.int32)])
+    case (let recent?, nil): return recent
+    case (nil, let pending?): return pending.reshaped([-1]).asType(.int32)
+    case (nil, nil): return nil
+    }
+  }
+
+  private func applyRepetitionPenalty(_ scores: MLXArray, window: MLXArray) -> MLXArray {
+    let selected = scores[0..., window]
     let penalized = MLX.where(
       selected .> 0, selected / options.repetitionPenalty,
       selected * options.repetitionPenalty)
     let updated = scores
-    updated[0..., indices] = penalized
+    updated[0..., window] = penalized
     return updated
   }
 
-  private func applyPresencePenalty(_ scores: MLXArray, tokens: [Int]) -> MLXArray {
-    let window = Array(Set(tokens.suffix(options.repetitionContext)))
-    guard !window.isEmpty else { return scores }
-    let indices = MLXArray(window.map { Int32($0) })
-    let updated = scores
-    updated[0..., indices] = scores[0..., indices] - options.presencePenalty
-    return updated
+  private func applyPresencePenalty(_ scores: MLXArray, window: MLXArray) -> MLXArray {
+    let seen = MLXArray.zeros([scores.dim(-1)], dtype: scores.dtype)
+    seen[window] = MLXArray(Float(1))
+    return scores - options.presencePenalty * seen
   }
 
   private func applyTopK(_ scores: MLXArray, k: Int) -> MLXArray {
