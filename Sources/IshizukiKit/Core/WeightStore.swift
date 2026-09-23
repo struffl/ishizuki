@@ -79,8 +79,12 @@ public final class WeightStore: @unchecked Sendable {
     where name.hasPrefix("layer_") && name.hasSuffix(".bin") {
       let digits = name.dropFirst("layer_".count).dropLast(".bin".count)
       guard let layer = Int(digits) else { continue }
+      let own = directory.appending(path: ExpertRepack.layerLayoutFile(layer))
+      let layerLayout =
+        FileManager.default.fileExists(atPath: own.path)
+        ? try JSONDecoder().decode(ExpertLayout.self, from: try Data(contentsOf: own)) : layout
       stores[layer] = try ExpertStore(
-        url: folder.appending(path: name), layout: layout, slots: slots)
+        url: folder.appending(path: name), layout: layerLayout, slots: slots)
     }
     return WeightStore(
       arrays: arrays, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout, experts: stores,

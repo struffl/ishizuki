@@ -171,7 +171,17 @@ public final class Quantizer: @unchecked Sendable {
     var measurements: [ModuleMeasurement] = []
     measurements.reserveCapacity(quantizable.count)
     var surveyed = 0
-    for name in quantizable {
+    let surveyURL = destination.appending(path: SurveyRecord.file)
+    let key = SurveyRecord.Key(groupSize: profile.groupSize, widths: widths, calibrated: calibrate)
+    let recorded = SurveyRecord.load(surveyURL, key: key, covering: quantizable)
+    if let recorded {
+      measurements = recorded
+      surveyed = recorded.reduce(0) { $0 + $1.elements }
+      let kept = Set(recorded.map(\.path))
+      passthrough += quantizable.filter { !kept.contains($0) }
+      report(.surveying, measurements.count, measurements.count, "reusing the last survey", surveyed, "")
+    }
+    for name in quantizable where recorded == nil {
       let weight = try source.resident(name)
       // A module whose input width does not divide the group cannot be quantized at this
       // group size; it is carried at fp16 rather than silently reshaped.
@@ -190,6 +200,7 @@ public final class Quantizer: @unchecked Sendable {
       )
     }
     quantizable = measurements.map(\.path)
+    if recorded == nil { try SurveyRecord.save(measurements, key: key, to: surveyURL) }
 
     report(.allocating, 0, 1, "spending the budget", surveyed, "")
     let allocation = BitAllocator(profile: profile).allocate(measurements)
@@ -257,6 +268,7 @@ public final class Quantizer: @unchecked Sendable {
     report(.finishing, 0, 1, "writing the index and config", surveyed, "")
     let summary = try writer.finish()
     try writeConfig(allocation: allocation, bits: canonicalBits)
+    try? FileManager.default.removeItem(at: surveyURL)
 
     return Outcome(
       directory: destination,
@@ -312,12 +324,15 @@ public final class Quantizer: @unchecked Sendable {
         report(.writing, written, total, "\(short(name)) at \(bits)-bit, streamed", surveyed, "")
       }
 
+      // The allocation widens a projection in one layer and not the next, so each layer's
+      // blob is cut to its own layout rather than the first one's.
       let expertCount = parts.values.first?.dim(0) ?? 0
-      let planned = layout ?? ExpertRepack.layout(of: parts, expertCount: expertCount)
-      layout = planned
+      let planned = ExpertRepack.layout(of: parts, expertCount: expertCount)
+      if layout == nil { layout = planned }
       bytes += try ExpertRepack.blob(
         parts: parts, layout: planned,
         to: destination.appending(path: ExpertRepack.layerFile(layer)))
+      try ExpertRepack.writeLayout(planned, layer: layer, to: destination)
     }
 
     guard let layout else { return 0 }
@@ -436,3 +451,32 @@ public final class Quantizer: @unchecked Sendable {
         note: note))
   }
 }
+
+/// What a survey measured, kept beside an unfinished pack so a conversion that fails after it
+/// does not pay for it again. On a 360 GB source the survey is an hour of reading a disk.
+struct SurveyRecord: Codable {
+  static let file = "survey.json"
+
+  struct Key: Codable, Equatable {
+    var groupSize: Int
+    var widths: [Int]
+    var calibrated: Bool
+  }
+
+  var key: Key
+  var measurements: [ModuleMeasurement]
+
+  static func load(_ url: URL, key: Key, covering names: [String]) -> [ModuleMeasurement]? {
+    guard let data = try? Data(contentsOf: url),
+      let record = try? JSONDecoder().decode(SurveyRecord.self, from: data),
+      record.key == key,
+      Set(record.measurements.map(\.path)).isSubset(of: Set(names))
+    else { return nil }
+    return record.measurements
+  }
+
+  static func save(_ measurements: [ModuleMeasurement], key: Key, to url: URL) throws {
+    try JSONEncoder().encode(SurveyRecord(key: key, measurements: measurements)).write(to: url)
+  }
+}
+

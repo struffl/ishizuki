@@ -5,7 +5,7 @@ import Foundation
 import MLX
 
 /// What a module costs and what it loses, measured at each width it might be given.
-public struct ModuleMeasurement: Sendable {
+public struct ModuleMeasurement: Sendable, Codable, Equatable {
   public let path: String
   public let elements: Int
   /// Relative Frobenius error of the round trip at each candidate width.

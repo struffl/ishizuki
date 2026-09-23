@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
+import MLX
 import Testing
 
 @testable import IshizukiKit
@@ -23,6 +24,7 @@ struct ConvertProbe {
       groupSize: Int(env["ISHIZUKI_CONVERT_GROUP"] ?? "") ?? 64, summary: "headless conversion")
     let engramBits = env["ISHIZUKI_CONVERT_ENGRAM_BITS"].flatMap(Int.init)
     let stream = env["ISHIZUKI_CONVERT_STREAM"] != "0"
+    Memory.cacheLimit = (Int(env["ISHIZUKI_CONVERT_CACHE_GB"] ?? "") ?? 4) << 30
 
     let started = Date()
     let lastPrint = LockedBox(Date.distantPast)

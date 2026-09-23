@@ -93,6 +93,23 @@ public enum EngramRepack {
       bits: bits, groupSize: bits == nil ? nil : groupSize)
     let rowBytes = try layout.rowBytes
 
+    // The layout is written last, so one that matches, over parts that add up, is a table an
+    // earlier run finished. A 58 GB table is twenty minutes of disk not to repeat.
+    let layoutURL = destination.appending(path: EngramLayout.layoutFile)
+    if let data = try? Data(contentsOf: layoutURL),
+      let previous = try? JSONDecoder().decode(EngramLayout.self, from: data), previous == layout
+    {
+      let onDisk = (0..<layout.parts).reduce(0) { sum, part in
+        let url = destination.appending(path: EngramLayout.fileName(part: part))
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int
+        return sum + (size ?? -rowBytes * addressable)
+      }
+      if onDisk == addressable * rowBytes {
+        log("engrams: reusing the table already written")
+        return Plan(layout: layout, byteCount: onDisk)
+      }
+    }
+
     let fm = FileManager.default
     let folder = destination.appending(path: "engrams")
     try fm.createDirectory(at: folder, withIntermediateDirectories: true)

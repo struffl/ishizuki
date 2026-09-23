@@ -248,9 +248,24 @@ public enum ExpertRepack {
 
   /// The layout a pack streams by, written once beside its experts.
   public static func writeLayout(_ layout: ExpertLayout, to destination: URL) throws {
+    try write(layout, to: destination.appending(path: layoutFile))
+  }
+
+  /// One layer's own layout, for a pack whose allocation gave its layers different widths.
+  /// The shared `layout.json` still marks the pack as split, and describes any layer without
+  /// a file of its own.
+  static func layerLayoutFile(_ layer: Int) -> String {
+    "\(folder)/layer_\(String(format: "%02d", layer)).json"
+  }
+
+  public static func writeLayout(_ layout: ExpertLayout, layer: Int, to destination: URL) throws {
+    try write(layout, to: destination.appending(path: layerLayoutFile(layer)))
+  }
+
+  private static func write(_ layout: ExpertLayout, to url: URL) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    try encoder.encode(layout).write(to: destination.appending(path: layoutFile))
+    try encoder.encode(layout).write(to: url)
   }
 
   private static func write(
