@@ -38,16 +38,21 @@ struct ServeSpeedProbe {
         messages: [.user(text)], addGenerationPrompt: true, enableThinking: false)
       let tokens = model.tokenizer.encode(rendered)
       for (sampling, options) in samplers {
+        var plain: [Int] = []
         for drafting in [false, true] {
           BonsaiRuntime.speculativeDecode = drafting
           let result = Generator(model: model, politeness: .normal).generate(
             promptTokens: tokens, options: options, maxTokens: 120)
+          if !drafting { plain = result.tokens }
+          let same = drafting && options.temperature == 0
+            ? (result.tokens == plain ? "  same tokens" : "  DIFFERS at \(zip(result.tokens, plain).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? -1)")
+            : ""
           let spec = result.speculative.map {
             String(format: "  %.2f tok/round, %d/%d accepted", $0.tokensPerRound, $0.accepted, $0.proposed)
           } ?? ""
           print(String(format: "%-5@ %-6@ drafting %@ : %6.2f tok/s (%d tokens)%@",
             label, sampling, drafting ? "on " : "off", result.stats.generationTokensPerSecond,
-            result.tokens.count, spec))
+            result.tokens.count, spec + same))
         }
       }
     }

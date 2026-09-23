@@ -79,6 +79,8 @@ extension Generator {
       sampler.truncatedScores(row.reshaped([1, -1]))
     }
 
+    var carry: [Int] = []
+
     while out.generated.count < maxTokens {
       if isCancelled?() == true {
         out.cancelled = true
@@ -92,9 +94,9 @@ extension Generator {
       observed = nil
 
       var draft: [Int] = []
+      let room = BonsaiRuntime.draftLength
       if ngramIdle == 0 {
-        draft = drafts.lookup.propose(
-          context: context + [confirmed], count: BonsaiRuntime.draftLength)
+        draft = drafts.lookup.propose(context: context + [confirmed], count: room)
       } else {
         ngramIdle -= 1
       }
@@ -102,42 +104,53 @@ extension Generator {
       if draft.isEmpty, let mtp = drafts.mtp {
         draft = mtp.propose(context: context, count: 1)
       }
+      if carry.count + 1 + draft.count > 16 { draft = [] }
       out.stats.rounds += 1
+
+      let offset = carry.count
+      let block = carry + [confirmed] + draft
+      carry = []
 
       if draft.isEmpty {
         guard emit([confirmed]) else { break }
-        let (h, next) = forward([confirmed], allPositions: false)
+        let (h, next) = forward(block, allPositions: false)
         eval(next)
         logits = next
-        observed = (h, [])
+        observed = (offset == 0 ? h : h[0..., offset..., 0...], [])
         continue
       }
 
       out.stats.proposed += draft.count
       let snapshot = cache.snapshot()
-      let block = [confirmed] + draft
       let (h, blockLogits) = forward(block, allPositions: true)
       eval(blockLogits)
 
       var accepted = 0
       if temperature > 0 {
-        while accepted < draft.count {
-          let row = scores(blockLogits[0, accepted]) / temperature
-          let probability = softmax(row, axis: -1)[0, draft[accepted]].item(Float.self)
-          if MLXRandom.uniform(0 ..< 1, [1]).item(Float.self) < probability {
-            accepted += 1
-            continue
-          }
-          let mask = MLXArray.zeros([row.dim(-1)], dtype: .float32)
-          mask[draft[accepted]] = MLXArray(-Float.infinity)
-          forced = MLXRandom.categorical(row + mask, axis: -1).item(Int.self)
-          break
-        }
+        let rows = blockLogits[0, offset..., 0...]
+        let scaled = sampler.truncatedScores(rows) / temperature
+        let ids = MLXArray(draft.map { Int32($0) })
+        let chance = takeAlong(
+          softmax(scaled[..<draft.count], axis: -1), ids.reshaped([-1, 1]), axis: -1
+        ).reshaped([-1])
+        let rolls = MLXRandom.uniform(0 ..< 1, [draft.count])
+        let spoiled = scaled[..<draft.count]
+        spoiled[MLXArray(Int32(0)..<Int32(draft.count)), ids] = MLXArray(-Float.infinity)
+        let replacements = MLXRandom.categorical(spoiled, axis: -1)
+        let bonus = MLXRandom.categorical(scaled[draft.count...], axis: -1)
+        eval(chance, rolls, replacements, bonus)
+        let chances = chance.asArray(Float.self)
+        let draws = rolls.asArray(Float.self)
+        while accepted < draft.count, draws[accepted] < chances[accepted] { accepted += 1 }
+        forced =
+          accepted < draft.count
+          ? Int(replacements.asArray(Int32.self)[accepted]) : bonus.item(Int.self)
       } else {
-        let predictions = blockLogits[0].argMax(axis: -1).asArray(Int32.self)
+        let predictions = blockLogits[0, offset...].argMax(axis: -1).asArray(Int32.self)
         while accepted < draft.count, Int(predictions[accepted]) == draft[accepted] {
           accepted += 1
         }
+        forced = Int(predictions[accepted])
       }
       out.stats.accepted += accepted
       if fromNgram, accepted == 0 { ngramIdle = 4 }
@@ -145,18 +158,20 @@ extension Generator {
       let kept = [confirmed] + draft.prefix(accepted)
       if accepted == draft.count {
         logits = blockLogits[0..., (blockLogits.dim(1) - 1)..., 0...]
-        observed = (h, Array(block.dropFirst()))
+        observed = (offset == 0 ? h : h[0..., offset..., 0...], Array(block[(offset + 1)...]))
       } else {
         out.stats.rollbacks += 1
         cache.restore(snapshot)
-        let (replayed, next) = forward(kept, allPositions: false)
-        eval(next)
-        logits = next
-        observed = (replayed, Array(kept.dropFirst()))
+        carry = Array(block[..<offset]) + kept
+        if let mtp = drafts.mtp, let forced = forced {
+          mtp.observe(
+            hidden: h[0..., offset..<(offset + kept.count), 0...],
+            nextTokens: Array(kept.dropFirst()) + [forced])
+        }
       }
 
       guard emit(kept) else {
-        cache.restore(snapshot)
+        if accepted == draft.count { cache.restore(snapshot) }
         break
       }
 

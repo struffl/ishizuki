@@ -170,13 +170,15 @@ the pack's MTP head otherwise, verified a block at a time, exact for greedy and 
 
 | Qwen3.8-27B IQ2_XS GGUF, served turn | drafting off | drafting on | tokens / round |
 |---|---|---|---|
-| prose, greedy | 11.20 | 9.96 | 1.76 (MTP) |
-| prose, temp 0.7 min-p 0.05 | 11.40 | 10.43 | 1.71 |
-| code edit, greedy | 11.16 | 13.98 | 3.71 (lookup) |
-| code edit, temp 0.7 min-p 0.05 | 10.91 | 13.90 | 3.71 |
+| prose, greedy | 11.05 | 13.21 | 1.85 (MTP) |
+| prose, temp 0.7 min-p 0.05 | 11.41 | 10.04 | 1.64 |
+| code edit, greedy | 10.92 | 15.28 | 3.71 (lookup) |
+| code edit, temp 0.7 min-p 0.05 | 10.79 | 15.29 | 3.71 |
 
-An MTP round verifies two rows, which the few-row GGUF multiply below leaves to the matvec, and
-pays a replay on every rejection plus a full-vocabulary draft head, so prose still loses.
+A rejected draft is not replayed on its own: the tokens it kept ride at the front of the next
+round's block, since the token after them is already known from the verify. Greedy output is
+token for token what plain decoding gives. Sampled prose still loses: acceptance falls to about
+55%, so more rounds carry, and a three- or four-row forward on the matvec costs 145–175 ms.
 M1 Max, 2026-09-23.
 
 ### Few-row GGUF multiply
