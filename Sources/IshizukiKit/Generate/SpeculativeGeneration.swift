@@ -26,8 +26,9 @@ extension Generator {
     options: SamplingOptions, constraint: OutputConstraint?, promptEmbeddings: MLXArray?,
     positions: MLXArray?
   ) -> Drafts? {
-    guard BonsaiRuntime.speculativeDecode, constraint == nil, promptEmbeddings == nil,
-      positions == nil, options.repetitionPenalty == 1, options.presencePenalty == 0
+    guard speculativeDecode ?? BonsaiRuntime.speculativeDecode, constraint == nil,
+      promptEmbeddings == nil, positions == nil, options.repetitionPenalty == 1,
+      options.presencePenalty == 0
     else { return nil }
     let mtp =
       model.mtp == nil || options.temperature > 0

@@ -38,6 +38,8 @@ public final class Generator: @unchecked Sendable {
   public var prefillChunkSize: Int
   public var politeness: Politeness.Level = .normal
   var lookup: (() -> Drafter)?
+  var speculativeDecode: Bool?
+  var pipelineDecode: Bool?
 
   public init(
     model: BonsaiModel, prefillChunkSize: Int? = nil,
@@ -175,7 +177,7 @@ public final class Generator: @unchecked Sendable {
 
     let lookup = drafting?.lookup
     var drafted: SpeculativeStats?
-    if constraint == nil, BonsaiRuntime.pipelineDecode {
+    if constraint == nil, pipelineDecode ?? BonsaiRuntime.pipelineDecode {
       var stats = SpeculativeStats()
       var carry: [Int] = []
       var idle = 0

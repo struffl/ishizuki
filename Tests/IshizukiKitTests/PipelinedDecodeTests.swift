@@ -56,15 +56,14 @@ struct PipelinedDecodeTests {
     _ model: BonsaiModel, pipelined: Bool, options: SamplingOptions = .greedy,
     maxTokens: Int = 12, stopAfter: Int? = nil
   ) throws -> Run {
-    let saved = (BonsaiRuntime.pipelineDecode, BonsaiRuntime.speculativeDecode)
-    BonsaiRuntime.pipelineDecode = pipelined
-    BonsaiRuntime.speculativeDecode = false
-    defer { (BonsaiRuntime.pipelineDecode, BonsaiRuntime.speculativeDecode) = saved }
     let reference = try loadArrays(url: fixture.appending(path: "reference.safetensors"))
     let prompt = try #require(reference["tokens"]).asType(.int32).asArray(Int32.self).map(Int.init)
     let cache = model.text.makeCache()
     var fragments = 0
-    let result = Generator(model: model, politeness: .normal).generate(
+    let generator = Generator(model: model, politeness: .normal)
+    generator.pipelineDecode = pipelined
+    generator.speculativeDecode = false
+    let result = generator.generate(
       promptTokens: prompt, options: options, maxTokens: maxTokens, cache: cache,
       onToken: { _ in
         fragments += 1

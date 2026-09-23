@@ -79,15 +79,13 @@ struct SpeculativeGenerationTests {
     _ model: BonsaiModel, drafting: Bool, options: SamplingOptions = .greedy,
     maxTokens: Int = 40, stopAfter: Int? = nil, oracle: [Int]? = nil
   ) throws -> Run {
-    let saved = BonsaiRuntime.speculativeDecode
-    BonsaiRuntime.speculativeDecode = drafting
-    defer { BonsaiRuntime.speculativeDecode = saved }
     let reference = try loadArrays(url: fixture.appending(path: "reference.safetensors"))
     let seed = try #require(reference["tokens"]).asType(.int32).asArray(Int32.self).map(Int.init)
     let prompt = seed + seed + seed
     let cache = model.text.makeCache()
     var fragments = 0
     let generator = Generator(model: model, politeness: .normal)
+    generator.speculativeDecode = drafting
     if let oracle { generator.lookup = { Oracle(truth: prompt + oracle, spoil: 2) } }
     let result = generator.generate(
       promptTokens: prompt, options: options, maxTokens: maxTokens, cache: cache,
