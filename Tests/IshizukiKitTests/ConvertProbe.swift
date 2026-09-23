@@ -20,7 +20,7 @@ struct ConvertProbe {
     let profile = QuantProfile(
       name: "stream\(base)", baseBits: base, boostBits: [base + 1, base + 2],
       targetBpw: Double(env["ISHIZUKI_CONVERT_BPW"] ?? "") ?? Double(base) + 0.75,
-      summary: "headless conversion")
+      groupSize: Int(env["ISHIZUKI_CONVERT_GROUP"] ?? "") ?? 64, summary: "headless conversion")
     let engramBits = env["ISHIZUKI_CONVERT_ENGRAM_BITS"].flatMap(Int.init)
     let stream = env["ISHIZUKI_CONVERT_STREAM"] != "0"
 
