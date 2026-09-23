@@ -50,7 +50,10 @@ public final class Generator: @unchecked Sendable {
     if let bank = BonsaiRuntime.aneBank {
       self.prefillChunkSize = bank.rows
     } else {
-      self.prefillChunkSize = prefillChunkSize ?? Politeness.prefillChunk(for: politeness)
+      self.prefillChunkSize =
+        prefillChunkSize
+        ?? Politeness.prefillChunk(
+          for: politeness, default: model.streamsExperts ? BonsaiRuntime.streamedPrefillChunk : 512)
     }
     self.kvConfig = kvConfig
   }

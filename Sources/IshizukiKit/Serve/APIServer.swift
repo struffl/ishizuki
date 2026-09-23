@@ -68,7 +68,7 @@ public final class APIServer: @unchecked Sendable {
       ?? MemoryBudget(
         kvBits: kvConfig.bits,
         maxContextTokens: ropeScaling.effectiveContext,
-        weights: MemoryBudget.weightBytes(in: directory) ?? MemoryBudget.defaultWeights)
+        weights: StreamedPlan.residentBytes(in: directory) ?? MemoryBudget.defaultWeights)
     self.budget = budget
     self.sessions = SessionCache(capacity: budget.tier.slots)
     self.prefixStore = prefixStore
@@ -149,7 +149,8 @@ public final class APIServer: @unchecked Sendable {
     budget = MemoryBudget(
       kvBits: kvConfig.bits,
       maxContextTokens: ropeScaling.effectiveContext,
-      weights: entry.byteCount > 0 ? entry.byteCount : MemoryBudget.defaultWeights)
+      weights: StreamedPlan.residentBytes(in: entry.url)
+        ?? (entry.byteCount > 0 ? entry.byteCount : MemoryBudget.defaultWeights))
     budget.apply()
     sessions.setCapacity(budget.tier.slots)
     sessions.setByteLimit(budget.tier.kvBytes(bytesPerToken: budget.bytesPerToken))
@@ -180,6 +181,12 @@ public final class APIServer: @unchecked Sendable {
     let model = try BonsaiModel(path: modelPath, ropeScaling: ropeScaling, hot: hot)
     loaded = model
     log?(String(format: "loaded model in %.1fs", -start.timeIntervalSinceNow))
+    if let experts = model.store.expertTraffic {
+      log?(
+        "experts: streamed, \(experts.slots) slots a layer across \(experts.layers) layers, "
+          + "\(experts.heldBytes >> 30) GB held, prefill chunk "
+          + "\(Politeness.prefillChunk(for: politeness, default: BonsaiRuntime.streamedPrefillChunk))")
+    }
     return model
   }
 

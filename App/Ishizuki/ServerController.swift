@@ -242,7 +242,7 @@ final class ServerController {
       let budget = MemoryBudget(
         kvBits: kvConfig.bits,
         maxContextTokens: maxContext,
-        weights: MemoryBudget.weightBytes(in: url) ?? MemoryBudget.defaultWeights)
+        weights: StreamedPlan.residentBytes(in: url) ?? MemoryBudget.defaultWeights)
       return try APIServer(
         directory: url,
         modelName: name,

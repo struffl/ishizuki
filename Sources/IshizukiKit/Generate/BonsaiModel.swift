@@ -14,6 +14,9 @@ public final class BonsaiModel: @unchecked Sendable {
 
   public let tensorPrefix: String
 
+  /// Whether the routed experts are read from disk into slots rather than held.
+  public var streamsExperts: Bool { store.expertTraffic != nil }
+
   private static let visionPrefix = "vision_tower."
   private static let visionProbe = visionPrefix + "patch_embed.proj.weight"
 
@@ -33,7 +36,7 @@ public final class BonsaiModel: @unchecked Sendable {
     // A repacked sparse model keeps its routed experts beside the shards; opening them here
     // is what makes the layers stream rather than load.
     store = try store
-      .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots)
+      .openingExperts(at: directory, slots: StreamedPlan.slots(for: directory) ?? 16)
       .openingEngrams(at: directory, capacity: BonsaiRuntime.engramRows)
     if let centred = config.centredNorms {
       store = try store.foldingCentredNorms(expected: centred)

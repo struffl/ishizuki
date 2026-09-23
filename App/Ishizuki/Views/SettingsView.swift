@@ -123,16 +123,17 @@ private struct ModelPane: View {
           label: "Wired memory", value: Bindable(settings).wireGB, range: 0...64,
           reading: settings.wireGB == 0 ? "off" : "\(Int(settings.wireGB)) GB")
         LabeledContent("Expert slots") {
-          Stepper(value: Bindable(settings).expertSlots, in: 4...256, step: 4) {
-            Text("\(settings.expertSlots)")
+          Stepper(value: Bindable(settings).expertSlots, in: 0...256, step: 4) {
+            Text(settings.expertSlots == 0 ? "Automatic" : "\(settings.expertSlots)")
               .font(.system(.subheadline, design: .monospaced))
               .foregroundStyle(.secondary)
           }
         }
         .help(
-          "How many routed experts a streamed pack keeps in memory per sparse layer. It has "
-            + "to exceed what a token routes to before the cache saves a single read; packs "
-            + "that hold all their experts ignore it.")
+          "How many routed experts a streamed pack keeps in memory per sparse layer. They are "
+            + "locked in memory while the pack is loaded. Automatic fits as many as the memory "
+            + "left beside the pack allows, up to a quarter of each layer's bank; packs that "
+            + "hold all their experts ignore it.")
       }
 
       Section("Let go when idle") {

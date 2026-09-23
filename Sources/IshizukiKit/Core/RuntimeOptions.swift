@@ -57,8 +57,13 @@ public enum BonsaiRuntime {
 
   /// Routed experts held in memory per sparse layer, when the model keeps them on disk. More
   /// slots means fewer reads and more resident bytes; this is the whole memory dial for a
-  /// streamed model.
-  public nonisolated(unsafe) static var expertSlots = 16
+  /// streamed model. Zero lets `StreamedPlan` size it to the machine.
+  public nonisolated(unsafe) static var expertSlots = 0
+
+  /// The prefill chunk a streamed pack starts from, before politeness divides it. Each chunk
+  /// reads every expert it routes to once, so a small one reads the bank again and again:
+  /// 512-token chunks prefilled the 125B-A6B at 37 tok/s, 2048-token ones at 66.
+  public nonisolated(unsafe) static var streamedPrefillChunk = 2048
 
   /// Locks each streamed layer's slots in memory. Unlocked, the system compresses slots it
   /// sees go idle, and an expert then waits on decompression rather than on the disk: on the

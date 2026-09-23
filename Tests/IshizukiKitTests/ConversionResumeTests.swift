@@ -90,4 +90,37 @@ struct ConversionResumeTests {
     #expect(store.experts(layer: 0)?.layout == own)
     #expect(store.experts(layer: 1)?.layout != own)
   }
+
+  @Test("a streamed pack's slots are sized once, and counted as held")
+  func plansTheSlots() throws {
+    let scratch = try scratch()
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    let profile = QuantProfile(
+      name: "test", baseBits: 8, boostBits: [], targetBpw: 8, groupSize: 32, summary: "")
+    _ = try Quantizer(
+      source: try SourceCheckpoint(directory: fixture), profile: profile, destination: scratch,
+      streamExperts: true
+    ).run()
+
+    let layers = try #require(StreamedPlan.layers(in: scratch))
+    #expect(layers.count == 4)
+    #expect(layers.expertCount == 4)
+    let topK = try BonsaiConfig.load(directory: scratch).textConfig.numExpertsPerTok ?? 0
+
+    #expect(StreamedPlan.slots(for: scratch, requested: 3) == 3)
+    #expect(StreamedPlan.slots(for: scratch, requested: 1) == topK)
+    #expect(StreamedPlan.slots(for: scratch, requested: 0, ceiling: 0) == topK)
+    let roomy = try #require(StreamedPlan.slots(for: scratch, requested: 0, ceiling: 1 << 40))
+    #expect(roomy == max(layers.expertCount / StreamedPlan.bankShare / 8 * 8, topK))
+
+    let weights = try #require(MemoryBudget.weightBytes(in: scratch))
+    #expect(try #require(StreamedPlan.residentBytes(in: scratch)) > weights)
+
+    let whole = scratch.appending(path: "whole")
+    _ = try Quantizer(
+      source: try SourceCheckpoint(directory: fixture), profile: profile, destination: whole
+    ).run()
+    #expect(StreamedPlan.layers(in: whole) == nil)
+    #expect(StreamedPlan.residentBytes(in: whole) == MemoryBudget.weightBytes(in: whole))
+  }
 }
