@@ -169,19 +169,40 @@ struct ChatSidebar: View {
           .lineLimit(1)
         // A turn keeps going in the conversation it was started in, so the one still being
         // answered says so from the list rather than only from its own transcript.
-        if chat.isRunning(saved) {
+        if chat.isAsking(saved) {
+          Image(systemName: "questionmark.bubble.fill")
+            .font(.caption)
+            .foregroundStyle(Color.reading)
+            .help("Waiting on your answer")
+        } else if chat.isRunning(saved) {
           AnimatedDots(size: 3, tint: .generating)
+        } else if chat.warmingChat == saved.id {
+          AnimatedDots(size: 3, tint: .reading)
+            .help("Reading into the cache ahead of the next turn")
         }
       }
       HStack(spacing: 5) {
+        if saved.parent != nil {
+          Image(systemName: "arrow.triangle.branch")
+            .help("Branched from another conversation")
+        }
         Text(saved.updated, format: .relative(presentation: .numeric))
           .lineLimit(1)
-        if let pack = saved.model, pack != controller.settings.activeModelID {
-          // Said only when it differs: reopening it will answer with the pack that is loaded,
-          // not the one that wrote it.
-          Text("· \(short(pack))")
+        if !saved.isEmpty, let pick = chat.pick(of: saved), pick != chat.activePick {
+          // Said only when it differs: sending here loads that model again, or branches.
+          Text("· \(short(chat.name(of: pick)))")
             .lineLimit(1)
-            .foregroundStyle(Color.instructing)
+            .foregroundStyle(chat.isAvailable(pick) ? Color.instructing : .orange)
+        }
+        if let reuse = chat.reuse[saved.id], reuse.prompt > 0 {
+          Text("· \(Int((reuse.fraction * 100).rounded()))% cached")
+            .lineLimit(1)
+            .help("\(reuse.cached) of \(reuse.prompt) prompt tokens already in the cache")
+        }
+        if let bytes = chat.diskUsage[saved.id], bytes > 0 {
+          Text("· \(ReadoutFormat.bytes(bytes))")
+            .lineLimit(1)
+            .help("Cache this conversation keeps on disk")
         }
       }
       .font(.footnote)

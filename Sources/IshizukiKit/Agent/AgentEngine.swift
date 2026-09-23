@@ -158,14 +158,18 @@ public final class AgentEngine: @unchecked Sendable {
   public var liveReasoning: String { reasoningText.value }
   public var liveAnswer: String { answerText.value }
 
-  /// The last turn's prompt, kept only to say how much of it the next one still agrees with.
-  /// A prefix cache that never hits is usually a prompt that is not stable, not a cache that
-  /// is not working, and the two look identical from the readout.
-  private var promptTokens: [Int] = []
+  private final class Tokens: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Int] = []
+    var value: [Int] { lock.withLock { stored } }
+    func set(_ tokens: [Int]) { lock.withLock { stored = tokens } }
+  }
+
+  private let promptTokens = Tokens()
 
   /// The last prompt this engine rendered, which is what pairs a conversation with the
   /// archives on disk that hold its prefix.
-  public var lastPromptTokens: [Int] { promptTokens }
+  public var lastPromptTokens: [Int] { promptTokens.value }
   private let systemCount = Counter()
   private let instructionCount = Counter()
   private let schemaCount = Counter()
@@ -196,13 +200,54 @@ public final class AgentEngine: @unchecked Sendable {
     self.thinking = thinking
   }
 
+  /// The arguments each tool call was generated with, exactly as written, so a transcript that
+  /// hands back a re-serialized copy still renders the call the way the model spelled it.
+  private final class Spellings: @unchecked Sendable {
+    private let lock = NSLock()
+    private var byID: [String: String] = [:]
+    private var order: [String] = []
+    private let limit = 4096
+
+    func note(_ calls: [ToolCall]) {
+      lock.lock()
+      defer { lock.unlock() }
+      for call in calls where byID[call.id] == nil {
+        byID[call.id] = call.argumentsJSON
+        order.append(call.id)
+      }
+      if order.count > limit {
+        for id in order.prefix(order.count - limit) { byID[id] = nil }
+        order.removeFirst(order.count - limit)
+      }
+    }
+
+    func spelling(of id: String) -> String? {
+      lock.lock()
+      defer { lock.unlock() }
+      return byID[id]
+    }
+  }
+
+  private let spellings = Spellings()
+  private let measured = Text()
+
+  public func spelling(ofCall id: String) -> String? { spellings.spelling(of: id) }
+
   public func run(
     messages: [ChatMessage],
     tools: [ToolSchema] = [],
+    maxTokens: Int? = nil,
+    effort: ReasoningEffort? = nil,
+    tag: String? = nil,
+    model: String? = nil,
     onText: (@Sendable (String) -> Void)? = nil,
     onReasoning: (@Sendable (String) -> Void)? = nil
   ) async throws -> AgentTurn {
+    stopReadahead()
     let cancel = Flag()
+    let maxTokens = maxTokens ?? self.maxTokens
+    let effort = effort ?? self.effort
+    let thinking = self.thinking
     toolStanza.lower()
     commandText.clear()
     reasoningText.clear()
@@ -211,21 +256,24 @@ public final class AgentEngine: @unchecked Sendable {
       try await withCheckedThrowingContinuation { continuation in
         server.generationQueue.async { [self] in
           let started = Date()
-          // Registered with the same accounting the port uses, so the window's dial and the
-          // readout are reading one set of numbers rather than two.
           let id = server.stats.enqueue(api: "chat")
           defer { server.stats.end(id) }
+          if cancel.isRaised {
+            continuation.resume(throwing: CancellationError())
+            return
+          }
           do {
-            // The pictures a turn came with are read here rather than earlier: opening one
-            // needs the resident pack's tower, and this is the queue that owns it. Anything
-            // that will not open is dropped from the prompt and from the count together, so a
-            // deleted file never leaves the template with a placeholder it cannot fill.
+            if let model, model != server.activeModelID {
+              try server.activate(model)
+              imageCache.empty()
+            }
             let opened = resolveImages(in: messages)
             let messages = opened.messages
+            let schemas = tools.isEmpty ? nil : tools.map(\.templateValue)
 
             let request = APIServer.Request(
               messages: messages,
-              tools: tools.isEmpty ? nil : tools.map(\.templateValue),
+              tools: schemas,
               maxTokens: maxTokens,
               temperature: nil,
               stream: onText != nil,
@@ -233,49 +281,9 @@ public final class AgentEngine: @unchecked Sendable {
               images: opened.images,
               responseSchema: nil,
               model: nil,
-              effort: effort)
-            let rendered = try? server.template.render(
-              messages: messages,
-              addGenerationPrompt: true,
-              enableThinking: thinking,
-              reasoningEffort: effort,
-              tools: tools.isEmpty ? nil : tools.map(\.templateValue))
-            let tokens = rendered.flatMap { try? server.model().tokenizer.encode($0) } ?? []
-
-            // Measured by difference, and both halves of it: the instructions and the tool
-            // schemas are each the same every turn, and a bar that counted only the first
-            // called the other one the person's own tokens.
-            if systemCount.value == 0, !tokens.isEmpty {
-              let withoutSystem = messages.filter { $0.role != "system" }
-              let schema = tools.isEmpty ? nil : tools.map(\.templateValue)
-
-              func size(_ of: [ChatMessage], tools: [[String: Any]]?) -> Int? {
-                guard !of.isEmpty,
-                  let text = try? server.template.render(
-                    messages: of, addGenerationPrompt: true, enableThinking: thinking,
-                    reasoningEffort: effort, tools: tools),
-                  let encoded = try? server.model().tokenizer.encode(text)
-                else { return nil }
-                return encoded.count
-              }
-
-              let withoutTools = size(messages, tools: nil)
-              let bare = size(withoutSystem, tools: nil)
-              if let withoutTools, let bare {
-                let schemas = max(0, tokens.count - withoutTools)
-                let instructions = max(0, withoutTools - bare)
-                schemaCount.set(schemas)
-                instructionCount.set(instructions)
-                systemCount.set(schemas + instructions)
-                server.log?(
-                  "prompt: \(instructions) instructions + \(schemas) tool schemas "
-                    + "+ \(bare) conversation = \(tokens.count)")
-              } else if let bare {
-                instructionCount.set(max(0, tokens.count - bare))
-                systemCount.set(max(0, tokens.count - bare))
-              }
-              _ = schema
-            }
+              effort: effort,
+              tag: tag)
+            measure(messages: messages, tools: schemas, thinking: thinking, effort: effort)
 
             let outcome = try server.complete(
               request,
@@ -291,13 +299,15 @@ public final class AgentEngine: @unchecked Sendable {
               },
               onToolStanza: { [toolStanza] in toolStanza.raise() },
               onToolText: { [commandText] fragment in commandText.append(fragment) })
+            promptTokens.set(outcome.tokens)
+            spellings.note(outcome.parsed.toolCalls)
             continuation.resume(
               returning: AgentTurn(
                 reasoning: outcome.parsed.reasoning,
                 content: outcome.parsed.content,
                 toolCalls: outcome.parsed.toolCalls,
                 promptTokens: outcome.promptTokens,
-                cachedTokens: server.sessions.lastReusedTokens,
+                cachedTokens: outcome.reused,
                 completionTokens: outcome.completionTokens,
                 seconds: -started.timeIntervalSinceNow,
                 cancelled: outcome.cancelled))
@@ -310,6 +320,96 @@ public final class AgentEngine: @unchecked Sendable {
       cancel.raise()
     }
   }
+
+  /// How much of a prompt is instructions and how much is tool schemas, measured by rendering
+  /// it without each. Done once for each model, effort and tool set rather than every turn.
+  private func measure(
+    messages: [ChatMessage], tools: [[String: Any]]?, thinking: Bool, effort: ReasoningEffort
+  ) {
+    let names = (tools ?? []).compactMap { $0["name"] as? String }.joined(separator: ",")
+    let signature = "\(server.activeModelID)|\(effort.rawValue)|\(thinking)|\(names)"
+    guard measured.value != signature, messages.first?.role == "system" else { return }
+
+    func size(_ of: [ChatMessage], tools: [[String: Any]]?) -> Int? {
+      guard !of.isEmpty,
+        let text = try? server.template.render(
+          messages: of, addGenerationPrompt: true, enableThinking: thinking,
+          reasoningEffort: effort, tools: tools),
+        let encoded = try? server.model().tokenizer.encode(text)
+      else { return nil }
+      return encoded.count
+    }
+
+    let probe = [messages[0], .user("")]
+    guard let whole = size(probe, tools: tools),
+      let withoutTools = size(probe, tools: nil),
+      let bare = size([.user("")], tools: nil)
+    else { return }
+    let schemas = max(0, whole - withoutTools)
+    let instructions = max(0, withoutTools - bare)
+    schemaCount.set(schemas)
+    instructionCount.set(instructions)
+    systemCount.set(schemas + instructions)
+    measured.clear()
+    measured.append(signature)
+    server.log?("prompt: \(instructions) instructions + \(schemas) tool schemas")
+  }
+
+  /// Reads a conversation into the cache ahead of its next turn. Only one runs at a time: a new
+  /// one, or a turn, stops whichever is going, and what it had read so far stays read.
+  public func readahead(
+    messages: [ChatMessage], tools: [ToolSchema], effort: ReasoningEffort? = nil,
+    tag: String?, pin: Bool = false, model: String? = nil
+  ) async -> (tokens: Int, reused: Int, finished: Bool) {
+    guard !messages.contains(where: { !$0.imagePaths.isEmpty }) else { return (0, 0, false) }
+    let effort = effort ?? self.effort
+    let thinking = self.thinking
+    let cancel = Flag()
+    readaheadFlag.swap(cancel)?.raise()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        server.generationQueue.async { [self] in
+          guard !cancel.isRaised, model == nil || model == server.activeModelID else {
+            continuation.resume(returning: (0, 0, false))
+            return
+          }
+          let id = server.stats.enqueue(api: "readahead")
+          defer {
+            server.stats.dismiss(id)
+            server.stats.end(id)
+          }
+          let schemas = tools.isEmpty ? nil : tools.map(\.templateValue)
+          let stats = server.stats
+          let result = try? server.prefill(
+            messages: messages, tools: schemas, thinking: thinking, effort: effort, tag: tag,
+            pin: pin, id: id, isCancelled: { cancel.isRaised || stats.hasQueued(besides: id) })
+          continuation.resume(
+            returning: (result?.tokens ?? 0, result?.reused ?? 0, result?.cancelled == false))
+        }
+      }
+    } onCancel: {
+      cancel.raise()
+    }
+  }
+
+  /// Stops a readahead that is running or waiting, keeping what it has read.
+  public func stopReadahead() {
+    readaheadFlag.swap(nil)?.raise()
+  }
+
+  private final class FlagSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: Flag?
+    func swap(_ next: Flag?) -> Flag? {
+      lock.lock()
+      defer { lock.unlock() }
+      let previous = held
+      held = next
+      return previous
+    }
+  }
+
+  private let readaheadFlag = FlagSlot()
 
   /// The packs the switcher offers, and the swap it performs. Activation is the server's, so a
   /// swap made here is the one the port sees too.

@@ -28,6 +28,7 @@ public final class SessionCache: @unchecked Sendable {
     let cache: ModelCache
     var lastUsed: Date
     var busy = false
+    var tag: String?
     // Published only by the lease owner, never inspected through live MLX arrays.
     var publishedBytes = 0
     var checkpoints: [Checkpoint] = []
@@ -81,17 +82,76 @@ public final class SessionCache: @unchecked Sendable {
   /// prefix costs real time and should not land in the middle of a request.
   public func persistAll() {
     lock.lock()
+    defer { lock.unlock() }
+    guard let store else { return }
+    for slot in slots where !slot.busy { archive(slot, in: store) }
+    store.evictToLimit()
+  }
+
+  /// Writes a slot to the disk tier as it is about to be let go. The archive is cut at the
+  /// slot's last rewind point below its end when there is one: the next prompt re-renders the
+  /// reply rather than replaying it, so a prefix running to the very end would never match.
+  /// Called with the lock held; leaves the slot holding exactly what was archived.
+  private func archive(_ slot: Slot, in store: PrefixStore) {
+    guard slot.tokens.count >= store.minimumTokens else { return }
+    if let point = slot.checkpoints.last(where: { $0.tokens < slot.tokens.count }),
+      point.tokens >= store.minimumTokens
+    {
+      slot.cache.restore(point.state)
+      slot.tokens.removeLast(slot.tokens.count - point.tokens)
+      slot.checkpoints.removeAll { $0.tokens > point.tokens }
+    }
+    guard slot.tokens.count == slot.cache.offset else { return }
+    store.save(
+      cache: slot.cache, tokens: slot.tokens, modelID: modelID, kvConfig: slot.cache.kvConfig,
+      tag: slot.tag)
+  }
+
+  /// The pool at a glance, for a readout that must never wait on a request holding the lock.
+  public struct Glance: Sendable {
+    public var slots = 0
+    public var bytes = 0
+    public var byteLimit = 0
+    /// Which conversations have a prefix held in memory, and how many tokens of it.
+    public var resident: [String: Int] = [:]
+  }
+
+  private let glanceLock = NSLock()
+  private var lastGlance = Glance()
+
+  /// Fresh when the pool is free, otherwise the last one taken.
+  public func glance() -> Glance {
+    guard lock.try() else { return glanceLock.withLock { lastGlance } }
+    var fresh = Glance(
+      slots: slots.count,
+      bytes: slots.reduce(0) { $0 + $1.publishedBytes + $1.checkpointBytes },
+      byteLimit: byteLimit)
+    for slot in slots {
+      guard let tag = slot.tag, slot.tokens.count > 0 else { continue }
+      fresh.resident[tag] = max(fresh.resident[tag] ?? 0, slot.tokens.count)
+    }
+    lock.unlock()
+    glanceLock.withLock { lastGlance = fresh }
+    return fresh
+  }
+
+  /// Keeps the shared prefix a slot has just laid down on disk as well, so every conversation
+  /// can start from it after a restart. Written once per model; later calls find it there.
+  public func pin(_ lease: Lease, tokens: [Int]) {
+    lock.lock()
     let store = self.store
     let modelID = self.modelID
-    let pending = slots.filter { !$0.busy && $0.tokens.count == $0.cache.offset }
-      .map { ($0.cache, $0.tokens, $0.cache.kvConfig) }
     lock.unlock()
-
-    guard let store else { return }
-    for (cache, tokens, kvConfig) in pending {
-      store.save(cache: cache, tokens: tokens, modelID: modelID, kvConfig: kvConfig)
+    guard let store, lease.cache.offset == tokens.count else { return }
+    if let held = store.bestMatch(
+      for: tokens + [-1], modelID: modelID, kvConfig: lease.cache.kvConfig),
+      held.tokens == tokens
+    {
+      return
     }
-    store.evictToLimit()
+    store.save(
+      cache: lease.cache, tokens: tokens, modelID: modelID, kvConfig: lease.cache.kvConfig,
+      tag: "shared", pinned: true)
   }
 
   /// `checkpoints` is how many rewind points each slot keeps. On a hybrid model each one holds
@@ -153,6 +213,7 @@ public final class SessionCache: @unchecked Sendable {
     var dropped: Set<ObjectIdentifier> = []
     for slot in coldestFirst {
       guard total() > byteLimit else { break }
+      if let store { archive(slot, in: store) }
       slot.cache.reset()
       slot.publishedBytes = 0
       slot.clearCheckpoints()
@@ -172,6 +233,7 @@ public final class SessionCache: @unchecked Sendable {
     var dropped: Set<ObjectIdentifier> = []
     for slot in slots.filter({ !$0.busy }).sorted(by: { $0.lastUsed < $1.lastUsed })
     where surplus > 0 {
+      if let store { archive(slot, in: store) }
       slot.cache.reset()
       dropped.insert(ObjectIdentifier(slot))
       surplus -= 1
@@ -180,9 +242,10 @@ public final class SessionCache: @unchecked Sendable {
   }
 
   public func prepare(
-    for promptTokens: [Int], model: BonsaiModel, kvConfig: KVCacheConfig = KVCacheConfig()
+    for promptTokens: [Int], model: BonsaiModel, kvConfig: KVCacheConfig = KVCacheConfig(),
+    tag: String? = nil
   ) -> Lease {
-    prepare(for: promptTokens, kvConfig: kvConfig) {
+    prepare(for: promptTokens, kvConfig: kvConfig, tag: tag) {
       model.text.makeCache(kvConfig: kvConfig)
     }
   }
@@ -190,7 +253,7 @@ public final class SessionCache: @unchecked Sendable {
   /// The allocating form. A slot's cache is only ever built here, so a caller that has a model
   /// and a test that has a bare schedule reach the same pooling.
   public func prepare(
-    for promptTokens: [Int], kvConfig: KVCacheConfig = KVCacheConfig(),
+    for promptTokens: [Int], kvConfig: KVCacheConfig = KVCacheConfig(), tag: String? = nil,
     makeCache: () -> ModelCache
   ) -> Lease {
     lock.lock()
@@ -237,6 +300,7 @@ public final class SessionCache: @unchecked Sendable {
         branches += 1
       }
       best.slot.tokens = promptTokens
+      if let tag { best.slot.tag = tag }
       best.slot.lastUsed = Date()
       best.slot.publishedBytes = best.slot.cache.byteCount
       best.slot.busy = true
@@ -253,6 +317,7 @@ public final class SessionCache: @unchecked Sendable {
     let slot: Slot
     let recycled: Bool
     if let reusable = evictableSlot(matching: kvConfig) {
+      if let store { archive(reusable, in: store) }
       reusable.cache.reset()
       reusable.clearCheckpoints()
       slot = reusable
@@ -275,6 +340,7 @@ public final class SessionCache: @unchecked Sendable {
     }
 
     slot.tokens = promptTokens
+    slot.tag = tag
     slot.lastUsed = Date()
     slot.publishedBytes = slot.cache.byteCount
     slot.busy = true

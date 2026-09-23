@@ -27,7 +27,13 @@ struct SavedChat: Codable, Identifiable, Equatable {
   var updated: Date
   /// The folder this conversation was working in, so reopening it picks up where it was.
   var workspace: String?
+  /// The pack that answers it, fixed at its first turn along with `effort`: its cache is built
+  /// on both, so changing either means branching.
   var model: String?
+  /// One of Apple's own models, when that is what answers it instead of a pack.
+  var appleModelID: String?
+  /// The conversation this one was branched from.
+  var parent: UUID?
   var effort: ReasoningEffort
   var transcript: Transcript
   /// The tokens of this conversation's last prompt. Kept so the archives holding its prefix
@@ -81,13 +87,16 @@ struct SavedChat: Codable, Identifiable, Equatable {
     !transcript.contains { if case .prompt = $0 { true } else { false } }
   }
 
+  var appleModel: AppleFoundationModel? { appleModelID.flatMap(AppleFoundationModel.init) }
+
   /// A name taken from the first thing asked, until someone gives it a better one.
   static func title(from transcript: Transcript) -> String? {
     for entry in transcript {
       guard case .prompt(let prompt) = entry else { continue }
-      let text = prompt.segments
+      let raw = prompt.segments
         .compactMap { if case .text(let t) = $0 { t.content } else { nil } }
         .joined(separator: " ")
+      let text = PromptEnvironment.split(PromptAttachments.split(raw).body).body
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .replacing(/\s+/, with: " ")
       guard !text.isEmpty else { continue }
@@ -208,6 +217,7 @@ final class ChatStore {
   /// chat begins with the same instructions, so an archive is only this one's if no other
   /// conversation still starts with it.
   func pruneCache(for chat: SavedChat, keeping others: [SavedChat], in store: PrefixStore) {
+    store.remove(tag: chat.id.uuidString)
     guard !chat.promptTokens.isEmpty else { return }
     for entry in store.entries() where chat.holds(entry.tokens) {
       guard !others.contains(where: { $0.holds(entry.tokens) }) else { continue }

@@ -91,7 +91,6 @@ struct IshizukiCommands: Commands {
       get: { chat.effort },
       set: {
         chat.effort = $0
-        chat.saveEffort()
       })
   }
 

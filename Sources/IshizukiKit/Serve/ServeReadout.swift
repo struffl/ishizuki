@@ -35,6 +35,10 @@ public struct ServeReadout: Sendable {
     public var ramLimit: Int
     public var diskBytes: Int?
     public var diskLimit: Int?
+    /// Conversations with a prefix held in memory, by tag, and how many tokens of it.
+    public var resident: [String: Int] = [:]
+    /// Moves whenever an archive is written or removed.
+    public var diskRevision = 0
 
     public var lookups: Int { hits + misses }
     public var hitRate: Double { lookups > 0 ? Double(hits) / Double(lookups) : 0 }
@@ -121,17 +125,21 @@ extension APIServer {
     let prefix: ServeReadout.Prefix? = {
       let lookups = sessions.hits + sessions.misses
       guard lookups > 0 || prefixStore != nil else { return nil }
+      let pool = sessions.glance()
+      let disk = prefixStore?.glance()
       return ServeReadout.Prefix(
         hits: sessions.hits,
         misses: sessions.misses,
         branches: sessions.branches,
         diskHits: sessions.diskHits,
         evictions: sessions.evictions,
-        slots: sessions.slotCount,
-        ramBytes: sessions.cachedBytes,
-        ramLimit: sessions.byteLimitBytes,
-        diskBytes: prefixStore?.totalBytes,
-        diskLimit: prefixStore?.byteLimit)
+        slots: pool.slots,
+        ramBytes: pool.bytes,
+        ramLimit: pool.byteLimit,
+        diskBytes: disk?.bytes,
+        diskLimit: prefixStore?.byteLimit,
+        resident: pool.resident,
+        diskRevision: disk?.revision ?? 0)
     }()
 
     return ServeReadout(

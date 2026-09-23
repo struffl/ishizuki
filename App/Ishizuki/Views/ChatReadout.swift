@@ -121,7 +121,6 @@ struct ChatReadoutBar: View {
       ForEach(ReasoningEffort.allCases, id: \.self) { level in
         Button {
           chat.effort = level
-          chat.saveEffort()
         } label: {
           if level == chat.effort {
             Label(level.rawValue, systemImage: "checkmark")
@@ -137,8 +136,12 @@ struct ChatReadoutBar: View {
     .menuStyle(.borderlessButton)
     .fixedSize()
     .frame(minHeight: Metrics.hit)
+    .disabled(chat.isEffortLocked)
     .accessibilityLabel("Reasoning effort")
-    .help("How long the model is asked to think")
+    .help(
+      chat.isEffortLocked
+        ? "Fixed at this conversation's first turn; branch to change it"
+        : "How long the model is asked to think")
   }
 }
 

@@ -145,6 +145,15 @@ public final class Generator: @unchecked Sendable {
     let promptSeconds = -promptStart.timeIntervalSinceNow
     onPrefilled?()
 
+    guard maxTokens > 0 else {
+      return GenerationResult(
+        tokens: [], text: "",
+        stats: GenerationStats(
+          promptTokens: prefilled, generatedTokens: 0, promptSeconds: promptSeconds,
+          generationSeconds: 0),
+        stoppedOnEOS: false)
+    }
+
     var decodePosition: Int? = positions.map { $0.max().item(Int.self) + 1 }
 
     let generationStart = Date()

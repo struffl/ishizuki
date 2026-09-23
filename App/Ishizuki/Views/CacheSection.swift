@@ -10,6 +10,8 @@ struct CacheSection: View {
   @Bindable var controller: ServerController
   @State private var entries: [PrefixStore.Entry] = []
   @State private var totalBytes = 0
+  @State private var sharedBytes = 0
+  @State private var conversations = 0
   @State private var confirmingClear = false
 
   var body: some View {
@@ -34,6 +36,17 @@ struct CacheSection: View {
               .buttonStyle(.glass)
               .controlSize(.small)
               .disabled(entries.isEmpty)
+          }
+
+          if !entries.isEmpty {
+            Text(
+              "\(ReadoutFormat.bytes(sharedBytes)) shared by every conversation · "
+                + "\(ReadoutFormat.bytes(totalBytes - sharedBytes)) across \(conversations) "
+                + (conversations == 1 ? "conversation" : "conversations")
+            )
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .help("The instructions and tool schemas every conversation starts from are kept once")
           }
 
           ForEach(entries.prefix(12), id: \.id) { entry in
@@ -84,5 +97,7 @@ struct CacheSection: View {
     let store = controller.prefixStore
     entries = store.entries().sorted { $0.lastUsed > $1.lastUsed }
     totalBytes = store.totalBytes
+    sharedBytes = entries.filter { $0.tag == nil }.reduce(0) { $0 + $1.byteCount }
+    conversations = Set(entries.compactMap(\.tag)).count
   }
 }

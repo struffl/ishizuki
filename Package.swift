@@ -18,6 +18,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.6"),
     .package(url: "https://github.com/huggingface/swift-jinja.git", from: "2.5.1"),
+    .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
   ],
   targets: [
     .target(
@@ -28,6 +29,7 @@ let package = Package(
         .product(name: "MLXFast", package: "mlx-swift"),
         .product(name: "MLXRandom", package: "mlx-swift"),
         .product(name: "Jinja", package: "swift-jinja"),
+        .product(name: "OrderedCollections", package: "swift-collections"),
       ]
     ),
     // The agent loop and nothing else, so a build that wants only inference can leave it out.

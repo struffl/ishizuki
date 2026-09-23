@@ -271,6 +271,8 @@ public final class APIServer: @unchecked Sendable {
     var model: String?
     /// How long the model is asked to think, when the template spells that out.
     var effort: ReasoningEffort?
+    /// The conversation this belongs to, carried onto the cache slot and any archive of it.
+    var tag: String? = nil
   }
 
   func complete(
@@ -282,7 +284,8 @@ public final class APIServer: @unchecked Sendable {
     onToolStanza: (() -> Void)? = nil,
     onToolText: ((String) -> Void)? = nil
   ) throws -> (
-    parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool
+    parsed: ParsedCompletion, promptTokens: Int, completionTokens: Int, cancelled: Bool,
+    tokens: [Int], reused: Int
   ) {
     residency.beginRequest()
     defer { residency.endRequest() }
@@ -323,7 +326,7 @@ public final class APIServer: @unchecked Sendable {
     var lease: SessionCache.Lease?
     if request.images.isEmpty {
       let prepared = sessions.prepare(
-        for: promptTokens, model: model, kvConfig: kvConfig)
+        for: promptTokens, model: model, kvConfig: kvConfig, tag: request.tag)
       lease = prepared
       cache = prepared.cache
       reused = prepared.reused
@@ -424,8 +427,93 @@ public final class APIServer: @unchecked Sendable {
 
     let raw = opened ? "<think>" + result.text : result.text
     return (
-      ToolCallParser.parse(raw), promptTokens.count, result.tokens.count, result.cancelled
+      ToolCallParser.parse(raw, types: ToolCallParser.parameterTypes(request.tools)),
+      promptTokens.count, result.tokens.count, result.cancelled, promptTokens, reused
     )
+  }
+
+  /// The part of a conversation that the next turn will begin with, rendered and tokenized.
+  ///
+  /// Rendered twice with two different stand-in user messages after it: whatever the two agree
+  /// on is what any real message will be preceded by, however the template dresses a turn.
+  /// Cut back to a line end so the last token cannot fuse with whatever is typed next.
+  func stablePrefix(
+    messages: [ChatMessage], tools: [[String: Any]]?, thinking: Bool, effort: ReasoningEffort?
+  ) throws -> [Int] {
+    func render(_ probe: String) throws -> String {
+      try template.render(
+        messages: messages + [.user(probe)], addGenerationPrompt: false,
+        enableThinking: thinking, reasoningEffort: effort, tools: tools)
+    }
+    let first = Array(try render("\u{1}A").utf8)
+    let second = Array(try render("\u{1}B").utf8)
+    var shared = 0
+    while shared < min(first.count, second.count), first[shared] == second[shared] { shared += 1 }
+    while shared > 0, first[shared - 1] != UInt8(ascii: "\n") { shared -= 1 }
+    guard shared > 0 else { return [] }
+    return try model().tokenizer.encode(String(decoding: first[..<shared], as: UTF8.self))
+  }
+
+  /// Lays a conversation's stable prefix into the cache without generating anything, so the
+  /// turn that follows only pays for what it adds. Stopping part way keeps what was read.
+  func prefill(
+    messages: [ChatMessage], tools: [[String: Any]]?, thinking: Bool, effort: ReasoningEffort?,
+    tag: String?, pin: Bool, id: Int?, isCancelled: @escaping @Sendable () -> Bool
+  ) throws -> (tokens: Int, reused: Int, cancelled: Bool) {
+    residency.beginRequest()
+    defer { residency.endRequest() }
+
+    let model = try self.model()
+    let tokens = try stablePrefix(
+      messages: messages, tools: tools, thinking: thinking, effort: effort)
+    guard tokens.count > 1, !isCancelled() else { return (tokens.count, 0, true) }
+
+    applyBudget(budget.observe(contextTokens: tokens.count))
+    let lease = sessions.prepare(for: tokens, model: model, kvConfig: kvConfig, tag: tag)
+    defer { sessions.release(lease) }
+    if lease.recycled { applyBudget(budget.notePrefixEviction()) }
+    stats.update(id) { record in
+      record.promptTokens = tokens.count
+      record.cachedTokens = lease.reused
+    }
+    log?("readahead: \(lease.reused) of \(tokens.count) already held")
+
+    guard lease.reused < tokens.count - 1 else {
+      sessions.commit(lease, generated: [])
+      if pin { sessions.pin(lease, tokens: tokens) }
+      return (tokens.count, lease.reused, false)
+    }
+
+    let rewindReserve = 8
+    let checkpointAt =
+      tokens.count - rewindReserve > lease.reused ? tokens.count - rewindReserve : nil
+    let generator = Generator(model: model, kvConfig: kvConfig, politeness: politeness)
+    let result = generator.generate(
+      promptTokens: tokens, maxTokens: 0, cache: lease.cache,
+      cachedPrefixLength: lease.reused, checkpointAt: checkpointAt,
+      isCancelled: isCancelled,
+      onCheckpoint: { [sessions = self.sessions] in
+        if let checkpointAt { sessions.checkpointPrefill(lease, at: checkpointAt) }
+      },
+      onPrefilled: { [sessions = self.sessions] in
+        if checkpointAt == nil { sessions.checkpointPrompt(lease) }
+      },
+      onProgress: { [stats = self.stats] progress in
+        guard case .prefill(let done, let total) = progress else { return }
+        stats.enter(id, phase: .prefill)
+        stats.update(id) { record in
+          record.prefilled = done
+          record.prefillTotal = total
+        }
+      })
+    sessions.commit(lease, generated: [])
+    applyBudget(budget.notePoolPressure(cacheMemory: Memory.cacheMemory))
+    if !result.cancelled, pin { sessions.pin(lease, tokens: tokens) }
+    log?(
+      "readahead: read \(result.stats.promptTokens) tokens in "
+        + String(format: "%.1fs", result.stats.promptSeconds)
+        + (result.cancelled ? ", stopped early" : ""))
+    return (tokens.count, lease.reused, result.cancelled)
   }
 
   private func handleOpenAI(

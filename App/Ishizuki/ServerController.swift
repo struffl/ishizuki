@@ -27,6 +27,8 @@ final class ServerController {
   private(set) var log: [String] = []
   private(set) var catalog = ModelCatalog(entries: [])
   private(set) var appleIntelligenceUsable = SystemLanguageModel.default.isAvailable
+  /// The pack being swapped in, while the swap waits its turn on the generation queue.
+  private(set) var switching: String?
 
   var offeredAppleModels: [AppleFoundationModel] {
     appleIntelligenceUsable ? AppleFoundationModel.offered : []
@@ -196,15 +198,17 @@ final class ServerController {
   func activate(_ id: String) {
     settings.appleModel = nil
     settings.activeModelID = id
-    guard phase.isRunning, let server else { return }
+    guard phase.isRunning, let server, let engine else { return }
     let options = samplerSettings.samplingOptions(for: id)
-    Task.detached { [weak self] in
+    switching = id
+    Task { [weak self] in
       do {
-        try server.activate(id)
+        try await engine.activate(id)
         server.samplingOptions = options
       } catch {
-        await MainActor.run { self?.append("switch to \(id) failed: \(error)") }
+        self?.append("switch to \(id) failed: \(error)")
       }
+      if self?.switching == id { self?.switching = nil }
     }
   }
 

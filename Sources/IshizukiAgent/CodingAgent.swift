@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // The coding loop: a Foundation Models session whose model is the resident pack. The session
-// resolves a turn's tool calls itself; what is here is the streaming, the steers waiting for
-// the next prompt, and the events the window reads.
+// resolves a turn's tool calls itself; what is here is the prompt, the person's line into a
+// running turn, and reading a conversation into the cache ahead of time.
 
 import Foundation
 import FoundationModels
@@ -14,29 +14,20 @@ public final class CodingAgent: Sendable {
   /// What answers the turn: the resident pack, or one of Apple's own models reached straight
   /// through the Foundation Models framework.
   public enum ModelChoice: Sendable {
-    case resident(AgentEngine)
+    case resident(AgentEngine, effort: ReasoningEffort, model: String?)
     case apple(AppleFoundationModel, reasoningLevel: AppleReasoningLevel, guardrails: AppleGuardrails)
-  }
-
-  public enum Event: Sendable {
-    /// The answer so far, whole each time rather than as deltas, which is what the stream
-    /// hands over and what a text view wants anyway.
-    case content(String)
-    case finished(content: String, seconds: Double)
-    case failed(String)
   }
 
   public let workspace: Workspace
   /// Held so the window can observe the transcript: thinking, tool calls and their output all
   /// land here as the executor reports them.
   public let modelSession: LanguageModelSession
-  public let events: AsyncStream<Event>
-
-  private let emit: AsyncStream<Event>.Continuation
-  private let pending = Steers()
   /// Set only for Private Cloud Compute, which takes this per turn rather than at construction.
-  /// The on-device model and the resident pack have no equivalent and ignore it.
   private let reasoningLevel: AppleReasoningLevel?
+  private let resident: (engine: AgentEngine, effort: ReasoningEffort, model: String?)?
+  private let tag: String?
+  private let definitions: [Transcript.ToolDefinition]
+  private let environment: String?
 
   public init(
     model: ModelChoice,
@@ -44,40 +35,45 @@ public final class CodingAgent: Sendable {
     instructions: String = CodingAgent.defaultInstructions,
     /// A conversation being resumed. Its transcript already carries the instructions it was
     /// started with, so they are not given again.
-    transcript: Transcript? = nil
+    transcript: Transcript? = nil,
+    /// Names the conversation to the cache, so its prefix is kept and counted as its own.
+    tag: String? = nil,
+    /// Where and when, written at the head of the first prompt rather than into the
+    /// instructions, which must stay the same for every conversation to share one cached copy.
+    environment: String? = nil
   ) {
     self.workspace = workspace
+    self.tag = tag
+    self.environment = environment
 
     let tools = codingTools(for: workspace)
+    self.definitions = tools.map { Transcript.ToolDefinition(tool: $0) }
     let session: LanguageModelSession
     switch model {
-    case .resident(let engine):
+    case .resident(let engine, let effort, let pack):
       self.reasoningLevel = nil
+      self.resident = (engine, effort, pack)
       session = Self.makeSession(
-        model: IshizukiModel(engine: engine), tools: tools, instructions: instructions,
-        transcript: transcript)
+        model: IshizukiModel(engine: engine, tag: tag, effort: effort, model: pack),
+        tools: tools, instructions: instructions, transcript: transcript)
     case .apple(.onDevice, _, let guardrails):
       self.reasoningLevel = nil
+      self.resident = nil
       let systemModel = SystemLanguageModel(
         guardrails: guardrails == .permissive ? .permissiveContentTransformations : .default)
       session = Self.makeSession(
         model: systemModel, tools: tools, instructions: instructions, transcript: transcript)
     case .apple(.privateCloudCompute, let level, _):
       self.reasoningLevel = level
+      self.resident = nil
       session = Self.makeSession(
         model: PrivateCloudComputeLanguageModel(), tools: tools, instructions: instructions,
         transcript: transcript)
     }
-    // A turn that throws — a tool that could not run, a stop mid-answer, an inference
-    // failure — must not take the conversation with it. The default winds the transcript back
-    // past the prompt that started the turn, which reads in the window as the chat erasing
-    // itself. Kept, a dead turn costs only its own tail.
+    // A turn that throws must not take the conversation with it: the default winds the
+    // transcript back past the prompt that started the turn.
     session.transcriptErrorHandlingPolicy = .preserveTranscript
     self.modelSession = session
-
-    let (stream, continuation) = AsyncStream<Event>.makeStream()
-    self.events = stream
-    self.emit = continuation
   }
 
   private static func makeSession(
@@ -92,62 +88,56 @@ public final class CodingAgent: Sendable {
 
   @discardableResult
   public func send(_ text: String) async throws -> String {
-    let started = Date()
-    let prompt = pending.fold(into: text)
     let contextOptions = ContextOptions(
       reasoningLevel: reasoningLevel.map { $0 == .light ? .light : .deep })
-    do {
-      var latest = ""
-      for try await snapshot in modelSession.streamResponse(
-        to: prompt, contextOptions: contextOptions)
-      {
-        latest = snapshot.content
-        emit.yield(.content(latest))
-      }
-      emit.yield(.finished(content: latest, seconds: -started.timeIntervalSinceNow))
-      return latest
-    } catch {
-      emit.yield(.failed(error.localizedDescription))
-      throw error
+    var latest = ""
+    for try await snapshot in modelSession.streamResponse(
+      to: prompt(for: text), contextOptions: contextOptions)
+    {
+      latest = snapshot.content
     }
+    return latest
   }
 
-  /// Guidance for the turn after this one. It is not an interrupt: it goes in front of the
-  /// next prompt rather than into the turn already running.
-  public func steer(_ text: String) {
-    pending.add(text)
+  /// The environment goes in front of the first thing said, after any pictures' marker so the
+  /// bridge still finds that at the very start.
+  private func prompt(for text: String) -> String {
+    let started = transcript.contains { if case .prompt = $0 { true } else { false } }
+    guard let environment, !started else { return text }
+    let split = PromptAttachments.split(text)
+    return PromptAttachments.marker(for: split.images.map { URL(filePath: $0) }) + environment
+      + split.body
+  }
+
+  /// Said while a turn runs. It reaches the model on the back of the next tool result; if the
+  /// turn ends first it is still waiting here for whoever sends the next one.
+  public func steer(_ steer: TurnInbox.Steer) {
+    workspace.inbox.steer(steer)
+  }
+
+  public var inbox: TurnInbox { workspace.inbox }
+
+  /// Reads the conversation into the resident pack's cache before anyone asks it anything, so
+  /// the next turn starts from a warm prefix. Nothing to do for Apple's models.
+  @discardableResult
+  public func readahead() async -> (tokens: Int, reused: Int, finished: Bool)? {
+    guard let resident else { return nil }
+    return await resident.engine.readahead(
+      transcript: modelSession.transcript, tools: definitions, tag: tag,
+      effort: resident.effort, model: resident.model)
   }
 
   public var isResponding: Bool { modelSession.isResponding }
 
   public var transcript: Transcript { modelSession.transcript }
 
-  /// What was said while a turn was running, waiting for the prompt that follows it.
-  private final class Steers: @unchecked Sendable {
-    private let lock = NSLock()
-    private var lines: [String] = []
-
-    func add(_ text: String) {
-      lock.lock()
-      lines.append(text)
-      lock.unlock()
-    }
-
-    func fold(into text: String) -> String {
-      lock.lock()
-      let waiting = lines
-      lines.removeAll()
-      lock.unlock()
-      guard !waiting.isEmpty else { return text }
-      return (waiting + [text]).joined(separator: "\n\n")
-    }
-  }
-
   /// Written for a small model on a slow machine: every line is either a rule about which tool
-  /// to reach for or a rule about not reading more than it needs.
+  /// to reach for or a rule about not reading more than it needs. Nothing in it changes between
+  /// conversations, so every one of them can start from the same cached prefix.
   public static let defaultInstructions = """
     You are a coding agent working in one directory. You change code by using tools, not by \
-    describing changes.
+    describing changes. The first message begins with an <environment> block saying which \
+    folder you are in and what day it is.
 
     Finding things:
     - Use grep to find where something is, then read only those lines. Do not read a whole \
@@ -173,6 +163,13 @@ public final class CodingAgent: Sendable {
     - Use output with a job id to read what it has written since last time, and pass wait to \
     give it a few more seconds to finish. Use jobs to see what is still going.
     - Kill a job you are done with rather than leaving it running.
+
+    Working with the person:
+    - When a choice is theirs to make, or you need something no tool can find, use ask and \
+    wait for the answer rather than guessing. Give options when there are a few clear ones.
+    - Do not ask about what you can find out yourself, and do not ask to confirm routine work.
+    - A tool result may end with a <steer> block. That is the person talking to you while \
+    you work: it comes straight from them, and it overrides your plan where the two disagree.
 
     Answer briefly. The person can see the tool calls, so do not narrate them.
     """

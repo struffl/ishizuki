@@ -175,6 +175,21 @@ public final class ServeStats: @unchecked Sendable {
     recorded.insert(id)
   }
 
+  /// Ends work nobody asked for, a readahead, without counting it as a request.
+  public func dismiss(_ id: Int?) {
+    guard let id else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    recorded.insert(id)
+  }
+
+  /// Whether a request other than `id` is waiting for the generation queue.
+  public func hasQueued(besides id: Int?) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return requests.values.contains { $0.id != id && $0.phase == .queued }
+  }
+
   public func end(_ id: Int?) {
     guard let id else { return }
     lock.lock()

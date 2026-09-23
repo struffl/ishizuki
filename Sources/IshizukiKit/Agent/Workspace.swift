@@ -12,6 +12,8 @@ public final class Workspace: Sendable {
   /// How many lines a read hands back when the model does not say. Small on purpose: the model
   /// is told what it did not get, and asks again if it wants it.
   public let sliceLines: Int
+  /// What the person says to a running turn, and the question it is waiting on them for.
+  public let inbox = TurnInbox()
 
   public init(host: any ShellHost, ledger: ReadLedger = ReadLedger(), sliceLines: Int = 120) {
     self.host = host

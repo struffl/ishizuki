@@ -91,6 +91,7 @@ struct ChatView: View {
           .padding(.horizontal, 14)
           .padding(.top, 2)
         }
+        asking
         queued
         Composer(chat: chat, controller: controller, mono: mono, maxLines: composerLines)
       }
@@ -310,6 +311,34 @@ struct ChatView: View {
     .accessibilityLabel("Jump to the end")
     .help("Jump to the end")
     .transition(.opacity.combined(with: .scale(scale: 0.85)))
+  }
+
+  /// The question the turn is waiting on, with whatever answers it offered as buttons. Typing
+  /// and sending answers it too.
+  @ViewBuilder private var asking: some View {
+    if let question = chat.question {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Image(systemName: "questionmark.bubble")
+            .foregroundStyle(Color.reading)
+          Text(question.text)
+            .font(.subheadline)
+            .textSelection(.enabled)
+        }
+        if !question.options.isEmpty {
+          HStack(spacing: 6) {
+            ForEach(question.options, id: \.self) { option in
+              Button(option) { chat.answer(option) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 14)
+      .padding(.top, 6)
+    }
   }
 
   /// What is waiting for the next turn, one line each, with the means to send it now. Sitting

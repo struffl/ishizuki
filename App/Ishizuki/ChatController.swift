@@ -50,7 +50,7 @@ final class ChatController {
       /// into one line; a thought is machinery too, but it is worth reading and stays out.
       var isMachinery: Bool {
         switch self {
-        case .toolCall, .toolOutput: true
+        case .toolCall(let name), .toolOutput(let name): name != ChatController.askTool
         default: false
         }
       }
@@ -66,6 +66,8 @@ final class ChatController {
         switch self {
         case .prompt, .steer: .mine
         case .answer: .said
+        case .toolCall(let name) where name == ChatController.askTool: .said
+        case .toolOutput(let name) where name == ChatController.askTool: .mine
         case .system, .reasoning, .toolCall, .toolOutput: .machinery
         // Its own voice, so it never closes up against the row it is explaining.
         case .notice: .aside
@@ -85,17 +87,17 @@ final class ChatController {
     static func outputID(_ callID: String) -> String { callID + "\u{2192}" }
   }
 
+  nonisolated static let askTool = "ask"
+
   /// The transcript's own rows, replaced wholesale as it fills.
   private(set) var transcriptRows: [Row] = []
-  /// Steering waits for the next turn, so it is not in the transcript yet and has to be held
-  /// here or the next poll would wipe it.
+  /// What was said while a turn ran and has not reached the model yet. It rides in on the next
+  /// tool result, or goes out with the next turn if this one ends first.
   private(set) var pendingSteers: [Row] = []
 
   var rows: [Row] { transcriptRows }
 
-  /// What the transcript draws. A queued steer has not been said yet, and a row that renders
-  /// nothing still costs a line of height and a gap above it.
-  var visibleRows: [Row] { transcriptRows.filter { $0.kind != .steer } }
+  var visibleRows: [Row] { transcriptRows }
 
   /// How a row is shown: open or shut, and whether a capped body has been let out in full.
   ///
@@ -368,14 +370,53 @@ final class ChatController {
     }
   }
 
+  /// How hard the conversation on screen is asked to think. Fixed once it has had a turn; what
+  /// is chosen then becomes the default for the next new one.
   var effort: ReasoningEffort {
-    // Not while a turn is in flight: switching conversations sets this, and the turn already
-    // running chose its own. What is set here reaches the engine when the next turn starts.
-    didSet {
-      guard !isRunningTurn else { return }
-      engine?.effort = effort
+    get { current.effort }
+    set {
+      defaultEffort = newValue
+      defaults.set(newValue.rawValue, forKey: "chat.effort")
+      guard current.isEmpty, newValue != current.effort else { return }
+      update(current.id) { $0.effort = newValue }
+      agents[current.id] = nil
     }
   }
+
+  var isEffortLocked: Bool { !current.isEmpty }
+  /// What a new conversation starts with: whatever was chosen last.
+  private var defaultEffort: ReasoningEffort
+
+  /// Which model answers a conversation: a pack on this Mac, or one of Apple's own.
+  enum ModelPick: Hashable {
+    case pack(String)
+    case apple(AppleFoundationModel)
+  }
+
+  /// A question a running turn is waiting on the person to answer.
+  struct Asked: Equatable {
+    var chatID: UUID
+    var question: TurnInbox.Question
+  }
+
+  private(set) var asked: Asked?
+
+  /// What a turn's prompt came to against what the cache already held of it.
+  struct Reuse: Equatable {
+    var prompt: Int
+    var cached: Int
+
+    var fraction: Double { prompt > 0 ? Double(cached) / Double(prompt) : 0 }
+  }
+
+  private(set) var reuse: [UUID: Reuse] = [:]
+  /// Bytes each conversation's archived prefixes take on disk.
+  private(set) var diskUsage: [UUID: Int] = [:]
+  /// The instructions and tool schemas every conversation starts from, archived once.
+  private(set) var sharedDiskBytes = 0
+  /// The conversation being read into the cache ahead of its next turn.
+  private(set) var warmingChat: UUID?
+  @ObservationIgnored private var warming: Task<Void, Never>?
 
   /// Every conversation that has been had, newest first, and which one is open.
   private(set) var chats: [SavedChat] = []
@@ -393,7 +434,7 @@ final class ChatController {
     self.server = server
     let stored = defaults.string(forKey: "chat.effort")
     let effort = stored.flatMap(ReasoningEffort.init(rawValue:)) ?? .xhigh
-    self.effort = effort
+    self.defaultEffort = effort
 
     let loaded = ChatStore().load()
     self.chats = loaded
@@ -426,9 +467,8 @@ final class ChatController {
       workspace = folder
       defaults.set(folder.path, forKey: "chat.workspace")
     }
-    let chat = SavedChat(
-      workspace: (folder ?? workspace)?.path, model: server?.settings.activeModelID,
-      effort: effort)
+    var chat = SavedChat(workspace: (folder ?? workspace)?.path, effort: defaultEffort)
+    stamp(&chat)
     chats.insert(chat, at: 0)
     open(chat)
   }
@@ -470,8 +510,9 @@ final class ChatController {
     if let prefixes = server?.prefixStore {
       store.pruneCache(for: chat, keeping: chats, in: prefixes)
     }
+    diskUsage[chat.id] = nil
     guard chat.id == current.id else { return }
-    open(chats.first ?? SavedChat(workspace: workspace?.path, effort: effort))
+    open(chats.first ?? SavedChat(workspace: workspace?.path, effort: defaultEffort))
   }
 
   /// Opening a conversation rebuilds its session from the transcript it was saved with, so the
@@ -479,7 +520,6 @@ final class ChatController {
   private func open(_ chat: SavedChat) {
     park()
     current = chat
-    effort = chat.effort
     if let path = chat.workspace { workspace = URL(filePath: path) }
 
     git.watch(workspace)
@@ -506,6 +546,7 @@ final class ChatController {
     if !chats.contains(where: { $0.id == chat.id }) { chats.insert(chat, at: 0) }
     turnSummaries = [:]
     rebuildSummaries()
+    warm()
   }
 
   /// Set aside what the conversation being left looks like, but only while it is being
@@ -515,6 +556,134 @@ final class ChatController {
     parked[current.id] = Parked(
       rows: transcriptRows, meta: meta, display: display, steers: pendingSteers,
       failure: failure)
+  }
+
+  // MARK: - Model lock
+
+  /// What would answer a new conversation right now.
+  var activePick: ModelPick? {
+    guard let server else { return nil }
+    if let apple = server.settings.appleModel { return .apple(apple) }
+    let id = server.settings.activeModelID
+    return id.isEmpty ? nil : .pack(id)
+  }
+
+  func pick(of chat: SavedChat) -> ModelPick? {
+    if let apple = chat.appleModel { return .apple(apple) }
+    return chat.model.map(ModelPick.pack)
+  }
+
+  func isAvailable(_ pick: ModelPick) -> Bool {
+    guard let server else { return false }
+    switch pick {
+    case .pack(let id): return server.catalog[id] != nil
+    case .apple(let apple): return server.offeredAppleModels.contains(apple)
+    }
+  }
+
+  func name(of pick: ModelPick) -> String {
+    switch pick {
+    case .pack(let id): server?.catalog[id]?.displayName ?? id
+    case .apple(let apple): apple.displayName
+    }
+  }
+
+  /// The model the conversation on screen was started with, when it is not the one chosen now.
+  var lockedElsewhere: ModelPick? {
+    guard !current.isEmpty, let locked = pick(of: current), locked != activePick else {
+      return nil
+    }
+    return locked
+  }
+
+  var lockedName: String { lockedElsewhere.map(name(of:)) ?? "" }
+
+  private func use(_ pick: ModelPick) {
+    switch pick {
+    case .pack(let id): server?.activate(id)
+    case .apple(let apple): server?.settings.appleModel = apple
+    }
+  }
+
+  /// Fixes a conversation to whatever would answer it now, along with its effort.
+  private func stamp(_ chat: inout SavedChat) {
+    switch activePick {
+    case .apple(let apple):
+      chat.appleModelID = apple.rawValue
+      chat.model = nil
+    case .pack(let id):
+      chat.appleModelID = nil
+      chat.model = id
+    case nil:
+      chat.appleModelID = nil
+      chat.model = nil
+    }
+  }
+
+  /// Brings back the model the conversation on screen answers with, then sends what is typed.
+  private func switchBack() {
+    guard let locked = lockedElsewhere, isAvailable(locked) else { return }
+    use(locked)
+    agents[current.id] = nil
+    if case .pack = locked, engine == nil {
+      load()
+    } else {
+      Task { await self.sendOnceLoaded() }
+    }
+  }
+
+  /// A copy of the conversation on screen that answers with the model chosen now. The original
+  /// stays as it was, fixed to the model it started with.
+  func branch() {
+    guard !isRunningTurn else { return }
+    persist()
+    var chat = SavedChat(workspace: current.workspace, effort: current.effort)
+    chat.transcript = current.transcript
+    chat.notes = current.notes
+    chat.parent = current.id
+    chat.title = current.title
+    stamp(&chat)
+    chats.insert(chat, at: 0)
+    store.save(chat)
+    open(chat)
+  }
+
+  // MARK: - Readahead
+
+  /// Reads the conversation on screen into the cache ahead of its next turn, when the pack that
+  /// would answer it is the one loaded and nothing else is running.
+  private func warm() {
+    warming?.cancel()
+    warming = nil
+    warmingChat = nil
+    refreshDiskUsage()
+    guard !isRunningTurn, !current.isEmpty, engine != nil, server?.switching == nil,
+      case .pack = pick(of: current), lockedElsewhere == nil,
+      let agent = resolveAgent(for: current.id)
+    else { return }
+    let chatID = current.id
+    warmingChat = chatID
+    warming = Task { [weak self] in
+      let read = await agent.readahead()
+      guard let self, !Task.isCancelled, self.warmingChat == chatID else { return }
+      self.warmingChat = nil
+      if let read, read.tokens > 0 {
+        self.reuse[chatID] = Reuse(prompt: read.tokens, cached: read.reused)
+      }
+      self.refreshDiskUsage()
+    }
+  }
+
+  private func refreshDiskUsage() {
+    guard let store = server?.prefixStore else { return }
+    let usage = store.usage()
+    var byChat: [UUID: Int] = [:]
+    for (tag, held) in usage {
+      if let id = UUID(uuidString: tag) { byChat[id] = held.bytes }
+    }
+    let shared = store.totalBytes - byChat.values.reduce(0, +)
+    if byChat != diskUsage { diskUsage = byChat }
+    if shared != sharedDiskBytes { sharedDiskBytes = max(0, shared) }
   }
 
   private func update(_ id: UUID, _ change: (inout SavedChat) -> Void) {
@@ -542,11 +711,7 @@ final class ChatController {
     guard var saved = saved(id) else { return }
     saved.transcript = transcript
     saved.updated = Date()
-    if id == current.id {
-      saved.workspace = workspace?.path
-      saved.model = server?.settings.activeModelID
-      saved.effort = effort
-    }
+    if id == current.id { saved.workspace = workspace?.path }
     // Only for the turn that just ran: the engine holds one last prompt, and it belongs to
     // whichever conversation was being answered.
     if prompt, let tokens = engine?.lastPromptTokens, !tokens.isEmpty {
@@ -652,6 +817,12 @@ final class ChatController {
     case loading
     case send
     case steer
+    /// The turn is waiting on an answer from the person.
+    case answer
+    /// The conversation answers with a model other than the one loaded; sending loads it again.
+    case switchBack
+    /// It answers with a model that is no longer here, so only a branch can carry it on.
+    case missingModel
     /// Another conversation is being answered. The pack takes one turn at a time, so this one
     /// waits rather than queueing into a busy engine.
     case busy
@@ -660,8 +831,10 @@ final class ChatController {
 
   var submission: Submission {
     if workspace == nil { return .chooseFolder }
-    if isResponding { return .steer }
+    if isResponding { return question != nil ? .answer : .steer }
     if isRunningTurn { return .busy }
+    if server?.switching != nil { return .loading }
+    if let locked = lockedElsewhere { return isAvailable(locked) ? .switchBack : .missingModel }
     // One of Apple's own models needs nothing loaded: it answers whether or not a pack is
     // resident, so none of the pack's own gating applies while it is the one chosen.
     if server?.settings.appleModel == nil {
@@ -678,6 +851,9 @@ final class ChatController {
     case .load: "Load"
     case .loading: "Loading"
     case .steer: "Steer"
+    case .answer: "Answer"
+    case .switchBack: "Load \(lockedName)"
+    case .missingModel: "Branch"
     case .busy: "Busy"
     case .send, .nothingToSay: "Send"
     }
@@ -686,8 +862,8 @@ final class ChatController {
   var canSubmit: Bool {
     switch submission {
     case .loading, .busy, .nothingToSay: false
-    case .steer: !typed.isEmpty
-    case .chooseFolder, .load, .send: true
+    case .steer, .answer: !typed.isEmpty
+    case .chooseFolder, .load, .send, .switchBack, .missingModel: true
     }
   }
 
@@ -697,6 +873,9 @@ final class ChatController {
     case .load: load()
     case .send: send()
     case .steer: steer()
+    case .answer: answer()
+    case .switchBack: switchBack()
+    case .missingModel: branch()
     case .loading, .busy, .nothingToSay: break
     }
   }
@@ -712,6 +891,8 @@ final class ChatController {
     case .load: "Press Load to bring the pack up."
     case .loading: "Bringing the pack up…"
     case .busy: "Another conversation is being answered."
+    case .switchBack: "This conversation answers with \(lockedName). Send to load it again."
+    case .missingModel: "\(lockedName) is no longer on this Mac. Branch to go on with another."
     default: nil
     }
   }
@@ -728,6 +909,10 @@ final class ChatController {
   private func sendOnceLoaded() async {
     while !Task.isCancelled {
       guard let server else { return }
+      if server.switching != nil {
+        try? await Task.sleep(for: .milliseconds(150))
+        continue
+      }
       switch server.phase {
       case .failed(let message):
         failure = message
@@ -792,8 +977,13 @@ final class ChatController {
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
-    guard !text.isEmpty, !isRunningTurn else { return false }
-    guard let chat = saved(chatID), let agent = resolveAgent(for: chatID) else { return false }
+    guard !text.isEmpty, !isRunningTurn, let chat = saved(chatID) else { return false }
+    if !chat.isEmpty, let locked = pick(of: chat), locked != activePick {
+      guard isAvailable(locked) else { return false }
+      use(locked)
+    }
+    guard let agent = resolveAgent(for: chatID) else { return false }
+    if chat.isEmpty { update(chatID) { stamp(&$0) } }
     if chatID != current.id, parked[chatID] == nil {
       var builder = RowBuilder()
       let transcript = agent.transcript.isEmpty ? chat.transcript : agent.transcript
@@ -801,8 +991,10 @@ final class ChatController {
         rows: builder.rows(from: transcript, notices: chat.notes), meta: [:], display: [:],
         steers: [], failure: nil)
     }
-    engine?.effort = chatID == current.id ? effort : chat.effort
 
+    warming?.cancel()
+    warming = nil
+    warmingChat = nil
     let run = Run(chatID: chatID, agent: agent)
     run.totalsAtStart = server?.readout?.totals
     run.tokensAtStart = run.totalsAtStart?.generatedTokens ?? 0
@@ -834,6 +1026,7 @@ final class ChatController {
   }
 
   func stop() {
+    run?.agent.inbox.cancelQuestion()
     run?.task?.cancel()
   }
 
@@ -873,18 +1066,37 @@ final class ChatController {
     }
   }
 
-  /// Guidance for the turn after this one. Queued here rather than inside the conversation,
-  /// which has no way to hand a queued message back — and sending it early means taking it
-  /// out of the queue first.
+  /// Said to the turn on screen while it runs. It reaches the model with the next tool result.
   func steer() {
     let text = typed
     guard !text.isEmpty else { return }
     draft = ""
-    pendingSteers.append(Row(id: "steer-\(UUID().uuidString)", kind: .steer, text: text))
+    let steer = TurnInbox.Steer(text: text)
+    if isResponding { run?.agent.steer(steer) }
+    pendingSteers.append(Row(id: steer.id, kind: .steer, text: text))
   }
 
   func drop(_ row: Row) {
     pendingSteers.removeAll { $0.id == row.id }
+    if isResponding { run?.agent.inbox.remove(row.id) }
+  }
+
+  /// What the turn on screen is waiting on the person to answer.
+  var question: TurnInbox.Question? {
+    guard let asked, asked.chatID == current.id else { return nil }
+    return asked.question
+  }
+
+  func isAsking(_ chat: SavedChat) -> Bool { asked?.chatID == chat.id }
+
+  /// Answers the question the turn on screen is waiting on, with one of the options it offered
+  /// or with whatever was typed.
+  func answer(_ choice: String? = nil) {
+    let reply = (choice ?? typed).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !reply.isEmpty, let run, run.chatID == current.id else { return }
+    if choice == nil { draft = "" }
+    run.agent.inbox.answer(reply)
+    asked = nil
   }
 
   // MARK: - Attachments
@@ -990,23 +1202,27 @@ final class ChatController {
       ?? chat.workspace.map { URL(filePath: $0) }
 
     let choiceModel: CodingAgent.ModelChoice
-    if let apple = server?.settings.appleModel {
+    switch chat.isEmpty ? activePick : pick(of: chat) ?? activePick {
+    case .apple(let apple):
       // Reasoning level and guardrails live beside every pack's own sampler knobs, keyed the
       // same way — one settings sheet, whichever kind of model it is a sheet for.
       let sampler = server?.samplerSettings.settings(for: apple.id) ?? .default
       choiceModel = .apple(
         apple, reasoningLevel: sampler.resolvedAppleReasoningLevel,
         guardrails: sampler.resolvedAppleGuardrails)
-    } else {
+    case .pack(let id):
       guard let engine else { return nil }
-      engine.effort = chatID == current.id ? effort : chat.effort
-      choiceModel = .resident(engine)
+      choiceModel = .resident(engine, effort: chat.effort, model: id)
+    case nil:
+      guard let engine else { return nil }
+      choiceModel = .resident(engine, effort: chat.effort, model: nil)
     }
 
     // A sandbox needs a folder to share in. Without one there is nothing to sandbox, so the
     // choice quietly becomes this Mac rather than failing on the first command.
     var choice = chat.sandbox ?? sandboxes.settings.defaultChoice
     if folder == nil { choice.kind = .native }
+    let branch = folder == workspace && git.status?.detached == false ? git.status?.branch : nil
 
     let made = CodingAgent(
       model: choiceModel,
@@ -1014,7 +1230,10 @@ final class ChatController {
         host: sandboxes.host(
           for: chatID, choice: choice,
           workspace: folder ?? FileManager.default.temporaryDirectory)),
-      transcript: chat.transcript.isEmpty ? nil : chat.transcript)
+      transcript: chat.transcript.isEmpty ? nil : chat.transcript,
+      tag: chatID.uuidString,
+      environment: PromptEnvironment.block(
+        folder: choice.kind == .native ? folder : SandboxChoice.guestWorkspace, branch: branch))
     agents[chatID] = made
     return made
   }
@@ -1078,11 +1297,7 @@ final class ChatController {
     guard transcript.count >= saved.transcript.count else { return }
     saved.transcript = transcript
     saved.updated = Date()
-    if run.chatID == current.id {
-      saved.workspace = workspace?.path
-      saved.model = server?.settings.activeModelID
-      saved.effort = effort
-    }
+    if run.chatID == current.id { saved.workspace = workspace?.path }
     if !saved.titleIsCustom, let derived = SavedChat.title(from: transcript) {
       saved.title = derived
     }
@@ -1099,6 +1314,8 @@ final class ChatController {
     run.poller?.cancel()
     run.poller = nil
     absorbTranscript(of: run)
+    _ = run.agent.inbox.take()
+    if asked?.chatID == run.chatID { asked = nil }
     if self.run === run {
       self.run = nil
       runToken += 1
@@ -1119,12 +1336,39 @@ final class ChatController {
       lastPrompt = readout.context.peakTokens
       lastCached = readout.prefix?.hits ?? 0
     }
+    if run.chatID == current.id { warm() }
   }
 
   private func absorbTranscript(of run: Run) {
     absorb(
       run.builder.rows(from: run.agent.transcript, notices: saved(run.chatID)?.notes ?? []),
       for: run)
+    absorbInbox(of: run)
+  }
+
+  /// What the person has said that the model has not heard yet, the question it is waiting on,
+  /// and how much of its last prompt the cache already held.
+  private func absorbInbox(of run: Run) {
+    let waiting = run.agent.inbox.waiting.map { Row(id: $0.id, kind: .steer, text: $0.text) }
+    if run.chatID == current.id {
+      if waiting != pendingSteers { pendingSteers = waiting }
+    } else if var state = parked[run.chatID], state.steers != waiting {
+      state.steers = waiting
+      parked[run.chatID] = state
+    }
+
+    let now = run.agent.inbox.pending.map { Asked(chatID: run.chatID, question: $0) }
+    if now != asked {
+      if now != nil, !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+      asked = now
+    }
+
+    if let request = readout?.inFlight.first(where: { $0.api == "chat" }),
+      request.promptTokens > 0
+    {
+      let seen = Reuse(prompt: request.promptTokens, cached: request.cachedTokens)
+      if reuse[run.chatID] != seen { reuse[run.chatID] = seen }
+    }
   }
 
   /// A row's clock starts the first time it is seen, which is as close to when it happened as
@@ -1293,7 +1537,7 @@ final class ChatController {
     let chat = SavedChat(
       workspace: folder ?? workspace?.path,
       model: model ?? server?.settings.activeModelID,
-      effort: wanted ?? effort)
+      effort: wanted ?? defaultEffort)
     chats.insert(chat, at: 0)
     store.save(chat)
     return chat
@@ -1308,13 +1552,10 @@ final class ChatController {
         $0.titleIsCustom = true
       }
       if let folder { $0.workspace = folder }
-      if let wanted { $0.effort = wanted }
+      if let wanted, $0.isEmpty { $0.effort = wanted }
       $0.updated = Date()
     }
-    if id == current.id {
-      if let folder { workspace = URL(filePath: folder) }
-      if let wanted { effort = wanted }
-    }
+    if id == current.id, let folder { workspace = URL(filePath: folder) }
     if let chat = saved(id) { store.save(chat) }
   }
 
@@ -1323,8 +1564,16 @@ final class ChatController {
   func steer(_ text: String, in id: UUID) {
     let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
-    if run?.chatID == id, let agent = agents[id] {
-      agent.steer(text)
+    if let run, run.chatID == id {
+      if asked?.chatID == id {
+        run.agent.inbox.answer(text)
+        asked = nil
+        return
+      }
+      let steer = TurnInbox.Steer(text: text)
+      run.agent.steer(steer)
+      let row = Row(id: steer.id, kind: .steer, text: text)
+      if id == current.id { pendingSteers.append(row) } else { parked[id]?.steers.append(row) }
       return
     }
     let row = Row(id: "steer-\(UUID().uuidString)", kind: .steer, text: text)
@@ -1339,11 +1588,7 @@ final class ChatController {
 
   func stop(_ id: UUID) {
     guard run?.chatID == id else { return }
-    run?.task?.cancel()
-  }
-
-  func saveEffort() {
-    defaults.set(effort.rawValue, forKey: "chat.effort")
+    stop()
   }
 
   /// Read straight through, appending rather than replacing. The session is free to split a
@@ -1369,7 +1614,9 @@ final class ChatController {
         add(instructions.id, .system, text(instructions.segments))
       case .prompt(let prompt):
         let split = PromptAttachments.split(text(prompt.segments))
-        add(prompt.id, .prompt, split.body, images: split.images)
+        add(
+          prompt.id, .prompt, PromptEnvironment.split(split.body).body,
+          images: split.images)
       case .response(let response):
         let said = text(response.segments)
         // A reply that is really an unclosed thought is shown as one. The parser keeps the two
@@ -1394,7 +1641,11 @@ final class ChatController {
               text: call.arguments.jsonString))
         }
       case .toolOutput(let output):
-        add(Row.outputID(output.id), .toolOutput(name: output.toolName), text(output.segments))
+        let split = SteerBlock.split(text(output.segments))
+        add(Row.outputID(output.id), .toolOutput(name: output.toolName), split.output)
+        for (index, said) in split.steers.enumerated() {
+          rows.append(Row(id: Row.outputID(output.id) + "steer\(index)", kind: .steer, text: said))
+        }
       @unknown default:
         continue
       }

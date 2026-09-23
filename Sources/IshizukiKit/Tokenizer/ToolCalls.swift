@@ -24,7 +24,9 @@ public struct ParsedCompletion: Sendable {
 }
 
 public enum ToolCallParser {
-  public static func parse(_ raw: String) -> ParsedCompletion {
+  public static func parse(
+    _ raw: String, types: [String: [String: String]] = [:]
+  ) -> ParsedCompletion {
     var text = raw
     var reasoning: String?
 
@@ -61,7 +63,7 @@ public enum ToolCallParser {
       content += text[cursor..<open.lowerBound]
       let close = text.range(of: "</tool_call>", range: open.upperBound..<text.endIndex)
       let body = String(text[open.upperBound..<(close?.lowerBound ?? text.endIndex)])
-      if let call = parseCall(body) { calls.append(call) }
+      if let call = parseCall(body, types: types) { calls.append(call) }
       cursor = close?.upperBound ?? text.endIndex
     }
     content += text[cursor...]
@@ -72,7 +74,32 @@ public enum ToolCallParser {
       toolCalls: calls)
   }
 
-  private static func parseCall(_ body: String) -> ToolCall? {
+  /// Each tool's parameters and their declared JSON types, so text is never read as JSON.
+  public static func parameterTypes(_ tools: [[String: Any]]?) -> [String: [String: String]] {
+    var out: [String: [String: String]] = [:]
+    for tool in tools ?? [] {
+      let function = (tool["function"] as? [String: Any]) ?? tool
+      guard let name = function["name"] as? String,
+        let parameters = function["parameters"] as? [String: Any],
+        let properties = parameters["properties"] as? [String: Any]
+      else { continue }
+      var types: [String: String] = [:]
+      for (key, property) in properties {
+        guard let property = property as? [String: Any] else { continue }
+        if let type = property["type"] as? String {
+          types[key] = type
+        } else if let spelled = property["type"] as? [String] {
+          types[key] = spelled.first { $0 != "null" }
+        } else if let options = (property["anyOf"] ?? property["oneOf"]) as? [[String: Any]] {
+          types[key] = options.compactMap { $0["type"] as? String }.first { $0 != "null" }
+        }
+      }
+      out[name] = types
+    }
+    return out
+  }
+
+  private static func parseCall(_ body: String, types: [String: [String: String]]) -> ToolCall? {
     guard let nameStart = body.range(of: "<function="),
       let nameEnd = body.range(of: ">", range: nameStart.upperBound..<body.endIndex)
     else { return nil }
@@ -80,7 +107,7 @@ public enum ToolCallParser {
       .trimmingCharacters(in: .whitespaces)
     guard !name.isEmpty else { return nil }
 
-    var arguments: [String: Any] = [:]
+    var fields: [(key: String, value: Any)] = []
     var cursor = nameEnd.upperBound
     while let open = body.range(of: "<parameter=", range: cursor..<body.endIndex),
       let openEnd = body.range(of: ">", range: open.upperBound..<body.endIndex),
@@ -88,22 +115,46 @@ public enum ToolCallParser {
     {
       let key = String(body[open.upperBound..<openEnd.lowerBound])
         .trimmingCharacters(in: .whitespaces)
-      let value = String(body[openEnd.upperBound..<close.lowerBound])
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-      arguments[key] = decodeValue(value)
+      let value = unframed(String(body[openEnd.upperBound..<close.lowerBound]))
+      let decoded = decodeValue(value, as: types[name]?[key])
+      if let index = fields.firstIndex(where: { $0.key == key }) {
+        fields[index].value = decoded
+      } else {
+        fields.append((key, decoded))
+      }
       cursor = close.upperBound
     }
 
     let json =
-      (try? JSONSerialization.data(withJSONObject: arguments))
-      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+      "{"
+      + fields.map { encodeFragment($0.key) + ":" + encodeFragment($0.value) }
+        .joined(separator: ",")
+      + "}"
     return ToolCall(name: name, argumentsJSON: json)
   }
 
-  private static func decodeValue(_ value: String) -> Any {
+  /// A value without the newline the format frames it with; one-line values are trimmed.
+  static func unframed(_ raw: String) -> String {
+    var value = Substring(raw)
+    if let first = value.first, first == "\n" || first == "\r\n" { value = value.dropFirst() }
+    if let last = value.last, last == "\n" || last == "\r\n" { value = value.dropLast() }
+    guard value.contains(where: \.isNewline) else {
+      return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return String(value)
+  }
+
+  private static func encodeFragment(_ value: Any) -> String {
+    (try? JSONSerialization.data(
+      withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes]))
+      .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+  }
+
+  private static func decodeValue(_ value: String, as type: String?) -> Any {
+    if type == "string" { return value }
     guard let data = "[\(value)]".data(using: .utf8),
       let array = try? JSONSerialization.jsonObject(with: data) as? [Any],
-      let first = array.first
+      let first = array.first, !(first is NSNull)
     else { return value }
     return first
   }

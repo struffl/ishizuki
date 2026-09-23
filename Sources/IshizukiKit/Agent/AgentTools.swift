@@ -32,7 +32,7 @@ public struct ReadFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.readSlice(
         path: arguments.path, offset: arguments.offset, limit: arguments.limit)
     }
@@ -62,7 +62,7 @@ public struct WriteFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.writeWhole(path: arguments.path, contents: arguments.contents)
     }
   }
@@ -95,7 +95,7 @@ public struct EditFileTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.edit(
         path: arguments.path, old: arguments.old, new: arguments.new,
         all: arguments.all ?? false)
@@ -132,7 +132,7 @@ public struct GrepTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.grep(
         pattern: arguments.pattern, glob: arguments.glob, path: arguments.path,
         ignoreCase: arguments.ignoreCase ?? false, limit: limit)
@@ -160,7 +160,7 @@ public struct GlobTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.glob(pattern: arguments.pattern, limit: limit)
     }
   }
@@ -194,7 +194,7 @@ public struct ShellTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.shell(
         command: arguments.command, timeout: Double(arguments.timeout ?? 15),
         byteLimit: byteLimit, background: arguments.background ?? false)
@@ -220,7 +220,7 @@ public struct JobsTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.jobs()
     }
   }
@@ -251,7 +251,7 @@ public struct JobOutputTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.jobOutput(
         arguments.job, wait: Double(arguments.wait ?? 0), byteLimit: byteLimit)
     }
@@ -281,8 +281,42 @@ public struct KillJobTool: Tool {
   }
 
   public func call(arguments: Arguments) async throws -> String {
-    try await recovered {
+    try await recovered(workspace) {
       try await workspace.killJob(arguments.job, force: arguments.force ?? false)
+    }
+  }
+}
+
+@available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
+public struct AskTool: Tool {
+  public let name = "ask"
+  public let description = """
+    Ask the person a question and wait for their answer. Use it for a decision only they can \
+    make or something you cannot find out with the other tools. Offer options when there are \
+    a few clear choices; they can still answer in their own words.
+    """
+
+  @Generable
+  public struct Arguments {
+    @Guide(description: "The question, in one or two sentences")
+    public var question: String
+    @Guide(description: "Short answers to choose from. Omit for an open question")
+    public var options: [String]?
+  }
+
+  let workspace: Workspace
+
+  public init(workspace: Workspace) {
+    self.workspace = workspace
+  }
+
+  public func call(arguments: Arguments) async throws -> String {
+    try await recovered(workspace) {
+      let options = (arguments.options ?? [])
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      let answer = try await workspace.inbox.ask(arguments.question, options: options)
+      return "The person answered: \(answer)"
     }
   }
 }
@@ -300,6 +334,7 @@ public func codingTools(for workspace: Workspace) -> [any Tool] {
     JobsTool(workspace: workspace),
     JobOutputTool(workspace: workspace),
     KillJobTool(workspace: workspace),
+    AskTool(workspace: workspace),
   ]
 }
 
@@ -310,16 +345,23 @@ public func codingTools(for workspace: Workspace) -> [any Tool] {
 /// tools refuse is worth that — a missing path or a stale edit is a step the model can take
 /// again, and the refusals are already written to be read. Only cancellation still throws,
 /// because stopping a turn is the one failure that is meant to end it.
+///
+/// Whatever the person said while the tool ran rides back on its output, which is how a steer
+/// reaches the model inside the turn instead of waiting for the next one.
 @available(macOS 27.0, iOS 27.0, visionOS 27.0, *)
-func recovered(_ work: () async throws -> String) async throws -> String {
+func recovered(
+  _ workspace: Workspace, _ work: () async throws -> String
+) async throws -> String {
+  let output: String
   do {
-    return try await work()
+    output = try await work()
   } catch is CancellationError {
     throw CancellationError()
   } catch let refusal as LedgerRefusal {
-    return refusal.message
+    output = refusal.message
   } catch {
     if Task.isCancelled { throw CancellationError() }
-    return "error: \(error.localizedDescription)"
+    output = "error: \(error.localizedDescription)"
   }
+  return workspace.inbox.deliver(into: output)
 }

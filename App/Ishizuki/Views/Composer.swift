@@ -272,6 +272,9 @@ struct SendRing: View {
     case .load: "bolt.fill"
     case .loading: "hourglass"
     case .steer: "arrow.turn.down.right"
+    case .answer: "arrowshape.turn.up.left.fill"
+    case .switchBack: "arrow.triangle.2.circlepath"
+    case .missingModel: "arrow.triangle.branch"
     case .busy: "hourglass"
     case .send, .nothingToSay: "arrow.up"
     }
