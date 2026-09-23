@@ -30,14 +30,16 @@ private let backdropImage: Image = {
 /// glassy sheen laid over it so the materials floating above have depth to catch.
 struct WindowBackdrop: View {
   var body: some View {
-    backdropImage
-      .resizable()
-      .aspectRatio(contentMode: .fill)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      // Scaled up before the blur samples past its edges, so the blur has margin to draw from
-      // instead of smearing in transparency at the frame's border.
-      .scaleEffect(1.1)
-      .blur(radius: 12)
+    Color.clear
+      .overlay {
+        backdropImage
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          // Scaled up before the blur samples past its edges, so the blur has margin to draw from
+          // instead of smearing in transparency at the frame's border.
+          .scaleEffect(1.1)
+          .blur(radius: 12)
+      }
       .clipped()
       .overlay { Sheen() }
       .ignoresSafeArea()
