@@ -70,9 +70,11 @@ public struct ExpertLayout: Codable, Sendable, Equatable {
 
 /// One layer's experts, read from disk into a bounded set of slots.
 ///
-/// The cache is least-frequently-used with recency breaking ties, which is what TurboFieldfare
-/// measured as the better policy for this access pattern: expert choices repeat across tokens
-/// but the repeats are not recent, so recency alone evicts the wrong ones.
+/// The cache is least-recently-used. TurboFieldfare measured frequency as the better policy
+/// for the model it streamed, but recorded qwen4_exp routes say otherwise: with uses that
+/// never decay, an expert hot early in a context holds its slot long after it has gone cold,
+/// and LRU hits 8-13 points more of a Whittle 35B-A3B's reads at a third to half of the bank.
+/// `Scripts/simulate_expert_cache.py` replays a `RouteProbe` recording against both.
 public final class ExpertStore: @unchecked Sendable {
   public let layout: ExpertLayout
   public let slotCount: Int
@@ -85,9 +87,8 @@ public final class ExpertStore: @unchecked Sendable {
   private let base: [String: Int]
   private let lock = NSLock()
 
-  /// Which expert each slot holds, and how often it has been asked for.
+  /// Which expert each slot holds, and when it was last asked for.
   private var occupant: [Int]
-  private var uses: [Int]
   private var lastTouched: [Int]
   private var clock = 0
 
@@ -163,7 +164,6 @@ public final class ExpertStore: @unchecked Sendable {
     self.base = base
     self.buffer = try ResidentBuffer(byteCount: total)
     self.occupant = Array(repeating: -1, count: self.slotCount)
-    self.uses = Array(repeating: 0, count: self.slotCount)
     self.lastTouched = Array(repeating: 0, count: self.slotCount)
   }
 
@@ -177,6 +177,7 @@ public final class ExpertStore: @unchecked Sendable {
     defer { lock.unlock() }
 
     var placed: [Int: Int] = [:]
+    var missed: [(expert: Int, slot: Int)] = []
     var result: [Int] = []
     result.reserveCapacity(experts.count)
 
@@ -192,7 +193,6 @@ public final class ExpertStore: @unchecked Sendable {
 
       if let slot = occupant.firstIndex(of: expert) {
         hitCount += 1
-        uses[slot] += 1
         lastTouched[slot] = clock
         placed[expert] = slot
         result.append(slot)
@@ -205,28 +205,40 @@ public final class ExpertStore: @unchecked Sendable {
       guard
         let slot = (0..<slotCount)
           .filter({ !claimed.contains($0) })
-          .min(by: {
-            (uses[$0], lastTouched[$0]) < (uses[$1], lastTouched[$1])
-          })
+          .min(by: { lastTouched[$0] < lastTouched[$1] })
       else {
         throw BonsaiError.missingComponent(
           "\(experts.count) experts asked for at once, but only \(slotCount) slots")
       }
 
       missCount += 1
-      // One read per projection: each is contiguous in the expert's blob and contiguous in its
-      // own run of slots, so nothing is copied or shuffled after it lands.
-      for (name, part) in layout.parts {
-        let target = base[name]! + slot * part.byteCount
-        try buffer.read(
-          from: descriptor, offset: expert * layout.stride + part.offset,
-          into: target..<(target + part.byteCount))
-      }
       occupant[slot] = expert
-      uses[slot] = 1
       lastTouched[slot] = clock
       placed[expert] = slot
       result.append(slot)
+      missed.append((expert: expert, slot: slot))
+    }
+
+    // One read per projection per miss: each is contiguous in the expert's blob and in its own
+    // run of slots, and every read lands in a disjoint range, so they all go out at once. An
+    // SSD answers a token's scattered experts far faster in parallel than one after another.
+    let parts = Array(layout.parts)
+    let reads = missed.flatMap { miss in parts.map { (miss, $0) } }
+    let failure = FirstFailure()
+    DispatchQueue.concurrentPerform(iterations: reads.count) { index in
+      let (miss, (name, part)) = reads[index]
+      let target = base[name]! + miss.slot * part.byteCount
+      do {
+        try buffer.read(
+          from: descriptor, offset: miss.expert * layout.stride + part.offset,
+          into: target..<(target + part.byteCount))
+      } catch {
+        failure.record(error)
+      }
+    }
+    if let failure = failure.error {
+      for miss in missed { occupant[miss.slot] = -1 }
+      throw failure
     }
     return result
   }
@@ -243,5 +255,23 @@ public final class ExpertStore: @unchecked Sendable {
     }
     return buffer.array(
       byteOffset: start, shape: [slotCount] + part.shape, dtype: try part.type)
+  }
+}
+
+/// The first error any of a batch of concurrent reads hit.
+private final class FirstFailure: @unchecked Sendable {
+  private let lock = NSLock()
+  private var first: Error?
+
+  func record(_ error: Error) {
+    lock.lock()
+    defer { lock.unlock() }
+    if first == nil { first = error }
+  }
+
+  var error: Error? {
+    lock.lock()
+    defer { lock.unlock() }
+    return first
   }
 }

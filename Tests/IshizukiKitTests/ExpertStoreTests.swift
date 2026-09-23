@@ -83,14 +83,14 @@ struct ExpertStoreTests {
     #expect(store.hits == 2)
   }
 
-  @Test("evicts the least used, and keeps what this token already claimed")
+  @Test("evicts the least recently used, and keeps what this token already claimed")
   func eviction() throws {
     let url = temporary()
     defer { try? FileManager.default.removeItem(at: url) }
     let layout = try write(to: url)
 
     let store = try ExpertStore(url: url, layout: layout, slots: 2)
-    // 0 is asked for twice and 1 once, so 1 is the one to go.
+    // 1 was last asked for before 0, so 1 is the one to go.
     _ = try store.residency(of: [0, 1])
     _ = try store.residency(of: [0])
     let slots = try store.residency(of: [0, 3])
@@ -101,5 +101,22 @@ struct ExpertStoreTests {
 
     // Asking for more at once than there are slots cannot be served.
     #expect(throws: BonsaiError.self) { _ = try store.residency(of: [4, 5, 6]) }
+  }
+
+  @Test("an expert asked for often but not lately is the one evicted")
+  func recencyOverFrequency() throws {
+    let url = temporary()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let layout = try write(to: url)
+
+    let store = try ExpertStore(url: url, layout: layout, slots: 2)
+    for _ in 0..<3 { _ = try store.residency(of: [0]) }
+    _ = try store.residency(of: [1])
+    _ = try store.residency(of: [2])
+    #expect(store.misses == 3)
+    _ = try store.residency(of: [1])
+    #expect(store.misses == 3, "1 was more recent than 0, however often 0 was asked for")
+    _ = try store.residency(of: [0])
+    #expect(store.misses == 4)
   }
 }
