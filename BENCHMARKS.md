@@ -170,14 +170,37 @@ the pack's MTP head otherwise, verified a block at a time, exact for greedy and 
 
 | Qwen3.8-27B IQ2_XS GGUF, served turn | drafting off | drafting on | tokens / round |
 |---|---|---|---|
-| prose, greedy | 11.45 | 10.56 | 1.76 (MTP) |
-| prose, temp 0.7 min-p 0.05 | 11.42 | 10.23 | 1.71 |
-| code edit, greedy | 10.14 | 11.67 | 3.71 (lookup) |
-| code edit, temp 0.7 min-p 0.05 | 10.13 | 11.39 | 3.71 |
+| prose, greedy | 11.20 | 9.96 | 1.76 (MTP) |
+| prose, temp 0.7 min-p 0.05 | 11.40 | 10.43 | 1.71 |
+| code edit, greedy | 11.16 | 13.98 | 3.71 (lookup) |
+| code edit, temp 0.7 min-p 0.05 | 10.91 | 13.90 | 3.71 |
 
-A GGUF forward costs 99 ms for one row, 121 for two and 300 for eight, so a long lookup block
-buys little, and an MTP round pays a replay on every rejection plus a full-vocabulary draft head.
+An MTP round verifies two rows, which the few-row GGUF multiply below leaves to the matvec, and
+pays a replay on every rejection plus a full-vocabulary draft head, so prose still loses.
 M1 Max, 2026-09-23.
+
+### Few-row GGUF multiply
+
+The GGUF matvec decodes a block once but pays every row its own loads, multiplies and
+reduction, so eight rows cost three to four times one. `GGMLKernels.matmulFew` runs the same
+per-format block bodies into simdgroup matrix fragments instead. Cost of eight rows against
+one, on the file's largest tensor of each format:
+
+| Format | matvec | few-row |
+|---|---|---|
+| Q2_K | 3.34× | 1.50× |
+| Q4_K | 2.47× | 1.83× |
+| IQ1_S | 2.82× | 0.94× |
+| IQ1_M | 2.85× | 1.04× |
+| IQ2_XXS | 3.49× | 1.38× |
+| IQ2_XS | 3.53× | 1.36× |
+| IQ2_S | 3.04× | 1.35× |
+| IQ3_XXS | 3.60× | 1.54× |
+| IQ3_S | 2.75× | 1.30× |
+| IQ4_XS (lm head) | 4.36× | 1.79× |
+
+It serves five to sixteen rows (eight at a time); fewer stay on the matvec, which ties it at
+two and is close at four.
 
 ## Speculative verify
 

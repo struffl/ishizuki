@@ -212,6 +212,46 @@ public enum GGMLKernels {
     #endif
   }
 
+  /// Rows `x` can have for ``matmulFew``: each weight is decoded once into a simdgroup matrix
+  /// fragment and meets every row in one multiply, where the matvec pays per row.
+  public static let matmulFewRows = 2...8
+
+  public static func matmulFew(
+    _ x: MLXArray, blocks: MLXArray, type: GGMLType, outputDim: Int, rowBlocks: Int = 2
+  ) -> MLXArray? {
+    #if canImport(Metal)
+      guard let matmulFewKernel, GGMLDequant.supported.contains(type), type.isQuantized,
+        type.blockSize == 256
+      else { return nil }
+      guard x.ndim == 2 else { return nil }
+      let m = x.dim(0)
+      let k = x.dim(1)
+      guard matmulFewRows.contains(m), k % 256 == 0, outputDim > 0 else { return nil }
+      guard blocks.size >= outputDim * (k / 256 * type.typeSize) else { return nil }
+
+      let rowsPerGroup = 64 * rowBlocks
+      let groups = (outputDim + rowsPerGroup - 1) / rowsPerGroup
+      return matmulFewKernel(
+        [x, blocks] + GGMLGrids.buffers + [k, outputDim],
+        template: [
+          ("IT", x.dtype),
+          ("qtype", Int(type.rawValue)),
+          ("block_bytes", type.typeSize),
+          ("block_elems", type.blockSize),
+          ("vecs", m),
+          ("grid_bytes", gridBytes(type)),
+          ("sign_words", signWords(type)),
+          ("RB", rowBlocks),
+        ],
+        grid: (groups * 256, 1, 1),
+        threadGroup: (256, 1, 1),
+        outputShapes: [[m, outputDim]],
+        outputDTypes: [x.dtype])[0]
+    #else
+      return nil
+    #endif
+  }
+
   #if canImport(Metal)
     private static let dequantKernel: MLXFast.MLXFastKernel? = {
       MLXFast.metalKernel(
@@ -248,6 +288,97 @@ public enum GGMLKernels {
         source: macros + blockMacros + accumulateEach + blockTables + matvecProlog + blockChain
           + matvecEpilog)
     }()
+
+    private static let matmulFewKernel: MLXFast.MLXFastKernel? = {
+      MLXFast.metalKernel(
+        name: "ggml_matmul_few",
+        inputNames: [
+          "x", "w", "g_iq2xxs", "g_iq2xs", "g_iq2s", "g_iq1s", "g_iq3xxs", "g_iq3s",
+          "ksigns", "kvalues", "K", "N",
+        ],
+        outputNames: ["y"],
+        source: macros + blockMacros + captureEach + blockTables + matmulFewProlog + blockChain
+          + matmulFewEpilog,
+        header: """
+          #include <metal_simdgroup_matrix>
+          #define UNROLL _Pragma("clang loop unroll(full)")
+
+          """)
+    }()
+
+    /// The same eight weights, scale and minimum applied, held for the multiply instead.
+    private static let captureEach = """
+          #define GGML_ACC8(db, q0, q1) { wv0 = (db) * (q0); wv1 = (db) * (q1); }
+          #define GGML_ACC8M(dl, ml, q0, q1) { \\
+              wv0 = (dl) * (q0) - (ml); wv1 = (dl) * (q1) - (ml); }
+
+      """
+
+    /// Eight output rows to a simdgroup and a block of each at a time. The lanes that share a
+    /// row take a quarter of its block apiece, sixty-four contiguous weights, and the block's
+    /// columns are permuted so each multiply step reads two adjacent weights out of that run.
+    private static let matmulFewProlog = """
+          const uint sgi = simdgroup_index_in_threadgroup;
+          const uint li = thread_index_in_simdgroup;
+          const uint qid = li / 4;
+          const uint fm = (qid & 4) + ((li / 2) % 4);
+          const uint fn = (qid & 2) * 2 + (li % 2) * 2;
+          const uint row_base = (threadgroup_position_in_grid.x * 8 + sgi) * 8 * RB;
+          const int nblk = K / block_elems;
+          const ulong row_bytes = (ulong)nblk * block_bytes;
+          const uint quarter = fn / 2;
+          const uint kb = (fm / 2) * 64 + (fm % 2);
+          const bool m0 = fn < (uint)vecs;
+          const bool m1 = fn + 1 < (uint)vecs;
+          device const IT *x0 = x + (m0 ? fn : 0) * K;
+          device const IT *x1 = x + (m1 ? fn + 1 : 0) * K;
+          const float f0 = m0 ? 1.0f : 0.0f;
+          const float f1 = m1 ? 1.0f : 0.0f;
+
+          simdgroup_float8x8 acc[RB];
+          UNROLL for (int r = 0; r < RB; ++r)
+              acc[r] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+
+          for (int blk = 0; blk < nblk; ++blk) {
+            UNROLL for (int gl = 0; gl < 8; ++gl) {
+              float4 dq[RB][2];
+              UNROLL for (int r = 0; r < RB; ++r) {
+                const uint row = min(row_base + (uint)r * 8 + fm, (uint)N - 1);
+                device const uchar *b = w + (ulong)row * row_bytes + (ulong)blk * block_bytes;
+                const int lane = (int)(8 * quarter) + gl;
+                float4 wv0 = 0.0f, wv1 = 0.0f;
+
+      """
+
+    private static let matmulFewEpilog = """
+
+                dq[r][0] = wv0;
+                dq[r][1] = wv1;
+              }
+              UNROLL for (int t = 0; t < 4; ++t) {
+                const uint k = (uint)blk * 256 + kb + 2 * (4 * (uint)gl + (uint)t);
+                simdgroup_float8x8 bx;
+                bx.thread_elements()[0] = (float)x0[k] * f0;
+                bx.thread_elements()[1] = (float)x1[k] * f1;
+                UNROLL for (int r = 0; r < RB; ++r) {
+                  simdgroup_float8x8 a;
+                  const float4 v = dq[r][t / 2];
+                  a.thread_elements()[0] = (t % 2 == 0) ? v.x : v.z;
+                  a.thread_elements()[1] = (t % 2 == 0) ? v.y : v.w;
+                  simdgroup_multiply_accumulate(acc[r], a, bx, acc[r]);
+                }
+              }
+            }
+          }
+
+          UNROLL for (int r = 0; r < RB; ++r) {
+              const uint row = row_base + (uint)r * 8 + fm;
+              if (row < (uint)N) {
+                  if (m0) { y[fn * N + row] = (IT)acc[r].thread_elements()[0]; }
+                  if (m1) { y[(fn + 1) * N + row] = (IT)acc[r].thread_elements()[1]; }
+              }
+          }
+      """
 
     private static let macros = """
           #define GGML_HALF(p) ((float)as_type<half>(*(device const ushort *)(p)))

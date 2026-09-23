@@ -139,6 +139,41 @@ struct GGMLMatvecTests {
     }
   }
 
+  /// The few-row multiply shares the matvec's block bodies but lays a block's weights into
+  /// matrix fragments, with its columns permuted and its rows cut into tiles of sixty-four, so
+  /// seventeen rows leave a ragged tile and every lane's slice of a block is exercised.
+  @Test("the few-row multiply matches expanding the weight and multiplying")
+  func fewRowMatchesExpandedMatmul() throws {
+    let types: [GGMLType] = [
+      .q2K, .q4K, .q6K, .iq1S, .iq1M, .iq2Xxs, .iq2Xs, .iq2S, .iq3Xxs, .iq3S, .iq4Xs,
+    ]
+    let k = 512
+    let rows = 17
+
+    for type in types {
+      let raw = MLXArray(blocks(type, rows: rows, k: k, seed: 0xFE11))
+      let weight = try #require(
+        GGMLKernels.dequantize(blocks: raw, type: type, shape: [rows, k], dtype: .float32))
+
+      for m in GGMLKernels.matmulFewRows {
+        for rowBlocks in [1, 2] {
+          let x = MLXRandom.normal([m, k]).asType(.float32)
+          let expected = matmul(x, weight.T)
+          let actual = try #require(
+            GGMLKernels.matmulFew(
+              x, blocks: raw, type: type, outputDim: rows, rowBlocks: rowBlocks))
+          let bound = matmul(abs(x), abs(weight).T)
+          let error = abs(actual - expected) / maximum(bound, MLXArray(Float(1e-6)))
+          eval(error)
+          let worst = error.max().item(Float.self)
+          #expect(
+            worst < 1e-5,
+            "\(type.name) at \(m) rows, \(rowBlocks) blocks: worst relative term error \(worst)")
+        }
+      }
+    }
+  }
+
   /// The gather walks `(row, block)` pairs several to a thread and writes into a different
   /// tensor's layout, so a row that lands one slot over still looks like a plausible embedding.
   /// Expanding the whole table and indexing it is the definition it has to match.

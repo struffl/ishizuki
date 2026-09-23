@@ -124,6 +124,19 @@ public final class PackedLinear: @unchecked Sendable {
     let width = shape[shape.count - 1]
     let rows = h.size / width
 
+    if BonsaiRuntime.useVerifyMatmul, (5...16).contains(rows) {
+      let x = h.reshaped([rows, width])
+      let pieces = stride(from: 0, to: rows, by: 8).map { start in
+        GGMLKernels.matmulFew(
+          x[start..<min(start + 8, rows)], blocks: blocks.bytes, type: blocks.type,
+          outputDim: blocks.outputDim, rowBlocks: 2)
+      }
+      if pieces.allSatisfy({ $0 != nil }) {
+        let y = pieces.count == 1 ? pieces[0]! : concatenated(pieces.map { $0! }, axis: 0)
+        return y.reshaped(Array(shape.dropLast()) + [outputDim])
+      }
+    }
+
     if GGMLKernels.matvecBatch.contains(rows),
       let y = GGMLKernels.matvec(
         h.reshaped([rows, width]), blocks: blocks.bytes, type: blocks.type,
