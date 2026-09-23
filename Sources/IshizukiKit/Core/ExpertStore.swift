@@ -85,6 +85,11 @@ public final class ExpertStore: @unchecked Sendable {
   /// expert — but the slots are part major, so all the slots of one projection are contiguous
   /// and can be handed to a gathered matmul as a single `[slots, ...]` tensor.
   private let base: [String: Int]
+  /// Each part's slots as one array, made once. Metal wraps memory without copying only when it
+  /// starts and ends on a page, and MLX copies whatever Metal refuses: a view made per call
+  /// over unaligned slots copied every slot of every layer on every token, about 20 GB a token
+  /// for the 125B-A6B at 128 slots.
+  private var views: [String: MLXArray] = [:]
   private let lock = NSLock()
 
   /// Which expert each slot holds, and when it was last asked for.
@@ -159,7 +164,7 @@ public final class ExpertStore: @unchecked Sendable {
     var total = 0
     for name in layout.parts.keys.sorted() {
       base[name] = total
-      total += self.slotCount * layout.parts[name]!.byteCount
+      total += Self.pageRounded(self.slotCount * layout.parts[name]!.byteCount)
     }
     self.base = base
     self.buffer = try ResidentBuffer(byteCount: total)
@@ -250,11 +255,24 @@ public final class ExpertStore: @unchecked Sendable {
   /// and the next `residency(of:)` rewrites it. Anything computed from it has to be evaluated
   /// before more experts are asked for.
   public func array(_ name: String) throws -> MLXArray {
+    lock.lock()
+    defer { lock.unlock() }
+    if let view = views[name] { return view }
     guard let part = layout.parts[name], let start = base[name] else {
       throw BonsaiError.missingWeight("\(name) is not in this expert layout")
     }
-    return buffer.array(
-      byteOffset: start, shape: [slotCount] + part.shape, dtype: try part.type)
+    let type = try part.type
+    let used = slotCount * part.byteCount
+    let flat = buffer.array(
+      byteOffset: start, shape: [Self.pageRounded(used) / type.size], dtype: type)
+    let view = flat[0..<(used / type.size)].reshaped([slotCount] + part.shape)
+    eval(view)
+    views[name] = view
+    return view
+  }
+
+  static func pageRounded(_ bytes: Int) -> Int {
+    (bytes + ResidentBuffer.pageSize - 1) / ResidentBuffer.pageSize * ResidentBuffer.pageSize
   }
 }
 
