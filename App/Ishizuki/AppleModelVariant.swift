@@ -25,3 +25,25 @@ enum AppleModelVariant {
     }
   }
 }
+
+/// Whether the on-device model can actually answer here. `availability` only reads the
+/// Apple Intelligence switch and never looks for the model's assets, so a Mac with them
+/// removed still reports `.available` and fails the first turn instead; counting a token
+/// needs the tokenizer asset and turns that up without generating anything.
+@available(macOS 27.0, *)
+enum AppleIntelligenceProbe {
+  static func isUsable() async -> Bool {
+    guard SystemLanguageModel.default.isAvailable else { return false }
+    do {
+      _ = try await SystemLanguageModel.default.tokenCount(for: "probe")
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  static func isMissingAssets(_ error: Error) -> Bool {
+    if case SystemLanguageModel.Error.assetsUnavailable = error { return true }
+    return false
+  }
+}

@@ -70,15 +70,17 @@ struct ChatReadoutBar: View {
 
   @ViewBuilder private var modelSwitcher: some View {
     Menu {
-      Section("Apple Intelligence") {
-        ForEach(AppleFoundationModel.offered) { model in
-          Button {
-            controller.settings.appleModel = model
-          } label: {
-            if controller.settings.appleModel == model {
-              Label(model.displayName, systemImage: "checkmark")
-            } else {
-              Text(model.displayName)
+      if !controller.offeredAppleModels.isEmpty {
+        Section("Apple Intelligence") {
+          ForEach(controller.offeredAppleModels) { model in
+            Button {
+              controller.settings.appleModel = model
+            } label: {
+              if controller.settings.appleModel == model {
+                Label(model.displayName, systemImage: "checkmark")
+              } else {
+                Text(model.displayName)
+              }
             }
           }
         }

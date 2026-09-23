@@ -35,9 +35,9 @@ struct ModelsView: View {
           }
         }
 
-        if #available(macOS 27.0, *) {
+        if #available(macOS 27.0, *), !controller.offeredAppleModels.isEmpty {
           section("Apple Intelligence") {
-            ForEach(AppleFoundationModel.offered) { model in
+            ForEach(controller.offeredAppleModels) { model in
               AppleModelRow(model: model, controller: controller)
             }
           }

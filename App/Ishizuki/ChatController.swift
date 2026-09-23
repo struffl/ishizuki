@@ -823,6 +823,9 @@ final class ChatController {
         self?.note("Stopped", tone: .stopped, for: run.chatID)
       } catch {
         self?.note(ChatController.plainly(error), tone: .failed, for: run.chatID)
+        if AppleIntelligenceProbe.isMissingAssets(error) {
+          self?.server?.setAppleIntelligenceUsable(false)
+        }
       }
       guard let self else { return }
       self.finish(run)

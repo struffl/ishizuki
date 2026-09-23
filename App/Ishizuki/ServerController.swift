@@ -5,6 +5,7 @@
 
 import AppKit
 import Foundation
+import FoundationModels
 import IshizukiKit
 import Observation
 
@@ -25,6 +26,11 @@ final class ServerController {
   private(set) var readout: ServeReadout?
   private(set) var log: [String] = []
   private(set) var catalog = ModelCatalog(entries: [])
+  private(set) var appleIntelligenceUsable = SystemLanguageModel.default.isAvailable
+
+  var offeredAppleModels: [AppleFoundationModel] {
+    appleIntelligenceUsable ? AppleFoundationModel.offered : []
+  }
 
   let settings = ServerSettings()
   let library = ModelLibrary()
@@ -55,8 +61,24 @@ final class ServerController {
     NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil
     ) { [weak self] _ in
-      MainActor.assumeIsolated { self?.rescan() }
+      MainActor.assumeIsolated {
+        self?.rescan()
+        self?.probeAppleIntelligence()
+      }
     }
+    probeAppleIntelligence()
+  }
+
+  func probeAppleIntelligence() {
+    Task { [weak self] in
+      let usable = await AppleIntelligenceProbe.isUsable()
+      self?.setAppleIntelligenceUsable(usable)
+    }
+  }
+
+  func setAppleIntelligenceUsable(_ usable: Bool) {
+    appleIntelligenceUsable = usable
+    if !usable, settings.appleModel != nil { settings.appleModel = nil }
   }
 
   func bootstrap() {
