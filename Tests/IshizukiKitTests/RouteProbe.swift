@@ -25,7 +25,11 @@ struct RouteProbe {
   @Test("record")
   func record() throws {
     let env = ProcessInfo.processInfo.environment
+    if let slots = env["ISHIZUKI_EXPERT_SLOTS"].flatMap(Int.init) {
+      BonsaiRuntime.expertSlots = slots
+    }
     let model = try BonsaiModel(path: URL(filePath: env["ISHIZUKI_ROUTE_PACK"]!))
+    let prompts = Array(Self.prompts.prefix(Int(env["ISHIZUKI_PROMPTS"] ?? "") ?? Self.prompts.count))
     let output = URL(filePath: env["ISHIZUKI_ROUTE_OUT"] ?? NSTemporaryDirectory() + "routes.json")
     let steps = Int(env["ISHIZUKI_STEPS"] ?? "") ?? 256
     let text = model.text
@@ -51,13 +55,14 @@ struct RouteProbe {
 
     var sessions: [[String: Any]] = []
     let started = Date()
-    for prompt in Self.prompts {
+    for prompt in prompts {
       let ids = model.tokenizer.encode(prompt)
       let cache = text.makeCache()
       var logits = text(MLXArray(ids.map(Int32.init)).reshaped([1, ids.count]), cache: cache)
       let prefill = drain()
       var decode: [String: [[Int32]]] = [:]
       var emitted: [Int] = []
+      let decodeStart = Date()
       for _ in 0..<steps {
         let last = logits[0..., -1, 0...].asType(.float32) / 0.7
         let token = categorical(last).item(Int32.self)
@@ -65,7 +70,13 @@ struct RouteProbe {
         logits = text(MLXArray([token]).reshaped([1, 1]), cache: cache)
         for (layer, rows) in drain() { decode[layer, default: []] += rows }
       }
-      print("--- \(prompt.prefix(40))… → \(model.tokenizer.decode(emitted).prefix(120))")
+      let rate = Double(steps) / -decodeStart.timeIntervalSinceNow
+      let traffic = model.store.expertTraffic
+      print(
+        String(format: "--- %.2f tok/s, expert hit rate so far %.1f%% --- ", rate,
+          100 * (traffic?.hitRate ?? 0))
+          + "\(prompt.prefix(40))… → "
+          + model.tokenizer.decode(emitted).prefix(160).replacingOccurrences(of: "\n", with: "⏎"))
       sessions.append(["prompt": prompt, "prefill": prefill, "decode": decode])
     }
     let config = text.config
@@ -75,6 +86,6 @@ struct RouteProbe {
     ]
     try JSONSerialization.data(withJSONObject: payload).write(to: output)
     print(String(format: "routes for %d prompts x %d tokens in %.0f s → %@",
-      Self.prompts.count, steps, -started.timeIntervalSinceNow, output.path))
+      prompts.count, steps, -started.timeIntervalSinceNow, output.path))
   }
 }
