@@ -30,14 +30,19 @@ struct ServeSpeedProbe {
     let samplers: [(String, SamplingOptions)] = [
       ("greedy", .greedy),
       ("app", SamplingOptions(temperature: 0.7, minP: 0.05, seed: 5)),
+      ("temp", SamplingOptions(temperature: 0.7, seed: 5)),
     ]
+    if let match = ProcessInfo.processInfo.environment["ISHIZUKI_MIN_MATCH"].flatMap({ Int($0) }) {
+      BonsaiRuntime.lookupMinMatch = match
+    }
     let saved = BonsaiRuntime.speculativeDecode
     defer { BonsaiRuntime.speculativeDecode = saved }
-    for (label, text) in prompts {
+    let only = ProcessInfo.processInfo.environment["ISHIZUKI_ONLY"]
+    for (label, text) in prompts where only == nil || only == label {
       let rendered = try template.render(
         messages: [.user(text)], addGenerationPrompt: true, enableThinking: false)
       let tokens = model.tokenizer.encode(rendered)
-      for (sampling, options) in samplers {
+      for (sampling, options) in samplers where only == nil || sampling != "greedy" {
         var plain: [Int] = []
         for drafting in [false, true] {
           BonsaiRuntime.speculativeDecode = drafting

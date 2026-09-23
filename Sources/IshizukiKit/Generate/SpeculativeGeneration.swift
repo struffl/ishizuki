@@ -29,8 +29,10 @@ extension Generator {
     guard BonsaiRuntime.speculativeDecode, constraint == nil, promptEmbeddings == nil,
       positions == nil, options.repetitionPenalty == 1, options.presencePenalty == 0
     else { return nil }
-    let mtp = model.mtp == nil ? nil : try? MTPDrafter(model: model, kvConfig: kvConfig)
-    return Drafts(lookup: lookup?() ?? NgramDrafter(minPatternLength: 3), mtp: mtp)
+    let mtp =
+      model.mtp == nil || options.temperature > 0
+      ? nil : try? MTPDrafter(model: model, kvConfig: kvConfig)
+    return Drafts(lookup: lookup?() ?? NgramDrafter(minPatternLength: BonsaiRuntime.lookupMinMatch), mtp: mtp)
   }
 
   func speculate(

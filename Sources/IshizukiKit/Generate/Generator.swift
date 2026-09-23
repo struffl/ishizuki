@@ -151,7 +151,7 @@ public final class Generator: @unchecked Sendable {
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
 
-    if let drafting {
+    if let drafting, drafting.mtp != nil {
       let decoded = speculate(
         drafting, logits: logits, observed: observed, cache: cache, sampler: sampler,
         promptTokens: promptTokens, maxTokens: maxTokens, detokenizer: &detokenizer,
@@ -170,16 +170,28 @@ public final class Generator: @unchecked Sendable {
       decodePosition.map { MLXArray([Int32($0), Int32($0), Int32($0)]).reshaped([3, 1]) }
     }
 
+    let lookup = drafting?.lookup
+    var drafted: SpeculativeStats?
     if constraint == nil, BonsaiRuntime.pipelineDecode {
+      var stats = SpeculativeStats()
+      var carry: [Int] = []
+      var idle = 0
+      var backoff = 4
       var pending = sampler.token(nextLogits, recentTokens: promptTokens)
       asyncEval(pending)
-      for _ in 0..<maxTokens {
+      decoding: while generated.count < maxTokens {
         if isCancelled?() == true {
           cancelled = true
           break
         }
         let snapshot = cache.snapshot()
-        let step = model.text(pending.reshaped([1, 1]), cache: cache, positions: stepPositions())
+        let input =
+          carry.isEmpty
+          ? pending.reshaped([1, 1])
+          : concatenated([MLXArray(carry.map { Int32($0) }), pending.reshaped([-1]).asType(.int32)])
+            .reshaped([1, -1])
+        carry = []
+        let step = model.text(input, cache: cache, positions: stepPositions())
         if decodePosition != nil { decodePosition! += 1 }
         let following = sampler.token(
           step[0..., -1, 0...], recentTokens: promptTokens + generated, pending: pending)
@@ -206,7 +218,63 @@ public final class Generator: @unchecked Sendable {
         let delay = Politeness.throttleDelay(for: politeness)
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }
         pending = following
+
+        guard let lookup, generated.count < maxTokens else { continue }
+        stats.rounds += 1
+        if idle > 0 {
+          idle -= 1
+          continue
+        }
+        let draft = lookup.propose(
+          context: promptTokens + generated, count: BonsaiRuntime.draftLength)
+        guard !draft.isEmpty else { continue }
+
+        stats.proposed += draft.count
+        let settled = cache.snapshot()
+        let block = model.text(
+          MLXArray(draft.map { Int32($0) }).reshaped([1, draft.count]), cache: cache)
+        let picks = sampler.token(block[0])
+        eval(following, picks)
+        let candidates = [following.item(Int.self)] + picks.asArray(Int32.self).map(Int.init)
+        var accepted = 0
+        while accepted < draft.count, candidates[accepted] == draft[accepted] { accepted += 1 }
+        stats.accepted += accepted
+        if accepted == 0 {
+          idle = backoff
+          backoff = min(backoff * 2, 32)
+        } else {
+          backoff = 4
+        }
+        if accepted < draft.count {
+          stats.rollbacks += 1
+          cache.restore(settled)
+          carry = Array(draft[..<accepted])
+        }
+        if accepted > 0 { pending = picks[(accepted - 1)..<accepted] }
+
+        for kept in draft[..<accepted] {
+          if model.tokenizer.eosTokenIds.contains(kept) {
+            cache.restore(settled)
+            stoppedOnEOS = true
+            break decoding
+          }
+          generated.append(kept)
+          onProgress?(.decode(count: generated.count))
+          let fragment = detokenizer.append(kept)
+          if !fragment.isEmpty {
+            text += fragment
+            if let onToken, !onToken(fragment) {
+              cache.restore(settled)
+              break decoding
+            }
+          }
+          if generated.count >= maxTokens {
+            cache.restore(settled)
+            break decoding
+          }
+        }
       }
+      if lookup != nil { drafted = stats }
     } else {
       for _ in 0..<maxTokens {
         if isCancelled?() == true {
@@ -263,6 +331,7 @@ public final class Generator: @unchecked Sendable {
         promptSeconds: promptSeconds,
         generationSeconds: generationSeconds),
       stoppedOnEOS: stoppedOnEOS,
-      cancelled: cancelled)
+      cancelled: cancelled,
+      speculative: drafted)
   }
 }

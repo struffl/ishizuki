@@ -48,9 +48,11 @@ public enum BonsaiRuntime {
 
   public nonisolated(unsafe) static var pipelineDecode = true
 
-  public nonisolated(unsafe) static var speculativeDecode = false
+  public nonisolated(unsafe) static var speculativeDecode = true
 
   public nonisolated(unsafe) static var draftLength = 7
+
+  public nonisolated(unsafe) static var lookupMinMatch = 4
 
   /// Routed experts held in memory per sparse layer, when the model keeps them on disk. More
   /// slots means fewer reads and more resident bytes; this is the whole memory dial for a

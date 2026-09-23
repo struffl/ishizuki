@@ -163,23 +163,26 @@ Same tokens, and the cache is left exactly where the serial loop leaves it. Bons
 
 ## Drafting in a served turn
 
-`Generator` can draft inside a served turn: prompt lookup when the reply repeats the context,
-the pack's MTP head otherwise, verified a block at a time, exact for greedy and for sampling
-(a rejected draft is replaced from the residual distribution). It is **off by default**
-(`BonsaiRuntime.speculativeDecode`) because on the IQ2_XS GGUF it does not pay yet:
+`Generator` drafts inside a served turn, **on by default** (`BonsaiRuntime.speculativeDecode`).
+A sampled request drafts only by prompt lookup, inside the pipelined loop: every step is still
+queued before its token is read, and once the token is known a match of at least four tokens
+(`lookupMinMatch`) is checked straight after the step already in flight. The check samples
+each drafted position as usual and keeps the draft while the picks agree, which for a draft
+copied from the context is exact rejection sampling. A greedy request on a pack with an MTP head
+drafts with the head as well, and carries a partial accept into the next block rather than
+replaying it.
 
 | Qwen3.8-27B IQ2_XS GGUF, served turn | drafting off | drafting on | tokens / round |
 |---|---|---|---|
-| prose, greedy | 11.05 | 13.21 | 1.85 (MTP) |
-| prose, temp 0.7 min-p 0.05 | 11.41 | 10.04 | 1.64 |
-| code edit, greedy | 10.92 | 15.28 | 3.71 (lookup) |
-| code edit, temp 0.7 min-p 0.05 | 10.79 | 15.29 | 3.71 |
+| prose, greedy | 11.15 | 13.19 | 1.85 (MTP) |
+| prose, temp 0.7 min-p 0.05 | 11.38 | 11.11 | lookup, 0 of 7 kept |
+| code edit, greedy | 10.99 | 15.02 | 3.71 (lookup and MTP) |
+| code edit, temp 0.7 min-p 0.05 | 11.11 | 13.70 | 2.27 (lookup) |
 
-A rejected draft is not replayed on its own: the tokens it kept ride at the front of the next
-round's block, since the token after them is already known from the verify. Greedy output is
-token for token what plain decoding gives. Sampled prose still loses: acceptance falls to about
-55%, so more rounds carry, and a three- or four-row forward on the matvec costs 145–175 ms.
-M1 Max, 2026-09-23.
+A lookup draft that misses costs a verify forward, 100–250 ms, so a three-token match, which
+ordinary prose hits, drafted fourteen times for one kept token and cost 3%; at four the prose
+cost is within run-to-run noise. After a miss the lookup waits four steps, doubling to 32.
+Greedy output matches plain decoding token for token. M1 Max, 2026-09-23.
 
 ### Few-row GGUF multiply
 
