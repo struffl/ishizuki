@@ -36,6 +36,9 @@ public final class PackedLinear: @unchecked Sendable {
   /// Set for a projection read straight out of a GGUF: the weight is still in GGML blocks and
   /// is decoded inside the kernel rather than before it.
   public let ggml: GGUFBlocks?
+  /// Set for a projection read out of an EXL3 pack: the weight stays trellis-coded and is
+  /// decoded inside the kernel.
+  public let exl3: EXL3Tensor?
   /// Calibration's hook onto this projection's exact input, called before every forward pass
   /// when this projection is dense. Never set for a quantized projection.
   private let collect: (@Sendable (MLXArray) -> Void)?
@@ -56,6 +59,7 @@ public final class PackedLinear: @unchecked Sendable {
     self.bits = bits
     self.isDense = false
     self.ggml = nil
+    self.exl3 = nil
     self.collect = nil
 
     self.outputDim = weight.dim(0)
@@ -94,6 +98,7 @@ public final class PackedLinear: @unchecked Sendable {
     self.bits = 16
     self.isDense = true
     self.ggml = nil
+    self.exl3 = nil
     self.collect = collect
     self.outputDim = weight.dim(0)
     self.inputDim = weight.dim(1)
@@ -111,9 +116,26 @@ public final class PackedLinear: @unchecked Sendable {
     self.bits = 0
     self.isDense = false
     self.ggml = blocks
+    self.exl3 = nil
     self.collect = nil
     self.outputDim = blocks.outputDim
     self.inputDim = blocks.inputDim
+  }
+
+  public init(exl3 tensor: EXL3Tensor) {
+    self.weight = tensor.trellis
+    self.scales = MLXArray.ones([1])
+    self.biases = MLXArray.zeros([1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = 256
+    self.bits = tensor.wholeBits
+    self.isDense = false
+    self.ggml = nil
+    self.exl3 = tensor
+    self.collect = nil
+    self.outputDim = tensor.outputDim
+    self.inputDim = tensor.inputDim
   }
 
   /// Blocks decode inside the matvec while the batch is small enough to pay for the decode
@@ -156,6 +178,7 @@ public final class PackedLinear: @unchecked Sendable {
 
   public func callAsFunction(_ x: MLXArray) -> MLXArray {
     if let ggml { return ggmlApply(x, ggml) }
+    if let exl3 { return EXL3Kernels.apply(x, exl3) }
     var h = x
     if block > 0, let signs {
       if BonsaiRuntime.useFusedHadamard,
@@ -220,6 +243,7 @@ public final class PackedLinear: @unchecked Sendable {
 
   public func applyRotated(_ h: MLXArray) -> MLXArray {
     if let ggml { return ggmlApply(h, ggml) }
+    if let exl3 { return EXL3Kernels.apply(h, exl3) }
     if isDense {
       return matmul(h, weight.T.asType(h.dtype))
     }
@@ -228,7 +252,10 @@ public final class PackedLinear: @unchecked Sendable {
 
   // Output channels are rows of the packed weight, so the half Metal keeps is a row slice.
   public func channels(from start: Int) throws -> PackedLinear {
-    try PackedLinear(
+    guard ggml == nil, exl3 == nil else {
+      throw BonsaiError.invalidTransform("a coded projection cannot be split by channel")
+    }
+    return try PackedLinear(
       weight: weight[start...], scales: scales[start...], biases: biases[start...],
       signs: signs, block: block, groupSize: groupSize, bits: bits)
   }

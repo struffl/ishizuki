@@ -243,7 +243,9 @@ public struct PackedModuleFactory {
   /// The same module can arrive packed or dense depending on what the quantizer decided to
   /// leave alone, so the small delta-net projections resolve by what is actually on disk.
   public func projection(_ path: String) throws -> any Projection {
-    if store.ggml(tensorPrefix + path + ".weight") != nil {
+    if store.ggml(tensorPrefix + path + ".weight") != nil
+      || store.has(tensorPrefix + path + ".trellis")
+    {
       return try linear(path)
     }
     if dense || store.has(tensorPrefix + path + ".scales") {
@@ -256,6 +258,9 @@ public struct PackedModuleFactory {
     let key = tensorPrefix + path
     if let blocks = store.ggml(key + ".weight") {
       return PackedLinear(ggml: blocks)
+    }
+    if let tensor = try EXL3Tensor(store: store, key: key) {
+      return PackedLinear(exl3: tensor)
     }
     if dense {
       let weight = try store(key + ".weight")

@@ -90,6 +90,8 @@ public struct BonsaiConfig: Codable, Sendable {
       self.overrides = overrides
     }
 
+    public static let exl3Mode = "exl3"
+
     public var `default`: ModuleQuant {
       ModuleQuant(bits: bits, groupSize: groupSize, mode: mode)
     }
@@ -119,9 +121,16 @@ public struct BonsaiConfig: Codable, Sendable {
 
       for key in container.allKeys {
         switch key.stringValue {
-        case "bits": bits = try container.decode(Int.self, forKey: key)
+        case "bits":
+          if let whole = try? container.decode(Int.self, forKey: key) {
+            bits = whole
+          } else {
+            bits = Int(try container.decode(Double.self, forKey: key).rounded())
+          }
         case "group_size": groupSize = try container.decode(Int.self, forKey: key)
         case "mode": mode = try container.decode(String.self, forKey: key)
+        case "quant_method":
+          if try container.decode(String.self, forKey: key) == Self.exl3Mode { mode = Self.exl3Mode }
         default:
           // Anything else is a module path, or a scalar the runtime has no use for.
           if let entry = try? container.decode(ModuleQuant.self, forKey: key) {
@@ -504,6 +513,7 @@ public struct BonsaiConfig: Codable, Sendable {
 
     let quantization =
       o["quantization"] as? [String: Any]
+      ?? o["quantization_config"] as? [String: Any]
       ?? ["bits": 2, "group_size": 128, "mode": "affine"]
     let pack: [String: Any] = [
       "schema_version": 0,
@@ -529,10 +539,12 @@ public struct BonsaiConfig: Codable, Sendable {
   public enum Profile: Sendable, Equatable {
     case rotated
     case affine
+    case exl3
   }
 
   public var profile: Profile {
-    modelType == Self.hadamardModelType ? .rotated : .affine
+    if modelType == Self.hadamardModelType { return .rotated }
+    return quantization.mode == QuantizationConfig.exl3Mode ? .exl3 : .affine
   }
 
   /// Widths and group sizes MLX can actually run a quantized matmul at.
@@ -543,6 +555,21 @@ public struct BonsaiConfig: Codable, Sendable {
     switch profile {
     case .rotated: try validateRotated()
     case .affine: try validateAffine()
+    case .exl3: try validateEXL3()
+    }
+  }
+
+  private func validateEXL3() throws {
+    let known = Self.legacyModelTypes.union(Self.affineModelTypes)
+    guard known.contains(modelType) else {
+      throw BonsaiError.unsupportedModel(
+        "unrecognised model_type '\(modelType)' for an EXL3 pack; this runtime reads "
+          + known.sorted().joined(separator: ", "))
+    }
+    guard modules.isEmpty else {
+      throw BonsaiError.unsupportedModel(
+        "EXL3 packs carry their own rotation, but the config lists "
+          + "\(modules.count) packed-module record(s)")
     }
   }
 

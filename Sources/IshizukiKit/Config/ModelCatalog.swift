@@ -174,6 +174,14 @@ public struct ModelCatalog: Sendable {
       widths.count == 1
       ? "\(widths[0])-bit"
       : "\(widths.map(String.init).joined(separator: "/"))-bit"
+    let label: String
+    if config.profile == .exl3 {
+      let settings = object["quantization_config"] as? [String: Any]
+      let rate = (settings?["bits"] as? NSNumber)?.doubleValue ?? Double(widths[0])
+      label = "EXL3 \(String(format: "%.2f", rate)) bpw"
+    } else {
+      label = "\(quantization) g\(config.quantization.groupSize)"
+    }
 
     return Entry(
       id: name(for: directory),
@@ -181,7 +189,7 @@ public struct ModelCatalog: Sendable {
       url: directory,
       byteCount: MemoryBudget.diskBytes(in: directory) ?? 0,
       streamedBytes: MemoryBudget.streamedBytes(in: directory),
-      quantization: "\(quantization) g\(config.quantization.groupSize)",
+      quantization: label,
       hasVision: config.components?.vision == true,
       hasMTP: config.components?.mtp == true,
       contextTokens: config.textConfig.maxPositionEmbeddings)
