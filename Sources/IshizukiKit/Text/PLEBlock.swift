@@ -80,12 +80,28 @@ public struct PLEBlock: @unchecked Sendable {
 
   /// A depthwise convolution over the tokens, carrying the few it needs across a step boundary
   /// so that a decoded token sees the same neighbours a prefilled one would have.
+  ///
+  /// Everything is forced to `[N, T, C]` first: `conv1d(groups:)` needs a batch axis, the time
+  /// slice is on axis `-2`, and a rank under 2 is what turns `.ellipsis` into an empty (and
+  /// therefore inverted) `Range` inside MLX's subscript.
   func shortConv(_ x: MLXArray, state: inout MLXArray?) -> MLXArray {
     let keep = stateLength
-    let channels = x.dim(-1)
-    let previous =
-      state ?? MLXArray.zeros(Array(x.shape.dropLast(2)) + [keep, channels], dtype: x.dtype)
-    let padded = concatenated([previous, x], axis: -2)
+    var input = x
+    while input.ndim < 3 { input = input.expandedDimensions(axis: 0) }
+    let channels = input.dim(-1)
+    let batch = Array(input.shape.dropLast(2))
+
+    var previous = state ?? MLXArray.zeros(batch + [keep, channels], dtype: input.dtype)
+    while previous.ndim < 3 { previous = previous.expandedDimensions(axis: 0) }
+    if previous.ndim != input.ndim || previous.dim(-1) != channels
+      || previous.dim(-2) != keep || Array(previous.shape.dropLast(2)) != batch
+    {
+      // A state from another geometry (or a lossy save) is dropped rather than
+      // concatenated into a shape the slice below cannot index.
+      previous = MLXArray.zeros(batch + [keep, channels], dtype: input.dtype)
+    }
+
+    let padded = concatenated([previous, input], axis: -2)
     state = padded[.ellipsis, (padded.dim(-2) - keep)..., 0...]
     return silu(conv1d(padded, conv, dilation: dilation, groups: channels))
   }
