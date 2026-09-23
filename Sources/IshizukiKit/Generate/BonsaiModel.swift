@@ -25,13 +25,17 @@ public final class BonsaiModel: @unchecked Sendable {
   ) throws {
     let config = try BonsaiConfig.load(directory: directory)
     try config.validate()
+    // A repacked sparse model keeps its routed experts beside the shards; opening them here
+    // is what makes the layers stream rather than load.
+    var store = try WeightStore(directory: directory)
+      .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots)
+      .openingEngrams(at: directory, capacity: BonsaiRuntime.engramRows)
+    if let centred = config.centredNorms {
+      store = try store.foldingCentredNorms(expected: centred)
+    }
     try self.init(
       config: config,
-      // A repacked sparse model keeps its routed experts beside the shards; opening them here
-      // is what makes the layers stream rather than load.
-      store: try WeightStore(directory: directory)
-        .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots)
-        .openingEngrams(at: directory, capacity: BonsaiRuntime.engramRows),
+      store: store,
       tokenizer: try BonsaiTokenizer(directory: directory, config: config),
       directory: directory, ropeScaling: ropeScaling, hot: hot)
   }
@@ -150,7 +154,8 @@ public final class BonsaiModel: @unchecked Sendable {
     guard let visionConfig = config.visionConfig, store.has(Self.visionProbe) else {
       return nil
     }
-    let built = try VisionTower(config: visionConfig, store: store)
+    let built = try VisionTower(
+      config: visionConfig, store: store, quantization: config.quantization)
     store.warm(prefix: Self.visionPrefix)
     tower = built
     return built

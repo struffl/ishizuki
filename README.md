@@ -54,6 +54,11 @@ them, and the Models tab will take any HuggingFace repo by name — `org/model`,
 Packs you already have stay where they are: point the Models tab at the folder holding them and
 it reads them in place, nothing copied.
 
+JANG repacks load as they are, including `dealignai/Bonsai-2-27B-CRACK-Ternary-JANG`. Ishizuki
+reads the Hadamard rotation from `config.json` and the norm layout from `jang_config.json`, and
+the quantized vision tower runs as it ships. A pack that declares a transform Ishizuki can't
+apply is refused rather than loaded as plain affine.
+
 ## Agents
 
 Point a coding agent at the local model. Start the server from the status bar; the dashboard

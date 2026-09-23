@@ -85,6 +85,25 @@ public final class WeightStore: @unchecked Sendable {
       experts: expertStores, engrams: store)
   }
 
+  /// Folds the implied one into every zero-centred norm, for a pack that left them as the
+  /// checkpoint wrote them. `expected` is the count the pack declared, zero when it did not say;
+  /// a mismatch means the naming rule and the pack disagree about which norms moved.
+  public func foldingCentredNorms(expected: Int) throws -> WeightStore {
+    var folded = arrays
+    var count = 0
+    for (name, array) in arrays where TensorNaming.isZeroCentredNorm(name) {
+      folded[name] = array.asType(.float32) + 1
+      count += 1
+    }
+    guard expected == 0 || count == expected else {
+      throw BonsaiError.shapeMismatch(
+        "pack declares \(expected) zero-centred norm(s), found \(count)")
+    }
+    return WeightStore(
+      arrays: folded, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout,
+      experts: expertStores, engrams: engrams)
+  }
+
   /// A pack is either one safetensors file or a set of shards named by an index. Both land in
   /// the same flat name table, so nothing downstream needs to know which it was.
   public convenience init(directory: URL, file: String = "model.safetensors") throws {

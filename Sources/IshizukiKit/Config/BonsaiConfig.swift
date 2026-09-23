@@ -15,6 +15,10 @@ public struct BonsaiConfig: Codable, Sendable {
   public var tensorNamespace: String?
   public var gdnActivationLayout: String?
   public var requiresRuntime: String?
+  /// How many language-model norms are stored zero-centred and need their one folded in at
+  /// load. Nil means the pack already holds the weights the norms scale by; zero means it did
+  /// not say how many.
+  public var centredNorms: Int?
 
   public var imageTokenId: Int?
   public var videoTokenId: Int?
@@ -31,6 +35,7 @@ public struct BonsaiConfig: Codable, Sendable {
     case tensorNamespace = "tensor_namespace"
     case gdnActivationLayout = "gdn_activation_layout"
     case requiresRuntime = "requires_runtime"
+    case centredNorms = "centred_norms"
     case imageTokenId = "image_token_id"
     case videoTokenId = "video_token_id"
     case visionStartTokenId = "vision_start_token_id"
@@ -363,7 +368,9 @@ public struct BonsaiConfig: Codable, Sendable {
     if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
       object["schema_version"] == nil
     {
-      return try standard(object)
+      var config = try standard(object)
+      try JANGPack.apply(to: &config, raw: object, manifest: try JANGPack.manifest(in: directory))
+      return config
     }
     return try JSONDecoder().decode(BonsaiConfig.self, from: data)
   }
@@ -575,13 +582,15 @@ public struct BonsaiConfig: Codable, Sendable {
 
   private func validateRotated() throws {
     guard quantization.bits == 2, quantization.groupSize == 128,
-      quantization.mode == "affine", quantization.overrides.isEmpty
+      quantization.mode == "affine"
     else {
       throw BonsaiError.unsupportedModel(
-        "expected uniform 2-bit affine group-128 quantization, found \(quantization.bits)-bit "
-          + "\(quantization.mode) group-\(quantization.groupSize) over "
-          + "\(quantization.overrides.count) override(s)")
+        "expected 2-bit affine group-128 quantization, found \(quantization.bits)-bit "
+          + "\(quantization.mode) group-\(quantization.groupSize)")
     }
+    // A JANG repack records every module, the rotated ones at the pack width and the vision
+    // tower at its own, so an override is fine as long as it is something MLX can run.
+    try validateOverrides()
     for record in modules {
       guard record.dtype == "float16" else {
         throw BonsaiError.unsupportedModel(
@@ -608,6 +617,10 @@ public struct BonsaiConfig: Codable, Sendable {
         "\(modelType) packs carry no Hadamard rotation, but the config lists "
           + "\(modules.count) packed-module record(s)")
     }
+    try validateOverrides()
+  }
+
+  private func validateOverrides() throws {
     for (path, entry) in [("", quantization.default)] + quantization.overrides.map({ ($0, $1) }) {
       let label = path.isEmpty ? "the pack default" : path
       guard entry.mode == "affine" else {

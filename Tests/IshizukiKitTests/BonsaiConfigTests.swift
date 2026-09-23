@@ -145,7 +145,7 @@ struct BonsaiConfigTests {
     }
   }
 
-  @Test("a rotated pack still has to be uniform, because its kernels assume it")
+  @Test("a rotated pack keeps the ternary width as its default, because its kernels assume it")
   func rotatedStaysNarrow() {
     #expect(throws: BonsaiError.self) {
       try load(flagshipPack.replacingOccurrences(of: "\"bits\": 2", with: "\"bits\": 4"))

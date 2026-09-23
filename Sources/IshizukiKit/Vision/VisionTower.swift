@@ -16,7 +16,10 @@ public final class VisionTower: @unchecked Sendable {
   private let merger: PatchMerger
   private let gridPerSide: Int
 
-  public init(config: BonsaiConfig.VisionConfig, store: WeightStore) throws {
+  public init(
+    config: BonsaiConfig.VisionConfig, store: WeightStore,
+    quantization: BonsaiConfig.QuantizationConfig? = nil
+  ) throws {
     self.config = config
 
     let rawWeight = try store("vision_tower.patch_embed.proj.weight")
@@ -38,10 +41,11 @@ public final class VisionTower: @unchecked Sendable {
     for index in 0..<config.depth {
       built.append(
         try VisionBlock(
-          config: config, prefix: "vision_tower.blocks.\(index)", store: store))
+          config: config, prefix: "vision_tower.blocks.\(index)", store: store,
+          quantization: quantization))
     }
     self.blocks = built
-    self.merger = try PatchMerger(config: config, store: store)
+    self.merger = try PatchMerger(config: config, store: store, quantization: quantization)
   }
 
   public func callAsFunction(patches: MLXArray, grid: (t: Int, h: Int, w: Int)) -> MLXArray {
@@ -177,24 +181,30 @@ public final class VisionTower: @unchecked Sendable {
 final class VisionBlock: @unchecked Sendable {
   private let norm1: DenseLayerNorm
   private let norm2: DenseLayerNorm
-  private let qkv: DenseLinear
-  private let proj: DenseLinear
-  private let fc1: DenseLinear
-  private let fc2: DenseLinear
+  private let qkv: any Projection
+  private let proj: any Projection
+  private let fc1: any Projection
+  private let fc2: any Projection
   private let numHeads: Int
   private let headDim: Int
   private let scale: Float
 
-  init(config: BonsaiConfig.VisionConfig, prefix: String, store: WeightStore) throws {
+  init(
+    config: BonsaiConfig.VisionConfig, prefix: String, store: WeightStore,
+    quantization: BonsaiConfig.QuantizationConfig?
+  ) throws {
     self.numHeads = config.numHeads
     self.headDim = config.hiddenSize / config.numHeads
     self.scale = 1.0 / Float(headDim).squareRoot()
     self.norm1 = try DenseLayerNorm(store: store, prefix: prefix + ".norm1")
     self.norm2 = try DenseLayerNorm(store: store, prefix: prefix + ".norm2")
-    self.qkv = try DenseLinear(store: store, prefix: prefix + ".attn.qkv")
-    self.proj = try DenseLinear(store: store, prefix: prefix + ".attn.proj")
-    self.fc1 = try DenseLinear(store: store, prefix: prefix + ".mlp.linear_fc1")
-    self.fc2 = try DenseLinear(store: store, prefix: prefix + ".mlp.linear_fc2")
+    func linear(_ name: String) throws -> any Projection {
+      try visionLinear(store: store, prefix: prefix + name, quantization: quantization)
+    }
+    self.qkv = try linear(".attn.qkv")
+    self.proj = try linear(".attn.proj")
+    self.fc1 = try linear(".mlp.linear_fc1")
+    self.fc2 = try linear(".mlp.linear_fc2")
   }
 
   func callAsFunction(_ x: MLXArray, rotary: MLXArray) -> MLXArray {
@@ -233,18 +243,61 @@ final class VisionBlock: @unchecked Sendable {
 
 final class PatchMerger: @unchecked Sendable {
   private let norm: DenseLayerNorm
-  private let fc1: DenseLinear
-  private let fc2: DenseLinear
+  private let fc1: any Projection
+  private let fc2: any Projection
   private let mergedSize: Int
 
-  init(config: BonsaiConfig.VisionConfig, store: WeightStore) throws {
+  init(
+    config: BonsaiConfig.VisionConfig, store: WeightStore,
+    quantization: BonsaiConfig.QuantizationConfig?
+  ) throws {
     self.mergedSize = config.hiddenSize * config.spatialMergeSize * config.spatialMergeSize
     self.norm = try DenseLayerNorm(store: store, prefix: "vision_tower.merger.norm")
-    self.fc1 = try DenseLinear(store: store, prefix: "vision_tower.merger.linear_fc1")
-    self.fc2 = try DenseLinear(store: store, prefix: "vision_tower.merger.linear_fc2")
+    self.fc1 = try visionLinear(
+      store: store, prefix: "vision_tower.merger.linear_fc1", quantization: quantization)
+    self.fc2 = try visionLinear(
+      store: store, prefix: "vision_tower.merger.linear_fc2", quantization: quantization)
   }
 
   func callAsFunction(_ x: MLXArray) -> MLXArray {
     fc2(MLXNN.geluApproximate(fc1(norm(x).reshaped([-1, mergedSize]))))
+  }
+}
+
+/// A tower linear is dense in most packs; a JANG repack quantizes the wide ones and keeps each
+/// module's own bias beside the affine `.biases`, so the two names mean different things here.
+func visionLinear(
+  store: WeightStore, prefix: String, quantization: BonsaiConfig.QuantizationConfig?
+) throws -> any Projection {
+  guard store.has(prefix + ".scales") else {
+    return try DenseLinear(store: store, prefix: prefix)
+  }
+  guard let quantization else {
+    throw BonsaiError.unsupportedModel("\(prefix) is quantized but the pack gives no widths")
+  }
+  let entry = quantization.module(prefix)
+  let linear = try PackedLinear(
+    weight: store(prefix + ".weight"), scales: store(prefix + ".scales"),
+    biases: store(prefix + ".biases"), signs: nil, block: 0,
+    groupSize: entry.groupSize, bits: entry.bits)
+  return BiasedProjection(linear, bias: store.optional(prefix + ".bias"))
+}
+
+final class BiasedProjection: Projection, @unchecked Sendable {
+  private let base: any Projection
+  private let bias: MLXArray?
+
+  init(_ base: any Projection, bias: MLXArray?) {
+    self.base = base
+    self.bias = bias
+  }
+
+  var inputDim: Int { base.inputDim }
+  var outputDim: Int { base.outputDim }
+
+  func callAsFunction(_ x: MLXArray) -> MLXArray {
+    let y = base(x)
+    guard let bias else { return y }
+    return y + bias.asType(y.dtype)
   }
 }
