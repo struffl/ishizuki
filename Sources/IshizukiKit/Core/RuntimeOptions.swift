@@ -28,6 +28,7 @@ public enum ANEOffload: Equatable, Sendable {
   /// says whether to use them — and refuses a fraction the pack was not cut at.
   public static func apply(_ setting: ANEOffload?, pack: URL) throws {
     BonsaiRuntime.aneOffload = setting
+    BonsaiRuntime.aneBank = nil
     guard let setting else { return }
 
     guard let bank = ANEBank(pack: pack) else { throw Refusal.noSlices }
@@ -58,4 +59,8 @@ public enum BonsaiRuntime {
 
   // Set once the pack's slices are found, and read by the projections that can be split.
   public nonisolated(unsafe) static var aneBank: ANEBank?
+
+  // What the Neural Engine is asked to hold at once, kept under the ~4.5 GB where it stops
+  // holding slices and starts paging them.
+  public nonisolated(unsafe) static var aneBudgetBytes = 4 << 30
 }
