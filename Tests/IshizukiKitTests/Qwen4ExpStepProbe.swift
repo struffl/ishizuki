@@ -45,11 +45,14 @@ struct Qwen4ExpStepProbe {
       return (cache, logits[0..., -1, 0...].argMax(axis: -1))
     }
 
+    var emitted: [Int32] = []
     func serial() -> Double {
       var (cache, next) = prefilled()
+      emitted = []
       let start = Date()
       for _ in 0..<steps {
         let token = next.item(Int32.self)
+        emitted.append(token)
         let step = text(MLXArray([token]).reshaped([1, 1]), cache: cache)
         eval(step)
         next = step[0..., -1, 0...].argMax(axis: -1)
@@ -85,6 +88,7 @@ struct Qwen4ExpStepProbe {
     let pipeMs = min(pipelined(), pipelined())
     let buildMs = (0..<3).map { _ in graphBuild() }.min()!
     print(String(format: "serial    : %7.2f ms/step  %6.2f tok/s", serialMs, 1000 / serialMs))
+    print("greedy tokens: \(emitted.map(String.init).joined(separator: " "))")
     print(String(format: "pipelined : %7.2f ms/step  %6.2f tok/s", pipeMs, 1000 / pipeMs))
     print(String(format: "graph build, host only, incl. engram fetch: %7.2f ms", buildMs))
 

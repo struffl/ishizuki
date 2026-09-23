@@ -74,12 +74,21 @@ public final class DecoderLayer: @unchecked Sendable {
     _ module: String, config: BonsaiConfig.TextConfig, count: Int,
     factory: PackedModuleFactory, store: WeightStore
   ) throws -> GatedResidual {
-    GatedResidual(
+    // The streams are float32, and a dense weight left narrower is widened again on every call.
+    func projection(_ path: String) throws -> any Projection {
+      let built = try factory.projection(module + path)
+      guard let dense = built as? DenseLinear, dense.weight.dtype != .float32 else { return built }
+      let weight = dense.weight.asType(.float32)
+      let bias = dense.bias?.asType(.float32)
+      eval([weight] + (bias.map { [$0] } ?? []))
+      return DenseLinear(weight: weight, bias: bias)
+    }
+    return GatedResidual(
       norm: try store(factory.tensorPrefix + module + ".hc_norm.weight"),
-      down: try factory.projection(module + ".input_mix_weight_down"),
-      up: try factory.projection(module + ".input_mix_weight_up"),
+      down: try projection(".input_mix_weight_down"),
+      up: try projection(".input_mix_weight_up"),
       inject: store.has(factory.tensorPrefix + module + ".block_inject_weight.weight")
-        ? try factory.projection(module + ".block_inject_weight") : nil,
+        ? try projection(".block_inject_weight") : nil,
       count: count, width: config.hiddenSize, eps: config.rmsNormEps)
   }
 
