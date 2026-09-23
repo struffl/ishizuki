@@ -82,8 +82,7 @@ public enum EXL3Kernels {
   public static func apply(_ x: MLXArray, _ t: EXL3Tensor) -> MLXArray {
     let shape = x.shape
     let rows = x.size / t.inputDim
-    let xh = rotate(x.reshaped([rows, t.inputDim]) * t.inputScales.asType(x.dtype))
-      .asType(x.dtype)
+    let xh = rotate(x.reshaped([rows, t.inputDim]), t.inputScales, before: true, to: x.dtype)
     var yh: MLXArray
     if matvecRows.contains(rows), let y = matvec(xh, t) {
       yh = y
@@ -96,15 +95,32 @@ public enum EXL3Kernels {
     } else {
       return MLXArray.zeros(Array(shape.dropLast()) + [t.outputDim], dtype: x.dtype)
     }
-    let y = rotate(yh) * t.outputScales.asType(.float32)
-    return y.asType(x.dtype).reshaped(Array(shape.dropLast()) + [t.outputDim])
+    let y = rotate(yh, t.outputScales, before: false, to: x.dtype)
+    return y.reshaped(Array(shape.dropLast()) + [t.outputDim])
   }
 
-  static func rotate(_ x: MLXArray) -> MLXArray {
-    let shape = x.shape
-    return hadamardTransform(
-      x.asType(.float32).reshaped([-1, 128]), scale: 1 / Float(128).squareRoot()
-    ).reshaped(shape)
+  static func rotate(
+    _ x: MLXArray, _ scales: MLXArray, before: Bool, to dtype: DType, fused: Bool = true
+  ) -> MLXArray {
+    let rows = x.dim(0)
+    let width = x.dim(1)
+    #if canImport(Metal)
+      if fused, let rotateKernel {
+        return rotateKernel(
+          [x, scales],
+          template: [("ROWS", rows), ("D", width), ("PRE", before), ("OT", dtype)],
+          grid: (rows * width / 128 * 32, 1, 1),
+          threadGroup: (256, 1, 1),
+          outputShapes: [[rows, width]],
+          outputDTypes: [dtype])[0]
+      }
+    #endif
+    var h = x.asType(.float32)
+    if before { h = h * scales.asType(.float32) }
+    h = hadamardTransform(h.reshaped([-1, 128]), scale: 1 / Float(128).squareRoot())
+      .reshaped([rows, width])
+    if !before { h = h * scales.asType(.float32) }
+    return h.asType(dtype)
   }
 
   private static func template(_ t: EXL3Tensor) -> [(String, any KernelTemplateArg)] {
@@ -199,6 +215,54 @@ public enum EXL3Kernels {
         uint lane = thread_index_in_simdgroup;
         uint r0 = (lane % 4) * 2;
       """
+
+    private static let rotateKernel: MLXFast.MLXFastKernel? = MLXFast.metalKernel(
+      name: "exl3_rotate",
+      inputNames: ["x", "s"],
+      outputNames: ["y"],
+      source: """
+          uint lane = thread_index_in_simdgroup;
+          uint block = thread_position_in_grid.x / 32;
+          if (block >= ROWS * (D / 128)) return;
+          uint base = block * 128 + lane * 4;
+          uint col = (block % (D / 128)) * 128 + lane * 4;
+          float v0 = x[base], v1 = x[base + 1], v2 = x[base + 2], v3 = x[base + 3];
+          if (PRE) {
+            v0 *= float(s[col]);
+            v1 *= float(s[col + 1]);
+            v2 *= float(s[col + 2]);
+            v3 *= float(s[col + 3]);
+          }
+          float a0 = v0 + v1, a1 = v0 - v1, a2 = v2 + v3, a3 = v2 - v3;
+          v0 = a0 + a2;
+          v2 = a0 - a2;
+          v1 = a1 + a3;
+          v3 = a1 - a3;
+          for (uint m = 1; m < 32; m <<= 1) {
+            float p0 = simd_shuffle_xor(v0, m), p1 = simd_shuffle_xor(v1, m);
+            float p2 = simd_shuffle_xor(v2, m), p3 = simd_shuffle_xor(v3, m);
+            bool hi = (lane & m) != 0;
+            v0 = hi ? p0 - v0 : v0 + p0;
+            v1 = hi ? p1 - v1 : v1 + p1;
+            v2 = hi ? p2 - v2 : v2 + p2;
+            v3 = hi ? p3 - v3 : v3 + p3;
+          }
+          constexpr float r = 0.08838834764831845f;
+          v0 *= r;
+          v1 *= r;
+          v2 *= r;
+          v3 *= r;
+          if (!PRE) {
+            v0 *= float(s[col]);
+            v1 *= float(s[col + 1]);
+            v2 *= float(s[col + 2]);
+            v3 *= float(s[col + 3]);
+          }
+          y[base] = static_cast<OT>(v0);
+          y[base + 1] = static_cast<OT>(v1);
+          y[base + 2] = static_cast<OT>(v2);
+          y[base + 3] = static_cast<OT>(v3);
+        """)
 
     private static let dequantizeKernel: MLXFast.MLXFastKernel? = MLXFast.metalKernel(
       name: "exl3_dequantize",

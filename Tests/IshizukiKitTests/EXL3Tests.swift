@@ -97,6 +97,23 @@ struct EXL3Tests {
     }
   }
 
+  @Test("the fused rotation agrees with MLX's Hadamard on both sides of the matvec")
+  func rotationMatchesHadamard() {
+    for (rows, width) in [(1, 5120), (7, 1024), (40, 256)] {
+      let x = MLXRandom.normal([rows, width], key: MLXRandom.key(5))
+      let s = MLXRandom.normal([width], key: MLXRandom.key(6)).asType(.float16)
+      let scale = 1 / Float(128).squareRoot()
+      let before = hadamardTransform((x * s.asType(.float32)).reshaped([-1, 128]), scale: scale)
+        .reshaped([rows, width])
+      let after = hadamardTransform(x.reshaped([-1, 128]), scale: scale)
+        .reshaped([rows, width]) * s.asType(.float32)
+      let pre = EXL3Kernels.rotate(x, s, before: true, to: .float32)
+      let post = EXL3Kernels.rotate(x, s, before: false, to: .float32)
+      #expect(abs(pre - before).max().item(Float.self) < 1e-4)
+      #expect(abs(post - after).max().item(Float.self) < 1e-4)
+    }
+  }
+
   @Test("an exllamav3 config reads as an EXL3 pack")
   func configReadsAsEXL3() throws {
     let object: [String: Any] = [
