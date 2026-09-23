@@ -4,7 +4,7 @@
 
 *Ishizuki* is the bonsai style where the tree is grown over rock, its roots gripping the stone.
 
-Native macOS inference engine *originally% for **Ternary Bonsai 2 27B** on [MLX Swift](https://github.com/ml-explore/mlx-swift),
+Native macOS inference engine *originally* for **Ternary Bonsai 2 27B** on [MLX Swift](https://github.com/ml-explore/mlx-swift),
 now supports GGUF for most Qwen architectures, Gemma 4 architectures, Qwen next-gen MoEs, and more!
 2-bit Hadamard-rotated weights, vision, tool calling, OpenAI + Anthropic APIs. No Python.
 
