@@ -15,7 +15,7 @@ struct HostGapProbe {
   func probe() throws {
     let path = ProcessInfo.processInfo.environment["ISHIZUKI_PACK"]!
     let steps = Int(ProcessInfo.processInfo.environment["ISHIZUKI_STEPS"] ?? "") ?? 64
-    let model = try BonsaiModel(directory: URL(filePath: path))
+    let model = try BonsaiModel(path: URL(filePath: path))
     let prompt = model.tokenizer.encode("Write a short story about a lighthouse keeper.")
 
     func prefilled() -> (ModelCache, MLXArray) {
@@ -104,25 +104,29 @@ struct HostGapProbe {
       return (all.count, min(once(), once()))
     }
 
-    func generator(pipelined: Bool) -> ([Int], Double) {
+    func generator(pipelined: Bool, options: SamplingOptions) -> ([Int], Double) {
+      let saved = BonsaiRuntime.pipelineDecode
       BonsaiRuntime.pipelineDecode = pipelined
-      defer { BonsaiRuntime.pipelineDecode = true }
+      defer { BonsaiRuntime.pipelineDecode = saved }
       let result = Generator(model: model, politeness: .normal).generate(
-        promptTokens: prompt, options: .greedy, maxTokens: steps)
+        promptTokens: prompt, options: options, maxTokens: steps)
       return (result.tokens, result.stats.generationTokensPerSecond)
     }
-    _ = generator(pipelined: true)
-    var rates: [Bool: Double] = [:]
-    var outputs: [Bool: [Int]] = [:]
-    for round in 0..<4 {
-      let pipelined = round % 2 == 1
-      let (tokens, rate) = generator(pipelined: pipelined)
-      rates[pipelined] = max(rates[pipelined] ?? 0, rate)
-      outputs[pipelined] = tokens
+    let samplers: [(String, SamplingOptions)] = [
+      ("greedy", .greedy),
+      ("app default", SamplingOptions(temperature: 0.7, minP: 0.05, seed: 3)),
+      ("penalties", SamplingOptions(
+        temperature: 0.7, minP: 0.05, repetitionPenalty: 1.1, presencePenalty: 0.3, seed: 3)),
+    ]
+    for (label, options) in samplers {
+      _ = generator(pipelined: true, options: options)
+      var rates: [Bool: Double] = [:]
+      for round in 0..<4 {
+        let pipelined = round % 2 == 1
+        rates[pipelined] = max(rates[pipelined] ?? 0, generator(pipelined: pipelined, options: options).1)
+      }
+      print(String(format: "Generator %-12@ serial %6.2f  pipelined %6.2f tok/s", label, rates[false]!, rates[true]!))
     }
-    print(String(format: "Generator serial   : %6.2f tok/s", rates[false]!))
-    print(String(format: "Generator pipelined: %6.2f tok/s", rates[true]!))
-    print("Generator tokens identical: \(outputs[false]! == outputs[true]!)")
 
     _ = sync()
     let (a, syncSeconds) = sync()

@@ -29,6 +29,7 @@ public struct GenerationResult: Sendable {
   public var stats: GenerationStats
   public var stoppedOnEOS: Bool
   public var cancelled: Bool = false
+  public var speculative: SpeculativeStats?
 }
 
 public final class Generator: @unchecked Sendable {
@@ -36,6 +37,7 @@ public final class Generator: @unchecked Sendable {
   public var kvConfig: KVCacheConfig
   public var prefillChunkSize: Int
   public var politeness: Politeness.Level = .adaptive
+  var lookup: (() -> Drafter)?
 
   public init(
     model: BonsaiModel, prefillChunkSize: Int? = nil,
@@ -78,6 +80,10 @@ public final class Generator: @unchecked Sendable {
     let promptStart = Date()
     var logits: MLXArray
     var prefilled = 0
+    let drafting = drafts(
+      options: options, constraint: constraint, promptEmbeddings: promptEmbeddings,
+      positions: positions)
+    var observed: (MLXArray, [Int])?
 
     let prefillTotal = max(0, promptTokens.count - cachedPrefixLength)
     onProgress?(.prefill(done: 0, total: prefillTotal))
@@ -113,8 +119,16 @@ public final class Generator: @unchecked Sendable {
         if let stop = checkpointAt, index < stop, stop < end { end = stop }
         let chunk = MLXArray(promptTokens[index..<end].map { Int32($0) })
           .reshaped([1, end - index])
-        last = model.text.hidden(inputs: chunk, cache: cache)
+        let trunk = model.text.trunk(inputs: chunk, cache: cache)
+        last = model.text.normed(trunk)
         eval(last!)
+        if let mtp = drafting?.mtp {
+          if end < promptTokens.count {
+            mtp.observe(hidden: trunk, nextTokens: Array(promptTokens[(index + 1)...end]))
+          } else {
+            observed = (trunk, Array(promptTokens[(index + 1)..<end]))
+          }
+        }
         index = end
         prefilled = index - cachedPrefixLength
         onProgress?(.prefill(done: prefilled, total: prefillTotal))
@@ -136,6 +150,21 @@ public final class Generator: @unchecked Sendable {
 
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
+
+    if let drafting {
+      let decoded = speculate(
+        drafting, logits: logits, observed: observed, cache: cache, sampler: sampler,
+        promptTokens: promptTokens, maxTokens: maxTokens, detokenizer: &detokenizer,
+        isCancelled: isCancelled, onProgress: onProgress, onToken: onToken)
+      return GenerationResult(
+        tokens: decoded.generated, text: decoded.text,
+        stats: GenerationStats(
+          promptTokens: promptTokens.count - cachedPrefixLength,
+          generatedTokens: decoded.generated.count, promptSeconds: promptSeconds,
+          generationSeconds: -generationStart.timeIntervalSinceNow),
+        stoppedOnEOS: decoded.stoppedOnEOS, cancelled: decoded.cancelled,
+        speculative: decoded.stats)
+    }
 
     func stepPositions() -> MLXArray? {
       decodePosition.map { MLXArray([Int32($0), Int32($0), Int32($0)]).reshaped([3, 1]) }

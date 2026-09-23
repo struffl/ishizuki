@@ -161,6 +161,24 @@ pick. A constrained decode still runs serially: it needs the allowed set on the 
 Same tokens, and the cache is left exactly where the serial loop leaves it. Bonsai 2-bit, M1 Max,
 2026-09-23; `BonsaiRuntime.pipelineDecode` turns it off.
 
+## Drafting in a served turn
+
+`Generator` can draft inside a served turn: prompt lookup when the reply repeats the context,
+the pack's MTP head otherwise, verified a block at a time, exact for greedy and for sampling
+(a rejected draft is replaced from the residual distribution). It is **off by default**
+(`BonsaiRuntime.speculativeDecode`) because on the IQ2_XS GGUF it does not pay yet:
+
+| Qwen3.8-27B IQ2_XS GGUF, served turn | drafting off | drafting on | tokens / round |
+|---|---|---|---|
+| prose, greedy | 11.45 | 10.56 | 1.76 (MTP) |
+| prose, temp 0.7 min-p 0.05 | 11.42 | 10.23 | 1.71 |
+| code edit, greedy | 10.14 | 11.67 | 3.71 (lookup) |
+| code edit, temp 0.7 min-p 0.05 | 10.13 | 11.39 | 3.71 |
+
+A GGUF forward costs 99 ms for one row, 121 for two and 300 for eight, so a long lookup block
+buys little, and an MTP round pays a replay on every rejection plus a full-vocabulary draft head.
+M1 Max, 2026-09-23.
+
 ## Speculative verify
 
 MLX's affine matmul costs close to one full weight read per row until it switches to its tiled

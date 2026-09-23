@@ -13,14 +13,18 @@ struct SpecGainProbe {
   func probe() throws {
     let path = ProcessInfo.processInfo.environment["ISHIZUKI_PACK"]!
     let drafter = ProcessInfo.processInfo.environment["ISHIZUKI_DRAFTER"] ?? "ngram"
-    for draft in [4, 7] {
-      for enabled in [false, true] {
+    let env = ProcessInfo.processInfo.environment
+    let drafts = (env["ISHIZUKI_DRAFTS"] ?? "4,7").split(separator: ",").compactMap { Int($0) }
+    let kernels = env["ISHIZUKI_KERNEL"].map { [$0 == "1"] } ?? [false, true]
+    for draft in drafts {
+      for enabled in kernels {
         BonsaiRuntime.useVerifyMatmul = enabled
         print("== draft \(draft), verify kernel \(enabled ? "on" : "off")")
         var options = SpecBench.Options(model: URL(filePath: path))
         options.draftLength = draft
         options.drafter = drafter
         options.maxTokens = 160
+        options.prompt = env["ISHIZUKI_PROMPT"].flatMap { $0.isEmpty ? nil : $0 }
         try SpecBench.run(options) { print($0) }
       }
     }
