@@ -95,27 +95,29 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   }
 
   /// Codes, scales and biases of `rows` stored rows, widened back to what the model reads.
-  func decode(_ pointer: UnsafeRawPointer, rows: Int) throws -> [Float16] {
+  /// The halves are carried as their bits and viewed as fp16 inside MLX: Swift has no Float16
+  /// on x86_64, and a universal build of the phone app compiles that slice too.
+  func decode(_ pointer: UnsafeRawPointer, rows: Int) throws -> MLXArray {
     let stride = try rowBytes
     let groupSize = groupSize ?? headDim
     let groups = headDim / groupSize
-    var values = [Float16](repeating: 0, count: rows * headDim)
-    values.withUnsafeMutableBufferPointer { out in
-      for row in 0..<rows {
-        let base = pointer + row * stride
-        let codes = base.assumingMemoryBound(to: UInt8.self)
-        let affine = UnsafeRawPointer(base + headDim)
-        for group in 0..<groups {
-          let scale = Float(affine.loadUnaligned(fromByteOffset: group * 2, as: Float16.self))
-          let bias = Float(
-            affine.loadUnaligned(fromByteOffset: (groups + group) * 2, as: Float16.self))
-          for i in (group * groupSize)..<((group + 1) * groupSize) {
-            out[row * headDim + i] = Float16(Float(codes[i]) * scale + bias)
-          }
-        }
+    var codes = [UInt8](repeating: 0, count: rows * headDim)
+    var halves = [UInt16](repeating: 0, count: rows * groups * 2)
+    for row in 0..<rows {
+      let base = pointer + row * stride
+      codes.withUnsafeMutableBytes {
+        $0.baseAddress!.advanced(by: row * headDim).copyMemory(from: base, byteCount: headDim)
+      }
+      halves.withUnsafeMutableBytes {
+        $0.baseAddress!.advanced(by: row * groups * 4)
+          .copyMemory(from: base + headDim, byteCount: groups * 4)
       }
     }
-    return values
+    let affine = MLXArray(halves, [rows, 2, groups]).view(dtype: .float16).asType(.float32)
+    let scale = affine[0..., 0, 0...].expandedDimensions(axis: -1)
+    let bias = affine[0..., 1, 0...].expandedDimensions(axis: -1)
+    let values = MLXArray(codes, [rows, groups, groupSize]).asType(.float32) * scale + bias
+    return values.reshaped([rows, headDim])
   }
 
   public static let layoutFile = "engrams/layout.json"
@@ -255,7 +257,7 @@ public final class EngramStore: @unchecked Sendable {
       return buffers[front].array(shape: shape, dtype: try layout.type)
     }
     let values = try layout.decode(buffers[front].pointer, rows: inFlight.rows)
-    return MLXArray(values, shape).asType(try layout.type)
+    return values.reshaped(shape).asType(try layout.type)
   }
 
   /// Fetches and waits, for the caller that has nothing to overlap with.
