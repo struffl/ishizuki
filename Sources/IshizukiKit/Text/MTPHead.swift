@@ -33,7 +33,7 @@ public final class MTPHead: @unchecked Sendable {
         "the config declares no MTP layers (mtp_num_hidden_layers is 0)")
     }
     let prefix = factory.tensorPrefix + "mtp"
-    guard store.has(prefix + ".fc.weight") else {
+    guard store.has(prefix + ".fc.weight") || store.has(prefix + ".fc.trellis") else {
       throw BonsaiError.missingComponent(
         "the config declares \(count) MTP layer(s) but the pack ships no \(prefix).* tensors")
     }
@@ -50,7 +50,8 @@ public final class MTPHead: @unchecked Sendable {
     var built: [DecoderLayer] = []
     for layer in 0..<count {
       let path = "mtp.layers.\(layer)"
-      guard store.has(factory.tensorPrefix + path + ".self_attn.q_proj.weight") else {
+      let query = factory.tensorPrefix + path + ".self_attn.q_proj"
+      guard store.has(query + ".weight") || store.has(query + ".trellis") else {
         throw BonsaiError.unsupportedModel(
           "MTP layer \(layer) is not a full-attention layer; this runtime drafts only with "
             + "attention heads")

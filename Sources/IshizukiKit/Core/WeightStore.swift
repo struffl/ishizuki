@@ -41,6 +41,21 @@ public final class WeightStore: @unchecked Sendable {
 
   public func ggml(_ name: String) -> GGUFBlocks? { ggmlArrays[name] }
 
+  public func canonical(zeroCentredNorms: Bool) -> WeightStore {
+    let names = Array(arrays.keys)
+    guard TensorNaming.isHuggingFaceLayout(names) else { return self }
+    var renamed: [String: MLXArray] = [:]
+    renamed.reserveCapacity(arrays.count)
+    for (name, array) in arrays {
+      var tensor = TensorNaming.relayout(name, array, zeroCentredNorms: zeroCentredNorms)
+      if tensor.dtype != array.dtype { tensor = tensor.asType(.float16) }
+      renamed[TensorNaming.canonical(name)] = tensor
+    }
+    return WeightStore(
+      arrays: renamed, ggml: ggmlArrays, valueHeadLayout: valueHeadLayout,
+      experts: expertStores, engrams: engrams)
+  }
+
   /// The routed experts of one layer, when the pack keeps them beside itself rather than in
   /// the shards. Nil means every expert is already in `arrays`.
   public func experts(layer: Int) -> ExpertStore? { expertStores[layer] }
@@ -233,7 +248,7 @@ public struct PackedModuleFactory {
     if let blocks = store.ggml(key + ".weight") {
       return PackedEmbedding(ggml: blocks)
     }
-    if dense {
+    if dense || (!store.has(key + ".scales") && store.has(key + ".weight")) {
       return PackedEmbedding(dense: try store(key + ".weight"), dtype: activationDType)
     }
     let block: Int

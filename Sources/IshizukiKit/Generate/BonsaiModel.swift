@@ -25,9 +25,14 @@ public final class BonsaiModel: @unchecked Sendable {
   ) throws {
     let config = try BonsaiConfig.load(directory: directory)
     try config.validate()
+    var store = try WeightStore(directory: directory)
+    if config.profile == .exl3 {
+      store = store.canonical(
+        zeroCentredNorms: TensorNaming.zeroCentredNormModelTypes.contains(config.modelType))
+    }
     // A repacked sparse model keeps its routed experts beside the shards; opening them here
     // is what makes the layers stream rather than load.
-    var store = try WeightStore(directory: directory)
+    store = try store
       .openingExperts(at: directory, slots: BonsaiRuntime.expertSlots)
       .openingEngrams(at: directory, capacity: BonsaiRuntime.engramRows)
     if let centred = config.centredNorms {
