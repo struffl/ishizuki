@@ -40,7 +40,7 @@ final class ServerSettings {
     kvWindow = defaults.object(forKey: "kvWindow") as? Int ?? 128
     idleTimeout = defaults.object(forKey: "idleTimeout") as? Double ?? 120
     evictTimeout = defaults.object(forKey: "evictTimeout") as? Double ?? 0
-    politeness = defaults.object(forKey: "politeness") as? String ?? "adaptive"
+    politeness = defaults.object(forKey: "politeness") as? String ?? "normal"
     contextScale = defaults.object(forKey: "contextScale") as? Double ?? 1
     prefixCacheGB = defaults.object(forKey: "prefixCacheGB") as? Double ?? 8
     wireGB = defaults.object(forKey: "wireGB") as? Double ?? 0

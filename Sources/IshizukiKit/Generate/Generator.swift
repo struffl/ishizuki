@@ -36,13 +36,13 @@ public final class Generator: @unchecked Sendable {
   public let model: BonsaiModel
   public var kvConfig: KVCacheConfig
   public var prefillChunkSize: Int
-  public var politeness: Politeness.Level = .adaptive
+  public var politeness: Politeness.Level = .normal
   var lookup: (() -> Drafter)?
 
   public init(
     model: BonsaiModel, prefillChunkSize: Int? = nil,
     kvConfig: KVCacheConfig = KVCacheConfig(),
-    politeness: Politeness.Level = .adaptive
+    politeness: Politeness.Level = .normal
   ) {
     self.model = model
     self.politeness = politeness

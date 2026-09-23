@@ -43,7 +43,7 @@ public final class APIServer: @unchecked Sendable {
     thinking: Bool = true, samplingOptions: SamplingOptions = SamplingOptions(),
     kvConfig: KVCacheConfig = KVCacheConfig(),
     residency: ResidencyManager.Options = ResidencyManager.Options(),
-    politeness: Politeness.Level = .adaptive,
+    politeness: Politeness.Level = .normal,
     ropeScaling: RopeScaling = .none,
     budget: MemoryBudget? = nil,
     prefixStore: PrefixStore? = nil,

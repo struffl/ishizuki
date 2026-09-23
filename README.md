@@ -230,14 +230,17 @@ reservation in Settings claims memory within the ceiling; it cannot raise it.
 
 ## Politeness
 
-Default `adaptive`: utility QoS, quarter-size prefill chunks (shorter GPU
-submissions), and backoff under thermal pressure or Low Power Mode. Costs ~6% prefill and ~0.5%
-decode.
+Default `normal`: user-initiated QoS and full-size prefill chunks. `adaptive` trades some
+speed for sharing the machine: utility QoS, quarter-size prefill chunks (shorter GPU
+submissions), and backoff under thermal pressure or Low Power Mode. On a resident pack that
+costs ~6% prefill and ~0.5% decode; on a pack that streams its experts the quarter chunks cost
+far more, because each chunk reads every expert it routes to (37 tok/s prefill rather than 66
+on the 125B-A6B).
 
 | Level | Prefill | Decode |
 |---|---|---|
-| `normal` | 138.9 tok/s | 20.1 tok/s |
-| `adaptive` (default) | 130.3 tok/s | 20.0 tok/s |
+| `normal` (default) | 138.9 tok/s | 20.1 tok/s |
+| `adaptive` | 130.3 tok/s | 20.0 tok/s |
 | `background` | — | **>90× slower** |
 
 ## Sampling
