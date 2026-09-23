@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
+import MLX
 
 public enum ANEOffload: Equatable, Sendable {
   // Time both halves on this machine and split them where they finish together.
@@ -58,6 +59,10 @@ public enum BonsaiRuntime {
   /// slots means fewer reads and more resident bytes; this is the whole memory dial for a
   /// streamed model.
   public nonisolated(unsafe) static var expertSlots = 16
+
+  /// Handed each sparse layer's chosen experts, still unevaluated, when set. A probe records
+  /// routes with it; nothing in the runtime sets it.
+  public nonisolated(unsafe) static var onRoute: ((Int, MLXArray) -> Void)?
 
   /// Rows of the n-gram table a single fetch may ask for. A token costs one row per head, so
   /// this is the prefill chunk times the head count, and the buffer it sizes is small enough

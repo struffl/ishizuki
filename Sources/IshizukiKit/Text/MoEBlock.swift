@@ -127,6 +127,7 @@ public final class MoEBlock: FeedForward, @unchecked Sendable {
     let gates = softmax(router(x).asType(.float32), axis: -1, precise: true)
     let chosen = argPartition(gates, kth: gates.dim(-1) - topK, axis: -1)[
       .ellipsis, (gates.dim(-1) - topK)...]
+    BonsaiRuntime.onRoute?(layer, chosen)
     var scores = takeAlong(gates, chosen, axis: -1)
     if normalizeWeights {
       scores = scores / scores.sum(axis: -1, keepDims: true)
