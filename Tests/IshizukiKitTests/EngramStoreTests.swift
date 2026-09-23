@@ -5,6 +5,7 @@
 
 import Foundation
 import MLX
+import MLXRandom
 import Testing
 
 @testable import IshizukiKit
@@ -160,5 +161,83 @@ struct EngramStoreTests {
     #expect(throws: BonsaiError.self) { try store.prefetch(Array(0..<9)) }
     #expect(throws: BonsaiError.self) { _ = try store.take() }
     #expect(throws: BonsaiError.self) { _ = try store.embeddings(hashes: [[1, 2]]) }
+  }
+
+  /// A checkpoint that nests its table in the one layer that reads it, as upstream does.
+  private func nestedCheckpoint(at directory: URL, rows: Int, width: Int) throws -> MLXArray {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let prefix = "model.language_model.layers.1.ple.ple_embedding."
+    let table = MLXRandom.normal([rows, width]).asType(.bfloat16)
+    let half = rows / 2
+    try MLX.save(
+      arrays: [
+        prefix + "ngram_embedding.shard_0.weight": table[0..<half, 0...],
+        prefix + "ngram_embedding.shard_1.weight": table[half..., 0...],
+        prefix + "ngram_heads_vocab_sizes": MLXArray([Int64(half), Int64(rows - half)]),
+        prefix + "ngram_heads_offsets": MLXArray([Int64(0), Int64(half)]),
+        prefix + "layer_multipliers": MLXArray([Int64(3), Int64(5), Int64(7)]),
+      ], url: directory.appending(path: "model.safetensors"))
+    let config: [String: Any] = [
+      "model_type": "qwen4_exp",
+      "text_config": ["ngram_size": 3, "eos_token_id": 9, "num_hidden_layers": 2],
+    ]
+    try JSONSerialization.data(withJSONObject: config)
+      .write(to: directory.appending(path: "config.json"))
+    return table
+  }
+
+  @Test("finds a table nested in its layer, and leaves it out of the shards")
+  func nestedTable() throws {
+    let directory = temporary()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = directory.appending(path: "source")
+    let table = try nestedCheckpoint(at: source, rows: 300, width: 64)
+    let checkpoint = try SourceCheckpoint(directory: source)
+
+    #expect(EngramRepack.shards(in: checkpoint).count == 2)
+    #expect(checkpoint.tensorNames.allSatisfy(EngramRepack.isTable))
+    let plan = try #require(try EngramRepack.run(source: checkpoint, destination: directory))
+    #expect(plan.layout.multipliers == [3, 5, 7])
+    #expect(plan.layout.eosTokenId == 9)
+    #expect(plan.layout.bits == nil)
+
+    let store = try EngramStore(directory: directory, layout: plan.layout)
+    let got = try store.rows([0, 149, 150, 299])
+    let want = table[MLXArray([0, 149, 150, 299] as [Int32])].asType(.float16)
+    #expect(allClose(got, want).item(Bool.self))
+  }
+
+  @Test("8-bit rows come back within one step of each group's scale")
+  func eightBitRows() throws {
+    let directory = temporary()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = directory.appending(path: "source")
+    let table = try nestedCheckpoint(at: source, rows: 300, width: 160)
+    let checkpoint = try SourceCheckpoint(directory: source)
+
+    let plan = try #require(
+      try EngramRepack.run(source: checkpoint, destination: directory, bits: 8, groupSize: 32))
+    #expect(plan.layout.bits == 8)
+    #expect(try plan.layout.rowBytes == 160 + 5 * 4)
+    #expect(plan.byteCount == 300 * 180)
+
+    let decoded = try JSONDecoder().decode(
+      EngramLayout.self,
+      from: try Data(contentsOf: directory.appending(path: EngramLayout.layoutFile)))
+    #expect(decoded == plan.layout)
+
+    let store = try EngramStore(directory: directory, layout: decoded)
+    let picks: [Int32] = [0, 1, 150, 298, 299]
+    let got = try store.rows(picks.map(Int.init)).asType(.float32)
+    #expect(got.dtype == .float32)
+    #expect(got.shape == [picks.count, 160])
+    let want = table[MLXArray(picks)].asType(.float32)
+    let groups = want.reshaped([picks.count, 5, 32])
+    let step = (groups.max(axis: -1) - groups.min(axis: -1)) / 255
+    let error = abs(got - want).reshaped([picks.count, 5, 32]).max(axis: -1)
+    #expect(all(error .<= step * 0.51 + 1e-2).item(Bool.self))
+
+    let tokens = try store.embeddings(hashes: [[0, 1], [150, 7]])
+    #expect(tokens.shape == [2, decoded.width])
   }
 }

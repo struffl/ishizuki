@@ -22,27 +22,37 @@ public enum EngramRepack {
     public var byteCount: Int
   }
 
-  /// Whether a checkpoint carries a table at all.
+  /// Whether a checkpoint carries a table at all. A text-only graft keeps it at the top of the
+  /// model and upstream nests it in the one layer that reads it, so it is found by its tail.
   public static func shards(in source: SourceCheckpoint) -> [String] {
     source.tensorNames
-      .filter { $0.hasPrefix("model.ngram_embedding.shard_") && $0.hasSuffix(".weight") }
+      .filter { $0.contains("ngram_embedding.shard_") && $0.hasSuffix(".weight") }
       .sorted { order($0) < order($1) }
   }
 
+  /// The table and the buffers that address it, which never belong in a pack's shards.
+  public static func isTable(_ name: String) -> Bool {
+    name.contains("ngram_embedding.") || name.contains("ple_embedding.")
+  }
+
   private static func order(_ name: String) -> Int {
-    let digits = name.dropFirst("model.ngram_embedding.shard_".count).prefix { $0.isNumber }
-    return Int(digits) ?? 0
+    guard let range = name.range(of: "ngram_embedding.shard_") else { return 0 }
+    return Int(name[range.upperBound...].prefix { $0.isNumber }) ?? 0
   }
 
   public static func run(
     source: SourceCheckpoint, destination: URL, rowsPerPart: Int = rowsPerPart,
-    log: @escaping (String) -> Void = { _ in }
+    bits: Int? = nil, groupSize: Int = 32, log: @escaping (String) -> Void = { _ in }
   ) throws -> Plan? {
     let shardNames = shards(in: source)
     guard !shardNames.isEmpty else { return nil }
 
+    let names = source.tensorNames
     func buffer(_ name: String) throws -> [Int] {
-      try source.tensor("model.ple_embedding." + name).asArray(Int64.self).map(Int.init)
+      guard let full = names.first(where: { $0.hasSuffix("ple_embedding." + name) }) else {
+        throw BonsaiError.missingWeight("ple_embedding.\(name)")
+      }
+      return try source.tensor(full).asArray(Int64.self).map(Int.init)
     }
     let vocabSizes = try buffer("ngram_heads_vocab_sizes")
     let offsets = try buffer("ngram_heads_offsets")
@@ -73,7 +83,9 @@ public enum EngramRepack {
       ngramSize: ngramSize, heads: vocabSizes.count, headDim: headDim,
       vocabSizes: vocabSizes, offsets: offsets,
       parts: (addressable + rowsPerPart - 1) / rowsPerPart, rowsPerPart: rowsPerPart,
-      dtype: "float16", multipliers: multipliers, eosTokenId: eos)
+      dtype: "float16", multipliers: multipliers, eosTokenId: eos,
+      bits: bits, groupSize: bits == nil ? nil : groupSize)
+    let rowBytes = try layout.rowBytes
 
     let fm = FileManager.default
     let folder = destination.appending(path: "engrams")
@@ -107,9 +119,8 @@ public enum EngramRepack {
           openPart = part
           log("engrams: part \(part) of \(layout.parts)")
         }
-        let slice = shard[row..<(row + take), 0...].asType(.float16)
-        eval(slice)
-        try handle?.write(contentsOf: slice.asData().data)
+        let slice = shard[row..<(row + take), 0...]
+        try handle?.write(contentsOf: try encode(slice, bits: bits, groupSize: groupSize))
         row += take
         written += take
       }
@@ -120,6 +131,49 @@ public enum EngramRepack {
     try encoder.encode(layout).write(
       to: destination.appending(path: EngramLayout.layoutFile))
 
-    return Plan(layout: layout, byteCount: written * headDim * 2)
+    return Plan(layout: layout, byteCount: written * rowBytes)
+  }
+
+  /// A block of rows as the store reads them: fp16 as they are, or each row's 8-bit codes
+  /// followed by its groups' fp16 scales and then their biases.
+  static func encode(_ rows: MLXArray, bits: Int?, groupSize: Int) throws -> Data {
+    guard let bits else {
+      let wide = rows.asType(.float16)
+      eval(wide)
+      return wide.asData().data
+    }
+    guard bits == 8 else {
+      throw BonsaiError.unsupportedModel("an n-gram table is written at 8 bits or at 16")
+    }
+    let (wq, scales, biases) = quantized(
+      rows.asType(.float32), groupSize: groupSize, bits: 8, mode: .affine)
+    let s16 = scales.asType(.float16)
+    let b16 = (biases ?? MLXArray.zeros(like: scales)).asType(.float16)
+    eval(wq, s16, b16)
+    let count = rows.dim(0)
+    let width = rows.dim(1)
+    let affine = width / groupSize * 2
+    let codes = wq.asData().data
+    let scaleBytes = s16.asData().data
+    let biasBytes = b16.asData().data
+    var out = Data(count: count * (width + 2 * affine))
+    out.withUnsafeMutableBytes { target in
+      codes.withUnsafeBytes { c in
+        scaleBytes.withUnsafeBytes { sc in
+          biasBytes.withUnsafeBytes { bi in
+            for row in 0..<count {
+              let at = row * (width + 2 * affine)
+              target.baseAddress!.advanced(by: at)
+                .copyMemory(from: c.baseAddress!.advanced(by: row * width), byteCount: width)
+              target.baseAddress!.advanced(by: at + width)
+                .copyMemory(from: sc.baseAddress!.advanced(by: row * affine), byteCount: affine)
+              target.baseAddress!.advanced(by: at + width + affine)
+                .copyMemory(from: bi.baseAddress!.advanced(by: row * affine), byteCount: affine)
+            }
+          }
+        }
+      }
+    }
+    return out
   }
 }

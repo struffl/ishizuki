@@ -79,15 +79,18 @@ public final class Quantizer: @unchecked Sendable {
   /// the decode rate and buys a model the machine could not otherwise hold, so it is the
   /// caller's choice rather than a default.
   public let streamExperts: Bool
+  /// When set, the n-gram table is written affine-quantized at this width rather than at fp16.
+  public let engramBits: Int?
 
   private let onProgress: @Sendable (Progress) -> Void
 
   public init(
     source: SourceCheckpoint, profile: QuantProfile, destination: URL,
     shardLimit: Int = 4 << 30, calibrate: Bool = false, calibrationTokens: [[Int32]]? = nil,
-    streamExperts: Bool = false,
+    streamExperts: Bool = false, engramBits: Int? = nil,
     onProgress: @escaping @Sendable (Progress) -> Void = { _ in }
   ) {
+    self.engramBits = engramBits
     self.source = source
     self.profile = profile
     self.destination = destination
@@ -131,12 +134,12 @@ public final class Quantizer: @unchecked Sendable {
     report(.scanning, 0, 1, "reading the checkpoint", 0, "")
     // The n-gram table and the buffers that address it are lifted out beside the pack, not
     // written into its shards: four gigabytes of rows that a step reads eight of.
-    let engrams = try EngramRepack.run(source: source, destination: destination) { note in
+    let engrams = try EngramRepack.run(
+      source: source, destination: destination, bits: engramBits
+    ) { note in
       self.report(.writing, 0, 1, note, 0, "")
     }
-    let names = source.tensorNames.sorted().filter {
-      !$0.hasPrefix("model.ngram_embedding.") && !$0.hasPrefix("model.ple_embedding.")
-    }
+    let names = source.tensorNames.sorted().filter { !EngramRepack.isTable($0) }
     // Upstream checkpoints nest their towers differently from the packs this runtime reads.
     let canonical = TensorNaming.map(names)
     // A checkpoint MLX has already been through carries its scales and has had its

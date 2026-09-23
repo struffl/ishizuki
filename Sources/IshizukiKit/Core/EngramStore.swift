@@ -27,11 +27,18 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   /// may ship something else, and what it ships is what it was trained with.
   public var multipliers: [Int]
   public var eosTokenId: Int
+  /// Set when the rows are stored affine-quantized rather than at `dtype`: each row is its codes,
+  /// then a scale and a bias per group, all fp16. `dtype` is then what a fetch hands back.
+  public var bits: Int?
+  public var groupSize: Int?
 
   public init(
     ngramSize: Int, heads: Int, headDim: Int, vocabSizes: [Int], offsets: [Int],
-    parts: Int, rowsPerPart: Int, dtype: String, multipliers: [Int] = [], eosTokenId: Int = 0
+    parts: Int, rowsPerPart: Int, dtype: String, multipliers: [Int] = [], eosTokenId: Int = 0,
+    bits: Int? = nil, groupSize: Int? = nil
   ) {
+    self.bits = bits
+    self.groupSize = groupSize
     self.multipliers = multipliers
     self.eosTokenId = eosTokenId
     self.ngramSize = ngramSize
@@ -78,7 +85,37 @@ public struct EngramLayout: Codable, Sendable, Equatable {
   /// What one token's heads come to once they are laid side by side.
   public var width: Int { heads * headDim }
   public var rowBytes: Int {
-    get throws { headDim * (try type.size) }
+    get throws {
+      guard let bits else { return headDim * (try type.size) }
+      guard bits == 8, let groupSize, groupSize > 0, headDim % groupSize == 0 else {
+        throw BonsaiError.unsupportedModel("an n-gram table at \(bits) bits is not one this reads")
+      }
+      return headDim + headDim / groupSize * 4
+    }
+  }
+
+  /// Codes, scales and biases of `rows` stored rows, widened back to what the model reads.
+  func decode(_ pointer: UnsafeRawPointer, rows: Int) throws -> [Float16] {
+    let stride = try rowBytes
+    let groupSize = groupSize ?? headDim
+    let groups = headDim / groupSize
+    var values = [Float16](repeating: 0, count: rows * headDim)
+    values.withUnsafeMutableBufferPointer { out in
+      for row in 0..<rows {
+        let base = pointer + row * stride
+        let codes = base.assumingMemoryBound(to: UInt8.self)
+        let affine = UnsafeRawPointer(base + headDim)
+        for group in 0..<groups {
+          let scale = Float(affine.loadUnaligned(fromByteOffset: group * 2, as: Float16.self))
+          let bias = Float(
+            affine.loadUnaligned(fromByteOffset: (groups + group) * 2, as: Float16.self))
+          for i in (group * groupSize)..<((group + 1) * groupSize) {
+            out[row * headDim + i] = Float16(Float(codes[i]) * scale + bias)
+          }
+        }
+      }
+    }
+    return values
   }
 
   public static let layoutFile = "engrams/layout.json"
@@ -214,7 +251,11 @@ public final class EngramStore: @unchecked Sendable {
     if let failure { throw failure }
     let shape =
       inFlight.tokens.map { [$0, layout.width] } ?? [inFlight.rows, layout.headDim]
-    return buffers[front].array(shape: shape, dtype: try layout.type)
+    guard layout.bits != nil else {
+      return buffers[front].array(shape: shape, dtype: try layout.type)
+    }
+    let values = try layout.decode(buffers[front].pointer, rows: inFlight.rows)
+    return MLXArray(values, shape).asType(try layout.type)
   }
 
   /// Fetches and waits, for the caller that has nothing to overlap with.
