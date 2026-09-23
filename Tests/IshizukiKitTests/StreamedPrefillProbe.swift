@@ -21,6 +21,7 @@ struct StreamedPrefillProbe {
     let residency = ResidencyManager(
       options: .init(wiredBytes: (Int(env["ISHIZUKI_WIRED_GB"] ?? "") ?? 0) << 30))
     residency.wire()
+    Memory.cacheLimit = (Int(env["ISHIZUKI_CACHE_GB"] ?? "") ?? 2) << 30
     let model = try BonsaiModel(path: URL(filePath: env["ISHIZUKI_PREFILL_PACK"]!))
     let lengths = (env["ISHIZUKI_PREFILL_LENGTHS"] ?? "1024,2048,4096")
       .split(separator: ",").compactMap { Int($0) }

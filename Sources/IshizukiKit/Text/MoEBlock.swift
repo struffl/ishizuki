@@ -205,8 +205,8 @@ struct DenseExperts: ExpertSource, @unchecked Sendable {
 /// said what to read — so this is the one place a sparse layer stops being a pure graph.
 ///
 /// A prefill chunk routes to far more experts than a decode step, and usually to every expert
-/// a layer has, so the tokens are run in groups that fit the slots rather than all at once.
-/// Grouping changes no arithmetic: a token is read against its own experts either way.
+/// a layer has, so it is run expert by expert (`byExpert`); a decode step's few rows are run in
+/// groups that fit the slots. Neither changes the arithmetic: a token meets its own experts.
 struct StreamedExperts: ExpertSource {
   let store: ExpertStore
   let quants: [String: BonsaiConfig.ModuleQuant]
@@ -223,6 +223,10 @@ struct StreamedExperts: ExpertSource {
 
     let flatX = x.reshaped([rows, width])
     let flatChosen = chosen.reshaped([rows, topK])
+    if rows > Self.tokenMajorRows {
+      return try byExpert(flatX, asked: asked, topK: topK)
+        .reshaped(leading + [topK, width])
+    }
 
     var pieces: [MLXArray] = []
     var start = 0
@@ -245,6 +249,64 @@ struct StreamedExperts: ExpertSource {
     }
 
     return concatenated(pieces, axis: 0).reshaped(leading + [topK, width])
+  }
+
+  /// Past this many rows a chunk is run expert by expert rather than token by token. A decode
+  /// step or a drafted block routes to a few dozen experts and fits the slots in one group; a
+  /// prefill chunk routes to nearly the whole bank, and grouped by token it became hundreds of
+  /// groups a layer, each a sync and a round of reads.
+  static let tokenMajorRows = 8
+
+  /// Every (token, choice) pair of a chunk, taken in batches of whole experts that fit the
+  /// slots, so each expert is read once for the chunk and multiplies every token that chose it
+  /// in one gathered matmul. The answers come back in the order the pairs were asked.
+  private func byExpert(_ flatX: MLXArray, asked: [Int], topK: Int) throws -> MLXArray {
+    let byChoice = (0..<asked.count).sorted { (asked[$0], $0) < (asked[$1], $1) }
+    var done: [Int] = []
+    done.reserveCapacity(asked.count)
+    var outputs: [MLXArray] = []
+    var start = 0
+    while start < byChoice.count {
+      var experts: [Int] = []
+      var end = start
+      while end < byChoice.count {
+        let expert = asked[byChoice[end]]
+        if experts.last != expert {
+          if experts.count == store.slotCount { break }
+          experts.append(expert)
+        }
+        end += 1
+      }
+      let slotOf = Dictionary(
+        uniqueKeysWithValues: zip(experts, try store.residency(of: experts)))
+      // The gathered matmul walks a sorted index list faster, and it wants slots, not experts.
+      let pairs = byChoice[start..<end].sorted {
+        (slotOf[asked[$0]]!, $0) < (slotOf[asked[$1]]!, $1)
+      }
+      let tokens = MLXArray(pairs.map { Int32($0 / topK) })
+      let placed = MLXArray(pairs.map { Int32(slotOf[asked[$0]]!) })
+
+      func project(_ name: String, _ input: MLXArray) throws -> MLXArray {
+        let quant = quants[name]!
+        return gatherQuantizedMM(
+          input, try store.array(name + ".weight"),
+          scales: try store.array(name + ".scales"),
+          biases: try store.array(name + ".biases"),
+          rhsIndices: placed, transpose: true, groupSize: quant.groupSize, bits: quant.bits,
+          sortedIndices: true)
+      }
+      let input = flatX[tokens].expandedDimensions(axis: -2)
+      let hidden = silu(try project("gate_proj", input)) * (try project("up_proj", input))
+      let out = try project("down_proj", hidden).squeezed(axis: -2)
+      // The next batch reads into the same slots; this one has to be done with them first.
+      eval(out)
+      outputs.append(out)
+      done += pairs
+      start = end
+    }
+    var position = [Int32](repeating: 0, count: done.count)
+    for (index, pair) in done.enumerated() { position[pair] = Int32(index) }
+    return concatenated(outputs, axis: 0)[MLXArray(position)]
   }
 
   /// One group of tokens, small enough that every expert they route to is in a slot at once.
