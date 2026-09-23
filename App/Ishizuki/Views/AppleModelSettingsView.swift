@@ -6,6 +6,7 @@
 // for — how hard Private Cloud Compute thinks, and how tightly the on-device model guards
 // itself. Kept in the same settings table as every pack's sampler knobs, keyed the same way.
 
+import FoundationModels
 import IshizukiKit
 import SwiftUI
 
@@ -137,6 +138,8 @@ struct AppleModelSettingsView: View {
       return below.isApproachingLimit ? "Below limit, close to it" : "Below limit"
     case .limitReached:
       return "Limit reached"
+    @unknown default:
+      return "Unavailable"
     }
   }
 }
