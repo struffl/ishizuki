@@ -172,7 +172,7 @@ public final class Quantizer: @unchecked Sendable {
     measurements.reserveCapacity(quantizable.count)
     var surveyed = 0
     for name in quantizable {
-      let weight = try source.tensor(name)
+      let weight = try source.resident(name)
       // A module whose input width does not divide the group cannot be quantized at this
       // group size; it is carried at fp16 rather than silently reshaped.
       guard weight.dim(weight.ndim - 1) % profile.groupSize == 0 else {
@@ -222,7 +222,7 @@ public final class Quantizer: @unchecked Sendable {
 
     for name in quantizable where !streamed.contains(name) {
       let bits = allocation.bits[name] ?? profile.baseBits
-      let weight = try source.tensor(name)
+      let weight = try source.resident(name)
       let wq: MLXArray
       let scales: MLXArray
       let biases: MLXArray?
@@ -244,7 +244,7 @@ public final class Quantizer: @unchecked Sendable {
     }
 
     for name in passthrough where !streamed.contains(name) {
-      var tensor = try source.tensor(name)
+      var tensor = try source.resident(name)
       if upstream {
         tensor = TensorNaming.relayout(name, tensor, zeroCentredNorms: zeroCentredNorms)
       }
@@ -291,7 +291,7 @@ public final class Quantizer: @unchecked Sendable {
     for layer in byLayer.keys.sorted() {
       var parts: [String: MLXArray] = [:]
       for (part, name) in byLayer[layer]! {
-        let tensor = try source.tensor(name)
+        let tensor = try source.resident(name)
         // The runtime reads a streamed expert through `gatherQuantizedMM`, which wants a
         // weight and its scales and biases. A projection that cannot be quantized has no
         // streamed form, so this refuses rather than writing a pack that will not load.

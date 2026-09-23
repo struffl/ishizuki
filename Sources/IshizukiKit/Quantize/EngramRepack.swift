@@ -107,7 +107,7 @@ public enum EngramRepack {
     defer { try? handle?.close() }
 
     for name in shardNames {
-      let shard = try source.tensor(name)
+      let shard = try source.resident(name)
       guard shard.dim(1) == headDim else {
         throw BonsaiError.shapeMismatch("\(name) is \(shard.dim(1)) wide, not \(headDim)")
       }

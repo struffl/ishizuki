@@ -23,6 +23,8 @@ public final class SourceCheckpoint: @unchecked Sendable {
   private var opened: [String: [String: MLXArray]] = [:]
   private var order: [String] = []
   private let residentShards: Int
+  /// Where each tensor's bytes sit in its shard, read from the headers as shards are opened.
+  private var spans: [String: [String: Range<Int>]] = [:]
 
   public init(directory: URL, residentShards: Int = 2) throws {
     self.directory = directory
@@ -113,6 +115,63 @@ public final class SourceCheckpoint: @unchecked Sendable {
       throw BonsaiError.missingWeight("\(name) is named by the index but absent from \(shard)")
     }
     return array
+  }
+
+  /// The tensor, with its bytes read once from the CPU first so they are in the page cache
+  /// before a kernel touches the mapping. A GPU faulting its way through a mapping on a spinning
+  /// disk stalls long enough for its command buffer to be killed as hung. Anything about to be
+  /// computed on asks for this; anything that only wants a shape asks for `tensor`.
+  public func resident(_ name: String) throws -> MLXArray {
+    if let cut = derived[name] {
+      _ = try resident(cut.source)
+      return try tensor(name)
+    }
+    let array = try tensor(name)
+    guard let shard = shardOf[name] else { return array }
+    lock.lock()
+    defer { lock.unlock() }
+    try warm(directory.appending(path: shard), shard: shard, name: name)
+    return array
+  }
+
+  private func warm(_ url: URL, shard: String, name: String) throws {
+    if spans[shard] == nil { spans[shard] = try Self.spans(of: url) }
+    guard let span = spans[shard]?[name], !span.isEmpty else { return }
+    let handle = open(url.path, O_RDONLY)
+    guard handle >= 0 else { throw BonsaiError.missingWeight("cannot open \(shard)") }
+    defer { close(handle) }
+    let chunk = 16 << 20
+    let scratch = UnsafeMutableRawPointer.allocate(byteCount: chunk, alignment: 16384)
+    defer { scratch.deallocate() }
+    var offset = span.lowerBound
+    while offset < span.upperBound {
+      let got = pread(handle, scratch, min(chunk, span.upperBound - offset), off_t(offset))
+      guard got > 0 else { throw BonsaiError.missingWeight("\(name) ends early in \(shard)") }
+      offset += got
+    }
+  }
+
+  /// Every tensor's absolute byte range in one safetensors file.
+  static func spans(of url: URL) throws -> [String: Range<Int>] {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    guard let prefix = try handle.read(upToCount: 8), prefix.count == 8 else {
+      throw BonsaiError.missingWeight("\(url.lastPathComponent) has no safetensors header")
+    }
+    let length = prefix.withUnsafeBytes { Int(UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))) }
+    guard let header = try handle.read(upToCount: length),
+      let entries = try JSONSerialization.jsonObject(with: header) as? [String: Any]
+    else {
+      throw BonsaiError.missingWeight("\(url.lastPathComponent) has an unreadable header")
+    }
+    var spans: [String: Range<Int>] = [:]
+    for (name, entry) in entries {
+      guard let offsets = (entry as? [String: Any])?["data_offsets"] as? [NSNumber],
+        offsets.count == 2
+      else { continue }
+      spans[name] = (8 + length + offsets[0].intValue)..<(8 + length + offsets[1].intValue)
+    }
+    return spans
   }
 
   public func optional(_ name: String) -> MLXArray? { try? tensor(name) }
