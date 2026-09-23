@@ -34,22 +34,26 @@ struct ShellView: View {
               ForEach(history) { entry in
                 VStack(alignment: .leading, spacing: 4) {
                   Text("$ \(entry.command)")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .fontDesign(.monospaced)
                     .foregroundStyle(Color.reading)
                   if !entry.stdout.isEmpty {
                     Text(entry.stdout)
-                      .font(.system(size: 11, design: .monospaced))
+                      .font(.system(size: 12, design: .monospaced))
+                      .fontDesign(.monospaced)
                       .textSelection(.enabled)
                   }
                   if !entry.stderr.isEmpty {
                     Text(entry.stderr)
-                      .font(.system(size: 11, design: .monospaced))
+                      .font(.system(size: 12, design: .monospaced))
+                      .fontDesign(.monospaced)
                       .foregroundStyle(Color.instructing)
                       .textSelection(.enabled)
                   }
                   if let failure = entry.failure {
                     Text(failure)
-                      .font(.system(size: 11, design: .monospaced))
+                      .font(.system(size: 12, design: .monospaced))
+                      .fontDesign(.monospaced)
                       .foregroundStyle(.red)
                   } else if let job = entry.job, !job.isRunning {
                     HStack(spacing: 8) {
@@ -60,16 +64,19 @@ struct ShellView: View {
                       Text(String(format: "%.1fs", job.seconds))
                         .foregroundStyle(.tertiary)
                     }
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced))
+                    .fontDesign(.monospaced)
                   } else {
                     HStack(spacing: 10) {
                       AnimatedDots(size: 3, tint: Color.reading)
                       if let job = entry.job {
                         Text("\(job.id) · \(Int(job.seconds))s")
-                          .font(.system(size: 10, design: .monospaced))
+                          .font(.system(size: 11, design: .monospaced))
+                          .fontDesign(.monospaced)
                           .foregroundStyle(.tertiary)
                         Button("stop") { stop(job) }
-                          .font(.system(size: 10, design: .monospaced))
+                          .font(.system(size: 11, design: .monospaced))
+                          .fontDesign(.monospaced)
                           .buttonStyle(.plain)
                           .foregroundStyle(Color.instructing)
                       }
@@ -103,7 +110,8 @@ struct ShellView: View {
 
           HStack(spacing: 8) {
             TextField("command", text: $command)
-              .font(.system(size: 13, design: .monospaced))
+              .font(.system(size: 14.5, design: .monospaced))
+              .fontDesign(.monospaced)
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
               .padding(.horizontal, 12)

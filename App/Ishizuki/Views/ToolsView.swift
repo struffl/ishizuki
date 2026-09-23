@@ -15,14 +15,15 @@ struct ToolsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: Spacing.xl) {
         ConsoleView(runner: runner)
         benchSection
         quantizeSection
         expertsSection
         CacheSection(controller: controller)
       }
-      .padding(16)
+      .padding(Spacing.xl)
+      .frame(maxWidth: 820).frame(maxWidth: .infinity)
     }
     .scrollContentBackground(.hidden)
     .task {
@@ -32,29 +33,29 @@ struct ToolsView: View {
   }
 
   @ViewBuilder private var benchSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: "Measure")
 
       GlassCard {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 11) {
           Picker("Check", selection: $bench.kind) {
             ForEach(BenchKind.allCases) { kind in
               Text(kind.title).tag(kind)
             }
           }
           Text(bench.kind.summary)
-            .font(.footnote)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
 
           if let entry = controller.activeEntry {
-            Field(label: "against") {
+            Field(label: "Against") {
               Text("\(entry.displayName)  ·  \(entry.format.rawValue)")
                 .foregroundStyle(.secondary)
             }
             if bench.kind.needsGGUF, entry.format != .gguf {
               Field(label: "") {
                 Label("select a GGUF to run this", systemImage: "exclamationmark.triangle")
-                  .foregroundStyle(.orange)
+                  .foregroundStyle(Color.clay)
               }
             }
           }
@@ -74,24 +75,24 @@ struct ToolsView: View {
   /// A sparse pack's routed experts are most of its weight and a sixth of its work. Moving
   /// them onto disk is the difference between a model this machine can hold and one it cannot.
   @ViewBuilder private var expertsSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: "Stream Experts")
 
       GlassCard {
         if split.candidates.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
+          VStack(alignment: .leading, spacing: 9) {
             Text("No packs here route through experts they still hold.")
-              .font(.callout.weight(.medium))
+              .font(.body.weight(.medium))
             Text(
               "This splits a mixture-of-experts pack in two: the shared half stays in memory, "
                 + "the routed experts are read off disk a few at a time. Packs already split "
                 + "are not offered again."
             )
-            .font(.subheadline)
+            .font(.callout)
             .foregroundStyle(.secondary)
           }
         } else {
-          VStack(alignment: .leading, spacing: 10) {
+          VStack(alignment: .leading, spacing: 11) {
             Picker("Pack", selection: $split.sourceID) {
               ForEach(split.candidates) { candidate in
                 Text("\(candidate.id)  ·  \(ReadoutFormat.bytes(candidate.byteCount))")
@@ -101,27 +102,27 @@ struct ToolsView: View {
 
             if let source = split.source {
               VStack(alignment: .leading, spacing: 2) {
-                Field(label: "experts") {
+                Field(label: "Experts") {
                   Text(
                     "\(source.expertCount) across \(source.layers) sparse layer"
                       + (source.layers == 1 ? "" : "s")
                   )
                   .foregroundStyle(.secondary)
                 }
-                Field(label: "resident") {
+                Field(label: "Resident") {
                   Text(
                     "\(ReadoutFormat.bytes(source.residentBytes)) stays in memory"
                       + "  ·  \(ReadoutFormat.bytes(source.expertBytes)) moves to disk"
                   )
                   .foregroundStyle(.secondary)
                 }
-                Field(label: "output") {
+                Field(label: "Output") {
                   Text(source.destination.lastPathComponent).foregroundStyle(.secondary)
                 }
                 if source.destinationExists {
                   Field(label: "") {
                     Label("that pack already exists", systemImage: "exclamationmark.triangle")
-                      .foregroundStyle(.orange)
+                      .foregroundStyle(Color.clay)
                   }
                 }
               }
@@ -131,11 +132,11 @@ struct ToolsView: View {
               "Streaming trades speed for room: the same answers, token for token, at a "
                 + "fraction of the rate. The slot budget is under Settings › Model."
             )
-            .font(.footnote)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
 
             Toggle("Replace an existing pack of that name", isOn: $split.replace)
-              .font(.subheadline)
+              .font(.callout)
 
             HStack {
               Button("Split Pack") {
@@ -156,23 +157,23 @@ struct ToolsView: View {
   }
 
   @ViewBuilder private var quantizeSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: "Quantize")
 
       GlassCard {
         if quantize.candidates.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
+          VStack(alignment: .leading, spacing: 9) {
             Text("No full-precision checkpoints in reach.")
-              .font(.callout.weight(.medium))
+              .font(.body.weight(.medium))
             Text(
               "Quantizing needs an unquantized checkpoint to read. Add the folder one sits in "
                 + "from the Models tab."
             )
-            .font(.subheadline)
+            .font(.callout)
             .foregroundStyle(.secondary)
           }
         } else {
-          VStack(alignment: .leading, spacing: 10) {
+          VStack(alignment: .leading, spacing: 11) {
             Picker("Checkpoint", selection: $quantize.sourceName) {
               ForEach(quantize.candidates, id: \.name) { candidate in
                 Text("\(candidate.name)  ·  \(ReadoutFormat.bytes(candidate.byteCount))")
@@ -188,22 +189,22 @@ struct ToolsView: View {
             }
 
             Text(quantize.profile.summary)
-              .font(.footnote)
+              .font(.subheadline)
               .foregroundStyle(.secondary)
 
             // A download in progress is a config and some of the weights, which is what a
             // checkpoint looks like. Saying so beats a Build button that is greyed out for
             // reasons the window keeps to itself.
             if let source = quantize.source, !source.isComplete {
-              Field(label: "waiting") {
+              Field(label: "Waiting") {
                 Label(source.readiness.summary, systemImage: "arrow.down.circle")
-                  .foregroundStyle(.orange)
+                  .foregroundStyle(Color.clay)
               }
             }
 
             if let plan = quantize.plan() {
               VStack(alignment: .leading, spacing: 2) {
-                Field(label: "estimate") {
+                Field(label: "Estimate") {
                   Text(
                     "\(ReadoutFormat.bytes(plan.estimateBytes))"
                       + "  from \(ReadoutFormat.bytes(plan.sourceBytes))"
@@ -211,7 +212,7 @@ struct ToolsView: View {
                   .foregroundStyle(.secondary)
                 }
                 if plan.engramBytes > 0 {
-                  Field(label: "n-grams") {
+                  Field(label: "N-grams") {
                     Text(
                       "\(ReadoutFormat.bytes(plan.engramBytes)) carried whole"
                         + "  ·  read from disk, not held"
@@ -219,13 +220,13 @@ struct ToolsView: View {
                     .foregroundStyle(.secondary)
                   }
                 }
-                Field(label: "output") {
+                Field(label: "Output") {
                   Text(plan.destination.lastPathComponent).foregroundStyle(.secondary)
                 }
                 if plan.destinationExists {
                   Field(label: "") {
                     Label("that pack already exists", systemImage: "exclamationmark.triangle")
-                      .foregroundStyle(.orange)
+                      .foregroundStyle(Color.clay)
                   }
                 }
               }
@@ -235,15 +236,15 @@ struct ToolsView: View {
               "Measure activations first (slower, closer to a calibrated pack)",
               isOn: $quantize.calibrate
             )
-            .font(.subheadline)
+            .font(.callout)
             Toggle("Replace an existing pack of that name", isOn: $quantize.replace)
-              .font(.subheadline)
+              .font(.callout)
             if let plan = quantize.plan(), plan.expertCount > 0 {
               Toggle(
                 "Keep the routed experts on disk (\(plan.expertCount) per sparse layer)",
                 isOn: $quantize.streamExperts
               )
-              .font(.subheadline)
+              .font(.callout)
               .help(
                 "Writes the experts beside the pack instead of into it, so the pack streams "
                   + "them as it runs. Same answers, far less memory, a fraction of the rate.")

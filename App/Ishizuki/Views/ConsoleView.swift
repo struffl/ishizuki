@@ -12,16 +12,16 @@ struct ConsoleView: View {
   var body: some View {
     if let job = runner.job {
       GlassCard {
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
+          HStack(spacing: 9) {
             Text(job.name)
-              .font(.system(.callout, design: .monospaced, weight: .semibold))
+              .font(.system(size: 14.5, weight: .semibold))
             if job.isRunning {
               ProgressView().controlSize(.small)
             }
             Spacer()
             Text(ReadoutFormat.duration(job.elapsed))
-              .font(.system(.footnote, design: .monospaced))
+              .font(.subheadline.monospacedDigit())
               .foregroundStyle(.secondary)
             if job.isRunning {
               Button("Cancel") { runner.cancel() }
@@ -38,7 +38,8 @@ struct ConsoleView: View {
 
           if let failure = job.failure {
             Text(failure)
-              .font(.system(.subheadline, design: .monospaced))
+              .font(.system(.callout, design: .monospaced))
+              .fontDesign(.monospaced)
               .foregroundStyle(.red)
               .textSelection(.enabled)
           }
@@ -49,14 +50,15 @@ struct ConsoleView: View {
                 LazyVStack(alignment: .leading, spacing: 1) {
                   ForEach(Array(job.lines.enumerated()), id: \.offset) { index, line in
                     Text(line)
-                      .font(.system(.footnote, design: .monospaced))
+                      .font(.system(.subheadline, design: .monospaced))
+                      .fontDesign(.monospaced)
                       .textSelection(.enabled)
                       .frame(maxWidth: .infinity, alignment: .leading)
                       .id(index)
                   }
                 }
               }
-              .frame(height: 220)
+              .frame(height: 242)
               .onChange(of: job.lines.count) { _, count in
                 proxy.scrollTo(count - 1, anchor: .bottom)
               }

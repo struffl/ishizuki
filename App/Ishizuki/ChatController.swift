@@ -709,8 +709,10 @@ final class ChatController {
     let transcript = agent.transcript
     guard !transcript.isEmpty else { return }
     guard var saved = saved(id) else { return }
+    let changed = transcript != saved.transcript
+    guard changed || prompt else { return }
     saved.transcript = transcript
-    saved.updated = Date()
+    if changed { saved.updated = Date() }
     if id == current.id { saved.workspace = workspace?.path }
     // Only for the turn that just ran: the engine holds one last prompt, and it belongs to
     // whichever conversation was being answered.

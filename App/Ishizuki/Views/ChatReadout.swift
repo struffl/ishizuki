@@ -13,22 +13,22 @@ struct ChatReadoutBar: View {
   @Bindable var controller: ServerController
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 11) {
       meters
       Spacer(minLength: 8)
       if controller.phase.isBusy {
         ProgressView()
           .controlSize(.small)
       }
-      HStack(spacing: 8) {
+      HStack(spacing: 9) {
         modelSwitcher
-        Divider().frame(height: 12)
+        Divider().frame(height: 13)
         effortDial
       }
       .textPlate(radius: 9, horizontal: 9, vertical: 5)
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 6)
+    .padding(.horizontal, 11)
+    .padding(.vertical, 7)
   }
 
   /// The dial belongs to the conversation on screen: a turn being answered elsewhere is that
@@ -42,7 +42,7 @@ struct ChatReadoutBar: View {
   /// means no plate at all, rather than an empty one sitting in the corner.
   @ViewBuilder private var meters: some View {
     if chat.meter.turns > 0 || live != nil {
-      HStack(spacing: 12) {
+      HStack(spacing: 13) {
         if chat.meter.turns > 0 {
           reading(String(format: "%.1fs", chat.meter.averageSeconds), "per turn")
           reading("\(chat.meter.averageTokens)", "tokens")
@@ -60,10 +60,10 @@ struct ChatReadoutBar: View {
   private func reading(_ value: String, _ label: String) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(value)
-        .font(.system(.subheadline, design: .monospaced, weight: .semibold))
+        .font(.system(.callout, weight: .semibold))
         .foregroundStyle(.primary)
       Text(label)
-        .font(.footnote)
+        .font(.subheadline)
         .foregroundStyle(.secondary)
     }
   }
@@ -103,7 +103,7 @@ struct ChatReadoutBar: View {
       }
     } label: {
       Text(controller.settings.appleModel?.displayName ?? controller.activeEntry?.displayName ?? "No pack")
-        .font(.subheadline)
+        .font(.callout)
         .lineLimit(1)
     }
     .menuStyle(.borderlessButton)
@@ -131,7 +131,7 @@ struct ChatReadoutBar: View {
       }
     } label: {
       Text(chat.effort.rawValue)
-        .font(.system(.subheadline, design: .monospaced, weight: .medium))
+        .font(.system(.callout, weight: .medium))
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
@@ -155,15 +155,15 @@ struct TurnStatus: View {
   /// and for reading the bar it is filling. Sized to its contents rather than to the window,
   /// so it reads as the next message arriving rather than as a banner.
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      HStack(spacing: 6) {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 7) {
         Text(label)
-          .font(.system(.subheadline, weight: .medium))
+          .font(.system(.callout, weight: .medium))
           .foregroundStyle(tint)
         AnimatedDots(size: 4, tint: tint)
         if !detail.isEmpty {
           Text(detail)
-            .font(.system(.footnote, design: .monospaced))
+            .font(.subheadline.monospacedDigit())
             .foregroundStyle(.secondary)
             .padding(.leading, 2)
         }
@@ -172,7 +172,7 @@ struct TurnStatus: View {
       // The command as it is written, so the wait for it is not a blank one.
       if case .writingCommand = chat.activity, !chat.writingCommand.isEmpty {
         Text(chat.writingCommand)
-          .font(.system(.footnote, design: .monospaced))
+          .font(.subheadline.monospacedDigit())
           .foregroundStyle(.secondary)
           .lineLimit(2)
           .frame(maxWidth: 320, alignment: .leading)
@@ -185,12 +185,12 @@ struct TurnStatus: View {
           total: request.prefillTotal,
           instructions: chat.systemTokens
         )
-        .frame(width: 168)
+        .frame(width: 185)
       }
     }
     .plateBubble()
-    .padding(.leading, 10)
-    .padding(.trailing, 44)
+    .padding(.leading, 11)
+    .padding(.trailing, 48)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 

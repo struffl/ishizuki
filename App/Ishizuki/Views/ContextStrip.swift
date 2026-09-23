@@ -30,7 +30,7 @@ enum ContextPart: CaseIterable {
     case .instructions: Color.instructing
     case .toolSchemas: Color.reading
     case .conversation: Color.generating
-    case .free: Color.primary.opacity(0.09)
+    case .free: Color.ink.opacity(0.09)
     }
   }
 
@@ -70,16 +70,16 @@ struct ContextBar: View {
     Button {
       showingBreakdown.toggle()
     } label: {
-      HStack(spacing: 7) {
+      HStack(spacing: 8) {
         Text("context")
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(size: 11))
           .foregroundStyle(.tertiary)
         band
-          .frame(height: 5)
+          .frame(height: 6)
           .frame(maxWidth: .infinity)
         Text(ReadoutFormat.percent(use.fraction))
-          .font(.system(size: 10, weight: .medium, design: .monospaced))
-          .foregroundStyle(use.fraction > 0.9 ? .orange : .secondary)
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(use.fraction > 0.9 ? Color.clay : .secondary)
           .monospacedDigit()
       }
       .frame(minHeight: Metrics.hit)
@@ -127,31 +127,31 @@ struct ContextBreakdown: View {
   let use: ChatController.ContextUse
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
+    VStack(alignment: .leading, spacing: 11) {
+      HStack(alignment: .firstTextBaseline, spacing: 9) {
         Text("Context window")
-          .font(.system(.callout, weight: .medium))
+          .font(.system(.body, weight: .medium))
         Spacer(minLength: 12)
         Text(
           "\(Self.tokens(use.used)) / \(Self.tokens(use.ceiling)) "
             + "(\(ReadoutFormat.percent(use.fraction)))"
         )
-        .font(.system(.callout, design: .monospaced))
+        .font(.body.monospacedDigit())
         .foregroundStyle(.secondary)
         .monospacedDigit()
       }
 
       stack
-        .frame(height: 8)
+        .frame(height: 9)
 
-      VStack(spacing: 6) {
+      VStack(spacing: 7) {
         ForEach(ContextPart.allCases, id: \.self) { part in
           row(part)
         }
       }
     }
-    .padding(14)
-    .frame(width: 340)
+    .padding(15)
+    .frame(width: 374)
   }
 
   @ViewBuilder private var stack: some View {
@@ -173,23 +173,23 @@ struct ContextBreakdown: View {
   @ViewBuilder private func row(_ part: ContextPart) -> some View {
     let tokens = part.tokens(of: use)
     let share = use.ceiling > 0 ? Double(tokens) / Double(use.ceiling) : 0
-    HStack(spacing: 8) {
+    HStack(spacing: 9) {
       RoundedRectangle(cornerRadius: 2)
         .fill(part.tint)
-        .frame(width: 10, height: 10)
+        .frame(width: 10, height: 11)
       Text(part.label)
-        .font(.subheadline)
+        .font(.callout)
       Spacer(minLength: 12)
       Text(Self.tokens(tokens))
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout.monospacedDigit())
         .foregroundStyle(.secondary)
         .monospacedDigit()
-        .frame(width: 58, alignment: .trailing)
+        .frame(width: 64, alignment: .trailing)
       Text(ReadoutFormat.percent(share))
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout.monospacedDigit())
         .foregroundStyle(.secondary)
         .monospacedDigit()
-        .frame(width: 44, alignment: .trailing)
+        .frame(width: 48, alignment: .trailing)
     }
     .help(part.note)
   }
@@ -223,9 +223,9 @@ struct GitChip: View {
             systemName: status.isLinkedWorktree
               ? "arrow.triangle.branch" : "point.3.filled.connected.trianglepath.dotted"
           )
-          .font(.system(size: 9))
+          .font(.system(size: 10))
           Text(status.detached ? "detached" : status.branch)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(size: 11, weight: .medium))
             .lineLimit(1)
           if status.behind > 0 {
             count("arrow.down", status.behind, Color.reading)
@@ -251,9 +251,9 @@ struct GitChip: View {
   private func count(_ icon: String, _ value: Int, _ tint: Color) -> some View {
     HStack(spacing: 1) {
       Image(systemName: icon)
-        .font(.system(size: 8))
+        .font(.system(size: 9))
       Text("\(value)")
-        .font(.system(size: 10, design: .monospaced))
+        .font(.system(size: 11))
         .monospacedDigit()
     }
     .foregroundStyle(tint)
@@ -319,9 +319,9 @@ struct WorktreeChip: View {
       } label: {
         HStack(spacing: 4) {
           Image(systemName: isDetached ? "square.on.square.dashed" : "square.on.square")
-            .font(.system(size: 9))
+            .font(.system(size: 10))
           Text(isDetached ? current?.name ?? "worktree" : "worktree")
-            .font(.system(size: 10, weight: isDetached ? .medium : .regular, design: .monospaced))
+            .font(.system(size: 11, weight: isDetached ? .medium : .regular))
             .lineLimit(1)
         }
         .foregroundStyle(isDetached ? Color.reading : Color.secondary)
@@ -354,20 +354,20 @@ struct ContextStrip: View {
   @Bindable var chat: ChatController
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 11) {
       ContextBar(use: chat.contextUse)
         .frame(maxWidth: 260)
       Spacer(minLength: 6)
       SandboxChip(chat: chat)
       folder
       if chat.git.isRepository {
-        Divider().frame(height: 11)
+        Divider().frame(height: 12)
         GitChip(chat: chat)
         WorktreeChip(chat: chat)
       }
     }
     .chipPlate(radius: 9, horizontal: 10, vertical: 2)
-    .padding(.horizontal, 10)
+    .padding(.horizontal, 11)
   }
 
   /// The folder, still reachable but no longer a bar of its own: picking one is the sidebar's
@@ -378,9 +378,9 @@ struct ContextStrip: View {
     } label: {
       HStack(spacing: 4) {
         Image(systemName: "folder")
-          .font(.system(size: 9))
+          .font(.system(size: 10))
         Text(chat.workspace?.lastPathComponent ?? "Choose a folder…")
-          .font(.system(size: 10, weight: .medium, design: .monospaced))
+          .font(.system(size: 11, weight: .medium))
           .lineLimit(1)
       }
       .foregroundStyle(chat.workspace == nil ? Color.instructing : .secondary)

@@ -17,14 +17,14 @@ struct LocalChatView: View {
           LazyVStack(alignment: .leading, spacing: 14) {
             if let blocker = local.blocker {
               Text(blocker)
-                .font(.callout)
+                .font(.body)
                 .foregroundStyle(.secondary)
             } else if local.rows.isEmpty {
               Text(
                 "Write, learn, and research with this iPhone. Ask for a web search when you need sources. "
                   + "Search queries are sent to Bing; this conversation is not saved to the Mac."
               )
-              .font(.callout)
+              .font(.body)
               .foregroundStyle(.secondary)
             }
             ForEach(local.rows) { row in
@@ -32,7 +32,7 @@ struct LocalChatView: View {
                 .id(row.id)
             }
             if let failure = local.failure {
-              Text(failure).font(.callout).foregroundStyle(.red)
+              Text(failure).font(.body).foregroundStyle(.red)
             }
             Color.clear.frame(height: 1).id("local-bottom")
           }
@@ -57,7 +57,7 @@ struct LocalChatView: View {
           local.isAnswering ? local.stop() : local.send()
         } label: {
           Image(systemName: local.isAnswering ? "stop.fill" : "arrow.up")
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: 16.5, weight: .semibold))
             .frame(width: 34, height: 34)
             .background(
               Color.reading.opacity(local.canSend || local.isAnswering ? 1 : 0.3), in: .circle

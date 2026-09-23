@@ -26,7 +26,7 @@ struct ModelsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: Spacing.xl) {
         if !library.downloads.isEmpty {
           section("Downloading") {
             ForEach(library.downloads) { download in
@@ -46,14 +46,14 @@ struct ModelsView: View {
         section("Installed") {
           if controller.catalog.entries.isEmpty {
             GlassCard {
-              VStack(alignment: .leading, spacing: 8) {
+              VStack(alignment: .leading, spacing: 9) {
                 Text("No packs in reach yet.")
-                  .font(.callout.weight(.medium))
+                  .font(.body.weight(.medium))
                 Text(
                   "Ishizuki can only read folders you hand it. If you already have packs, "
                     + "point it at them — nothing is copied."
                 )
-                .font(.subheadline)
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 HStack {
                   ForEach(ModelLibrary.wellKnownRoots, id: \.label) { root in
@@ -78,13 +78,13 @@ struct ModelsView: View {
             CuratedRow(model: model, library: library)
           }
           GlassCard {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
               Text("Any HuggingFace repo")
-                .font(.system(.callout, weight: .medium))
+                .font(.system(.body, weight: .medium))
               HStack {
                 TextField("org/model", text: $repo)
                   .textFieldStyle(.roundedBorder)
-                  .font(.system(.subheadline, design: .monospaced))
+                  .font(.callout)
                   .onSubmit(pull)
                 Button("Download", action: pull)
                   .buttonStyle(.glass)
@@ -95,7 +95,7 @@ struct ModelsView: View {
                 "A pack is taken whole. For a GGUF repo add the file after a colon, "
                   + "e.g. org/model:Qwen3.8-27B-IQ3_S.gguf"
               )
-              .font(.footnote)
+              .font(.subheadline)
               .foregroundStyle(.secondary)
             }
           }
@@ -104,14 +104,14 @@ struct ModelsView: View {
         section("This Mac") {
           GlassCard {
             Text(Machine.summary)
-              .font(.system(.footnote, design: .monospaced))
+              .font(.subheadline.monospacedDigit())
               .foregroundStyle(.secondary)
           }
         }
 
         section("Folders") {
           GlassCard {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
               ForEach(IshizukiPaths.searchRoots(), id: \.self) { root in
                 FolderRow(url: root, removable: false, library: library)
               }
@@ -129,7 +129,8 @@ struct ModelsView: View {
           }
         }
       }
-      .padding(16)
+      .padding(Spacing.xl)
+      .frame(maxWidth: 820).frame(maxWidth: .infinity)
     }
     .scrollContentBackground(.hidden)
     .alert(
@@ -158,7 +159,7 @@ struct ModelsView: View {
   @ViewBuilder private func section<Content: View>(
     _ title: String, @ViewBuilder content: () -> Content
   ) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: title)
       content()
     }
@@ -174,12 +175,12 @@ private struct AppleModelRow: View {
   private var isActive: Bool { controller.settings.appleModel == model }
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 11) {
       Button {
         controller.settings.appleModel = model
       } label: {
         Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-          .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+          .foregroundStyle(isActive ? Color.moss : Color.secondary)
           .contentShape(.circle)
       }
       .buttonStyle(.plain)
@@ -187,9 +188,9 @@ private struct AppleModelRow: View {
       .accessibilityLabel(isActive ? "\(model.displayName), in use" : "Use \(model.displayName)")
       .help(isActive ? "This model is answering" : "Answer with this model")
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.displayName).font(.system(.callout, weight: .medium))
+        Text(model.displayName).font(.system(.body, weight: .medium))
         Text(AppleModelVariant.subtitle(for: model))
-          .font(.system(.footnote, design: .monospaced))
+          .font(.subheadline.monospacedDigit())
           .foregroundStyle(.secondary)
       }
       Spacer()
@@ -205,10 +206,11 @@ private struct AppleModelRow: View {
       .buttonStyle(.plain)
       .accessibilityLabel("Settings for \(model.displayName)")
     }
-    .padding(10)
-    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .padding(.horizontal, Spacing.m)
+    .padding(.vertical, Spacing.s + 2)
+    .paperCard()
     .overlay {
-      RoundedRectangle(cornerRadius: 12)
+      RoundedRectangle(cornerRadius: 13)
         .strokeBorder(Color.hairline, lineWidth: 1)
     }
     .sheet(isPresented: $settingsShown) {
@@ -242,7 +244,7 @@ private struct InstalledRow: View {
   }
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 11) {
       // The dot is what the eye reads as "this one", so it is what the hand goes for. It
       // switches packs exactly as the button on the right does; the button stays because a
       // row with only a dot to click does not look like it can be clicked.
@@ -250,7 +252,7 @@ private struct InstalledRow: View {
         controller.activate(entry.id)
       } label: {
         Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-          .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+          .foregroundStyle(isActive ? Color.moss : Color.secondary)
           .contentShape(.circle)
       }
       .buttonStyle(.plain)
@@ -258,8 +260,8 @@ private struct InstalledRow: View {
       .accessibilityLabel(isActive ? "\(entry.displayName), in use" : "Use \(entry.displayName)")
       .help(isActive ? "This pack is answering" : "Answer with this pack")
       VStack(alignment: .leading, spacing: 2) {
-        Text(entry.displayName).font(.system(.callout, weight: .medium))
-        Text(detail).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary)
+        Text(entry.displayName).font(.system(.body, weight: .medium))
+        Text(detail).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
       }
       Spacer()
       if !isActive {
@@ -282,10 +284,11 @@ private struct InstalledRow: View {
       .fixedSize()
       .accessibilityLabel("More actions for \(entry.displayName)")
     }
-    .padding(10)
-    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .padding(.horizontal, Spacing.m)
+    .padding(.vertical, Spacing.s + 2)
+    .paperCard()
     .overlay {
-      RoundedRectangle(cornerRadius: 12)
+      RoundedRectangle(cornerRadius: 13)
         .strokeBorder(Color.hairline, lineWidth: 1)
     }
     .sheet(isPresented: $samplerSettings) {
@@ -299,31 +302,32 @@ private struct CuratedRow: View {
   @Bindable var library: ModelLibrary
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 11) {
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.name).font(.system(.callout, weight: .medium))
-        Text(model.summary).font(.footnote).foregroundStyle(.secondary)
+        Text(model.name).font(.system(.body, weight: .medium))
+        Text(model.summary).font(.subheadline).foregroundStyle(.secondary)
       }
       Spacer()
       if !Machine.fits(weightBytes: model.bytes) {
         Label("won't fit", systemImage: "exclamationmark.triangle")
-          .font(.footnote)
-          .foregroundStyle(.orange)
+          .font(.subheadline)
+          .foregroundStyle(Color.clay)
           .help(
             "This pack needs more than this Mac will keep resident — \(Machine.summary).")
       }
       Text(ReadoutFormat.gigabytes(model.bytes))
-        .font(.system(.footnote, design: .monospaced))
+        .font(.subheadline.monospacedDigit())
         .foregroundStyle(.tertiary)
       Button("Download") { library.download(repo: model.repo, only: model.only) }
         .buttonStyle(.glass)
         .controlSize(.small)
         .disabled(library.downloads.contains { $0.repo == model.repo })
     }
-    .padding(10)
-    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .padding(.horizontal, Spacing.m)
+    .padding(.vertical, Spacing.s + 2)
+    .paperCard()
     .overlay {
-      RoundedRectangle(cornerRadius: 12)
+      RoundedRectangle(cornerRadius: 13)
         .strokeBorder(Color.hairline, lineWidth: 1)
     }
   }
@@ -335,12 +339,12 @@ private struct DownloadRow: View {
   @Bindable var controller: ServerController
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text(download.repo).font(.system(.subheadline, design: .monospaced))
+        Text(download.repo).font(.callout)
         Spacer()
         if let failure = download.failure {
-          Text(failure).font(.footnote).foregroundStyle(.red).lineLimit(1)
+          Text(failure).font(.subheadline).foregroundStyle(.red).lineLimit(1)
           Button("Dismiss") {
             library.dismiss(repo: download.repo)
             controller.rescan()
@@ -356,14 +360,15 @@ private struct DownloadRow: View {
           "\(download.file) — \(ReadoutFormat.compact(download.completedBytes)) "
             + "/ \(ReadoutFormat.compact(download.totalBytes))"
         )
-        .font(.system(.footnote, design: .monospaced))
+        .font(.subheadline.monospacedDigit())
         .foregroundStyle(.tertiary)
       }
     }
-    .padding(10)
-    .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    .padding(.horizontal, Spacing.m)
+    .padding(.vertical, Spacing.s + 2)
+    .paperCard()
     .overlay {
-      RoundedRectangle(cornerRadius: 12)
+      RoundedRectangle(cornerRadius: 13)
         .strokeBorder(Color.hairline, lineWidth: 1)
     }
   }
@@ -375,10 +380,10 @@ private struct FolderRow: View {
   @Bindable var library: ModelLibrary
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 9) {
       Image(systemName: "folder").foregroundStyle(.secondary)
       Text(url.path(percentEncoded: false))
-        .font(.system(.footnote, design: .monospaced))
+        .font(.subheadline)
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

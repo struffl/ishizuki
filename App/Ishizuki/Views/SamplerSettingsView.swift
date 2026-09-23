@@ -72,10 +72,10 @@ struct SamplerSettingsView: View {
         Button("Done", action: done)
           .keyboardShortcut(.defaultAction)
       }
-      .padding([.horizontal, .bottom], 16)
+      .padding([.horizontal, .bottom], 18)
       .padding(.top, 4)
     }
-    .frame(width: 420, height: 480)
+    .frame(width: 420, height: 528)
     .onChange(of: draft) { _, newValue in
       controller.updateSamplerSettings(newValue, for: entry.id)
     }
@@ -100,16 +100,16 @@ private struct SamplerRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack {
-        Text(label).font(.system(.callout, weight: .medium))
+        Text(label).font(.system(.body, weight: .medium))
         Spacer()
         TextField(
           label, value: $value, format: .number.precision(.fractionLength(decimals))
         )
         .labelsHidden()
         .textFieldStyle(.roundedBorder)
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout.monospacedDigit())
         .multilineTextAlignment(.trailing)
-        .frame(width: 60)
+        .frame(width: 66)
       }
       Slider(value: $value, in: range, step: step)
         .accessibilityLabel(label)
@@ -133,7 +133,7 @@ private struct ToggleableSamplerRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Toggle(isOn: $enabled) {
-        Text(label).font(.system(.callout, weight: .medium))
+        Text(label).font(.system(.body, weight: .medium))
       }
       .toggleStyle(.switch)
       .controlSize(.small)
@@ -146,9 +146,9 @@ private struct ToggleableSamplerRow: View {
         )
         .labelsHidden()
         .textFieldStyle(.roundedBorder)
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout.monospacedDigit())
         .multilineTextAlignment(.trailing)
-        .frame(width: 60)
+        .frame(width: 66)
         .disabled(!enabled)
       }
     }

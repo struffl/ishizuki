@@ -14,11 +14,11 @@ struct IshizukiCommands: Commands {
 
   /// The transcript's own type size, shared with the view through the same key rather than
   /// passed down: a menu command and a window are two readers of one setting.
-  @AppStorage("chat.fontSize") private var fontSize = 13.0
+  @AppStorage("chat.fontSize") private var fontSize = 14.5
 
-  private static let smallest = 9.0
+  private static let smallest = 10.5
   private static let largest = 28.0
-  private static let normal = 13.0
+  private static let normal = 14.5
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {

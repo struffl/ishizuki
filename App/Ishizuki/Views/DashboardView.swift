@@ -14,7 +14,7 @@ struct DashboardView: View {
   @State private var quantize = QuantizeController()
   @State private var split = ExpertSplitController()
   @State private var bench = BenchController()
-  @State private var tab: Tab
+  @AppStorage("dashboard.tab") private var tab: Tab = .agent
   var chat: ChatController
   var companion: CompanionServer
 
@@ -22,7 +22,9 @@ struct DashboardView: View {
     self.controller = controller
     self.chat = chat
     self.companion = companion
-    _tab = State(initialValue: controller.catalog.entries.isEmpty ? .models : .agent)
+    if controller.catalog.entries.isEmpty {
+      _tab = AppStorage(wrappedValue: .models, "dashboard.tab")
+    }
   }
 
   var body: some View {
@@ -30,9 +32,11 @@ struct DashboardView: View {
       ChatView(chat: chat, controller: controller)
         .tabItem { Label("Agent", systemImage: "bubble.left.and.text.bubble.right") }
         .tag(Tab.agent)
-      ScrollView { readout.padding(16) }
-        .tabItem { Label("Server", systemImage: "gauge.with.dots.needle.33percent") }
-        .tag(Tab.server)
+      ScrollView {
+        readout.padding(Spacing.xl).frame(maxWidth: 820).frame(maxWidth: .infinity)
+      }
+      .tabItem { Label("Server", systemImage: "gauge.with.dots.needle.33percent") }
+      .tag(Tab.server)
       ModelsView(controller: controller)
         .tabItem { Label("Models", systemImage: "shippingbox") }
         .tag(Tab.models)
@@ -43,13 +47,13 @@ struct DashboardView: View {
       .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
       .tag(Tab.tools)
     }
-    .frame(minWidth: 680, minHeight: 560)
-    .scrollContentBackground(.hidden)
-    .windowBackdrop()
+    .font(.base)
+    .paperBackground()
+    .frame(minWidth: 740, minHeight: 600)
   }
 
   @ViewBuilder private var readout: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: Spacing.xl) {
       GlassCard { EndpointHeader(controller: controller) }
 
       if let readout = controller.readout {
@@ -70,7 +74,7 @@ struct DashboardView: View {
       } else {
         GlassCard {
           Text(idleMessage)
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout)
             .foregroundStyle(.secondary)
         }
       }
@@ -95,17 +99,20 @@ private struct EndpointHeader: View {
   @Bindable var controller: ServerController
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
+      HStack(spacing: Spacing.s) {
         StatusDot(phase: controller.phase)
-        Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "no model")
-          .font(.system(.body, design: .monospaced, weight: .semibold))
+        Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "No model")
+          .font(.system(size: 14.5, weight: .semibold))
         Spacer()
-        Button(controller.phase.isRunning ? "Stop" : "Start") {
-          controller.phase.isRunning ? controller.stop() : controller.start()
+        if controller.phase.isRunning {
+          Button("Stop") { controller.stop() }
+            .buttonStyle(.glass)
+        } else {
+          Button("Start") { controller.start() }
+            .buttonStyle(.glassProminent)
+            .disabled(controller.phase.isBusy)
         }
-        .buttonStyle(.glassProminent)
-        .disabled(controller.phase.isBusy)
       }
 
       if controller.phase.isRunning {
@@ -127,8 +134,8 @@ private struct StatusDot: View {
 
   private var mark: (symbol: String, color: Color, label: String) {
     switch phase {
-    case .running: ("circle.fill", .green, "Running")
-    case .starting: ("circle.dotted", .orange, "Starting")
+    case .running: ("circle.fill", Color.moss, "Running")
+    case .starting: ("circle.dotted", Color.clay, "Starting")
     case .failed: ("exclamationmark.triangle.fill", .red, "Failed")
     case .stopped: ("circle", .secondary, "Stopped")
     }
@@ -136,7 +143,7 @@ private struct StatusDot: View {
 
   var body: some View {
     Image(systemName: mark.symbol)
-      .font(.footnote)
+      .font(.subheadline)
       .foregroundStyle(mark.color)
       .accessibilityLabel(mark.label)
       .help(mark.label)
@@ -148,8 +155,11 @@ private struct CopyableURL: View {
   @State private var copied = false
 
   var body: some View {
-    HStack(spacing: 6) {
-      Text(text).foregroundStyle(.secondary)
+    HStack(spacing: 7) {
+      Text(text)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
       Button {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -174,27 +184,27 @@ private struct InFlightSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      HStack(spacing: 6) {
+      HStack(spacing: 7) {
         Text("\(readout.running)").fontWeight(.semibold)
         Text("running").foregroundStyle(.secondary)
         if readout.queued > 0 {
           Text("·").foregroundStyle(.tertiary)
-          Text("\(readout.queued)").foregroundStyle(.orange)
+          Text("\(readout.queued)").foregroundStyle(Color.clay)
           Text("queued").foregroundStyle(.secondary)
         }
       }
-      .font(.system(.subheadline, design: .monospaced))
+      .font(.callout.monospacedDigit())
 
       if readout.inFlight.isEmpty {
-        Text("idle — waiting for requests")
-          .font(.system(.subheadline, design: .monospaced))
+        Text("Idle — waiting for requests")
+          .font(.callout)
           .foregroundStyle(.tertiary)
           .padding(.leading, 2)
       } else {
         ForEach(readout.inFlight.prefix(10), id: \.id) { RequestRow(request: $0) }
         if readout.inFlight.count > 10 {
           Text("+\(readout.inFlight.count - 10) more")
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout)
             .foregroundStyle(.tertiary)
         }
       }
@@ -208,47 +218,47 @@ private struct SessionSection: View {
   var body: some View {
     let totals = readout.totals
     VStack(alignment: .leading, spacing: 3) {
-      Field(label: "prefill") {
-        HStack(spacing: 6) {
+      Field(label: "Prefill") {
+        HStack(spacing: 7) {
           Text(String(format: "%.1f", totals.prefillRate)).fontWeight(.semibold)
           Text("tok/s").foregroundStyle(.secondary)
           Text(String(format: "last %.1f", totals.lastPrefillRate)).foregroundStyle(.tertiary)
         }
       }
-      Field(label: "decode") {
-        HStack(spacing: 6) {
+      Field(label: "Decode") {
+        HStack(spacing: 7) {
           Text(String(format: "%.1f", totals.decodeRate)).fontWeight(.semibold)
           Text("tok/s").foregroundStyle(.secondary)
           Text(String(format: "last %.1f", totals.lastDecodeRate)).foregroundStyle(.tertiary)
         }
       }
-      Field(label: "requests") {
-        HStack(spacing: 6) {
-          Text("\(totals.completed)").foregroundStyle(Color.accentColor)
+      Field(label: "Requests") {
+        HStack(spacing: 7) {
+          Text("\(totals.completed)").foregroundStyle(Color.moss)
           Text("done").foregroundStyle(.secondary)
           Text("·").foregroundStyle(.tertiary)
           Text("\(totals.failed)").foregroundStyle(totals.failed > 0 ? .red : .secondary)
           Text("failed").foregroundStyle(.secondary)
           if totals.cancelled > 0 {
             Text("·").foregroundStyle(.tertiary)
-            Text("\(totals.cancelled)").foregroundStyle(.orange)
+            Text("\(totals.cancelled)").foregroundStyle(Color.clay)
             Text("cancelled").foregroundStyle(.secondary)
           }
           Text("· \(totals.arrived) seen").foregroundStyle(.tertiary)
         }
       }
-      Field(label: "tokens") {
-        HStack(spacing: 6) {
-          Text(ReadoutFormat.group(totals.promptTokens)).foregroundStyle(Color.accentColor)
+      Field(label: "Tokens") {
+        HStack(spacing: 7) {
+          Text(ReadoutFormat.group(totals.promptTokens)).foregroundStyle(Color.moss)
           Text("in").foregroundStyle(.secondary)
           Text("·").foregroundStyle(.tertiary)
-          Text(ReadoutFormat.group(totals.generatedTokens)).foregroundStyle(Color.accentColor)
+          Text(ReadoutFormat.group(totals.generatedTokens)).foregroundStyle(Color.moss)
           Text("out").foregroundStyle(.secondary)
         }
       }
-      Field(label: "cache") {
-        HStack(spacing: 6) {
-          Text(ReadoutFormat.percent(totals.cacheRatio)).foregroundStyle(Color.accentColor)
+      Field(label: "Cache") {
+        HStack(spacing: 7) {
+          Text(ReadoutFormat.percent(totals.cacheRatio)).foregroundStyle(Color.moss)
           Text(
             "\(totals.cacheHits) hit · \(totals.cacheMisses) miss · "
               + "\(ReadoutFormat.group(totals.cachedTokens)) tok reused"
@@ -267,8 +277,8 @@ private struct LoadSection: View {
     let load = readout.load
     let context = readout.context
     VStack(alignment: .leading, spacing: 3) {
-      Field(label: "memory") {
-        HStack(spacing: 8) {
+      Field(label: "Memory") {
+        HStack(spacing: 9) {
           Bar(fraction: load.fraction)
           Text(ReadoutFormat.percent(load.fraction)).fontWeight(.semibold)
           Text("\(ReadoutFormat.gigabytes(load.held)) / \(ReadoutFormat.gigabytes(load.ceiling))")
@@ -281,22 +291,22 @@ private struct LoadSection: View {
         }
       }
       if let gpu = load.gpu {
-        Field(label: "gpu") {
-          HStack(spacing: 8) {
+        Field(label: "GPU") {
+          HStack(spacing: 9) {
             Bar(fraction: gpu)
             Text(ReadoutFormat.percent(gpu)).fontWeight(.semibold)
             Text("busy").foregroundStyle(.secondary)
           }
         }
       }
-      Field(label: "budget") {
-        HStack(spacing: 6) {
-          Text(readout.budgetSummary).foregroundStyle(Color.accentColor)
+      Field(label: "Budget") {
+        HStack(spacing: 7) {
+          Text(readout.budgetSummary).foregroundStyle(Color.moss)
           Text("· \(ReadoutFormat.gigabytes(readout.headroom)) spare").foregroundStyle(.tertiary)
         }
       }
-      Field(label: "context") {
-        HStack(spacing: 6) {
+      Field(label: "Context") {
+        HStack(spacing: 7) {
           Text(MemoryBudget.tokens(context.peakTokens) + " peak")
             .foregroundStyle(.secondary)
           Text(
@@ -338,8 +348,8 @@ private struct PrefixSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Field(label: "prefix") {
-        HStack(spacing: 6) {
+      Field(label: "Prefix") {
+        HStack(spacing: 7) {
           if prefix.lookups > 0 {
             Text(ReadoutFormat.percent(prefix.hitRate) + " hit")
               .foregroundStyle(.secondary)
@@ -374,8 +384,8 @@ private struct ExpertSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Field(label: "experts") {
-        HStack(spacing: 6) {
+      Field(label: "Experts") {
+        HStack(spacing: 7) {
           if experts.reads > 0 {
             Text(ReadoutFormat.percent(experts.hitRate) + " hit")
               .foregroundStyle(.secondary)
@@ -404,7 +414,7 @@ private struct StateSection: View {
   }
 
   var body: some View {
-    Field(label: "state") {
+    Field(label: "State") {
       Text(conditions).foregroundStyle(.secondary)
     }
   }
@@ -417,7 +427,8 @@ private struct LogSection: View {
     VStack(alignment: .leading, spacing: 2) {
       ForEach(Array(lines.suffix(8).enumerated()), id: \.offset) { _, line in
         Text(line)
-          .font(.system(.footnote, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
+          .fontDesign(.monospaced)
           .foregroundStyle(.tertiary)
           .lineLimit(1)
       }

@@ -53,8 +53,13 @@ private struct PaneForm<Content: View>: View {
   var body: some View {
     Form { content }
       .formStyle(.grouped)
+      .font(.base)
+      .scrollContentBackground(.hidden)
+      .background(Color.paper)
+      .tint(.moss)
+      .fontDesign(.serif)
       .scrollBounceBehavior(.basedOnSize)
-      .frame(width: 480, height: 460)
+      .frame(width: 530, height: 510)
   }
 }
 
@@ -80,7 +85,7 @@ private struct GeneralPane: View {
             }
           }
         if let loginItemError {
-          Text(loginItemError).font(.caption).foregroundStyle(.red)
+          Text(loginItemError).font(.subheadline).foregroundStyle(.red)
         }
       }
 
@@ -95,7 +100,7 @@ private struct GeneralPane: View {
       Section {
         LabeledContent("Version") {
           Text(Machine.version)
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout.monospacedDigit())
             .foregroundStyle(.secondary)
         }
       } footer: {
@@ -121,11 +126,11 @@ private struct ModelPane: View {
               + "together. Only packs carrying exported slices can use it.")
         AmountSlider(
           label: "Wired memory", value: Bindable(settings).wireGB, range: 0...64,
-          reading: settings.wireGB == 0 ? "off" : "\(Int(settings.wireGB)) GB")
+          reading: settings.wireGB == 0 ? "Off" : "\(Int(settings.wireGB)) GB")
         LabeledContent("Expert slots") {
           Stepper(value: Bindable(settings).expertSlots, in: 0...256, step: 4) {
             Text(settings.expertSlots == 0 ? "Automatic" : "\(settings.expertSlots)")
-              .font(.system(.subheadline, design: .monospaced))
+              .font(.callout.monospacedDigit())
               .foregroundStyle(.secondary)
           }
         }
@@ -183,7 +188,7 @@ private struct CachePane: View {
           label: "Prefix cache on disk", value: Bindable(settings).prefixCacheGB,
           range: 0...64,
           reading: settings.prefixCacheGB == 0
-            ? "off" : "\(Int(settings.prefixCacheGB)) GB")
+            ? "Off" : "\(Int(settings.prefixCacheGB)) GB")
       } footer: {
         RestartNote(controller: controller)
       }
@@ -220,22 +225,22 @@ struct SandboxSection: View {
             FileManager.default.fileExists(atPath: $0)
           }) ?? "point me at a vmlinux", text: $settings.kernelPath
         )
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: 12))
       }
       LabeledContent("Init filesystem") {
         TextField("an initfs.ext4, if you have one", text: $settings.initfsPath)
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(size: 12))
       }
       LabeledContent("Init image") {
         TextField("vminit reference", text: $settings.initfsReference)
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(size: 12))
       }
       Text(
         SandboxArtifacts.isReady || !settings.kernelPath.isEmpty
           ? "A container boots in this process through Containerization; the folder is shared in at /workspace."
           : "No kernel found yet — one is fetched automatically the first time a container boots. Give a path here to use one already on this Mac instead."
       )
-      .font(.footnote)
+      .font(.subheadline)
       .foregroundStyle(.secondary)
     }
   }
@@ -274,7 +279,7 @@ private struct AmountSlider: View {
           .accessibilityLabel(label)
           .accessibilityValue(reading)
         Text(reading)
-          .font(.system(.subheadline, design: .monospaced))
+          .font(.callout.monospacedDigit())
           .frame(width: readingWidth, alignment: .trailing)
       }
     }
@@ -287,9 +292,9 @@ private struct TimeoutField: View {
   var body: some View {
     HStack {
       Slider(value: $seconds, in: 0...1800, step: 30)
-      Text(seconds == 0 ? "never" : ReadoutFormat.duration(seconds))
-        .font(.system(.subheadline, design: .monospaced))
-        .frame(width: 60, alignment: .trailing)
+      Text(seconds == 0 ? "Never" : ReadoutFormat.duration(seconds))
+        .font(.callout.monospacedDigit())
+        .frame(width: 66, alignment: .trailing)
     }
   }
 }

@@ -13,7 +13,7 @@ struct ChatView: View {
   @Bindable var controller: ServerController
 
   @AppStorage("chat.monoFont") private var monoFont = ""
-  @AppStorage("chat.fontSize") private var fontSize = 13.0
+  @AppStorage("chat.fontSize") private var fontSize = 14.5
 
   /// How far the transcript is dragged aside to show what each row cost.
   @State private var reveal: CGFloat = 0
@@ -80,15 +80,15 @@ struct ChatView: View {
         ChatReadoutBar(chat: chat, controller: controller)
         ContextStrip(chat: chat)
         if let failure = chat.failure {
-          HStack(spacing: 5) {
+          HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
             Text(failure)
               .lineLimit(2)
             Spacer(minLength: 0)
           }
-          .font(.footnote)
-          .foregroundStyle(.orange)
-          .padding(.horizontal, 14)
+          .font(.subheadline)
+          .foregroundStyle(Color.clay)
+          .padding(.horizontal, 15)
           .padding(.top, 2)
         }
         asking
@@ -100,6 +100,7 @@ struct ChatView: View {
           Color.clear.preference(key: ViewportHeightKey.self, value: column.size.height)
         }
       )
+      .background(Color.paper)
       .onPreferenceChange(ViewportHeightKey.self) { height in
         // Rounded to a coarse step, so a point of drift as a row settles is not a fresh pass
         // over the whole window.
@@ -107,7 +108,7 @@ struct ChatView: View {
         if stepped != viewportHeight { viewportHeight = stepped }
       }
     }
-    .windowBackdrop()
+    .paperBackground()
   }
 
   @ViewBuilder private var transcript: some View {
@@ -161,7 +162,7 @@ struct ChatView: View {
                   }
                 )
             }
-            .padding(14)
+            .padding(15)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
               GeometryReader { content in
@@ -234,7 +235,7 @@ struct ChatView: View {
 
           if showJumpToBottom {
             jumpToBottomButton(scroller: scroller)
-              .padding(16)
+              .padding(18)
           }
         }
       }
@@ -302,9 +303,9 @@ struct ChatView: View {
       }
     } label: {
       Image(systemName: "arrow.down")
-        .font(.system(.callout, weight: .semibold))
+        .font(.system(.body, weight: .semibold))
         .foregroundStyle(.secondary)
-        .frame(width: 30, height: 30)
+        .frame(width: 30, height: 33)
     }
     .buttonStyle(.plain)
     .glassEffect(.clear, in: .circle)
@@ -317,16 +318,16 @@ struct ChatView: View {
   /// and sending answers it too.
   @ViewBuilder private var asking: some View {
     if let question = chat.question {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
           Image(systemName: "questionmark.bubble")
             .foregroundStyle(Color.reading)
           Text(question.text)
-            .font(.subheadline)
+            .font(.callout)
             .textSelection(.enabled)
         }
         if !question.options.isEmpty {
-          HStack(spacing: 6) {
+          HStack(spacing: 7) {
             ForEach(question.options, id: \.self) { option in
               Button(option) { chat.answer(option) }
                 .buttonStyle(.bordered)
@@ -336,8 +337,8 @@ struct ChatView: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 14)
-      .padding(.top, 6)
+      .padding(.horizontal, 15)
+      .padding(.top, 7)
     }
   }
 
@@ -347,12 +348,12 @@ struct ChatView: View {
     if !chat.pendingSteers.isEmpty {
       VStack(spacing: 4) {
         ForEach(chat.pendingSteers) { row in
-          HStack(spacing: 8) {
+          HStack(spacing: 9) {
             Image(systemName: "arrow.turn.down.right")
-              .font(.footnote)
+              .font(.subheadline)
               .foregroundStyle(.secondary)
             Text(row.text)
-              .font(.subheadline)
+              .font(.callout)
               .lineLimit(1)
               .truncationMode(.tail)
             Spacer(minLength: 8)
@@ -361,9 +362,9 @@ struct ChatView: View {
             } label: {
               HStack(spacing: 3) {
                 Text("Send now")
-                  .font(.system(.footnote, weight: .medium))
+                  .font(.system(.subheadline, weight: .medium))
                 Image(systemName: "return")
-                  .font(.footnote)
+                  .font(.subheadline)
               }
               .hitTarget()
             }
@@ -374,7 +375,7 @@ struct ChatView: View {
               chat.drop(row)
             } label: {
               Image(systemName: "xmark")
-                .font(.footnote)
+                .font(.subheadline)
                 .hitTarget()
             }
             .buttonStyle(.plain)
@@ -384,14 +385,14 @@ struct ChatView: View {
           }
           .textPlate(radius: 9, horizontal: 10, vertical: 6)
           .overlay {
-            RoundedRectangle(cornerRadius: 9)
+            RoundedRectangle(cornerRadius: 10)
               .strokeBorder(
                 Color.reading.opacity(0.3),
                 style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
           }
         }
       }
-      .padding(.horizontal, 10)
+      .padding(.horizontal, 11)
       .padding(.top, 2)
     }
   }
@@ -400,14 +401,14 @@ struct ChatView: View {
 
   /// A new conversation is not an empty screen: say what the one prominent action will do.
   @ViewBuilder private var emptyTranscript: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: 11) {
       Image(systemName: emptyIcon)
-        .font(.system(size: 30, weight: .light))
+        .font(.system(size: 33, weight: .light))
         .foregroundStyle(.secondary)
       Text(emptyTitle)
-        .font(.title3.weight(.semibold))
+        .font(.system(size: 16.5, weight: .semibold))
       Text(emptyDetail)
-        .font(.subheadline)
+        .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
       if chat.submission == .chooseFolder || chat.submission == .load {
@@ -415,7 +416,7 @@ struct ChatView: View {
           .buttonStyle(.glassProminent)
       }
     }
-    .frame(maxWidth: .infinity, minHeight: 220)
+    .frame(maxWidth: .infinity, minHeight: 242)
     .accessibilityElement(children: .contain)
   }
 
@@ -561,18 +562,18 @@ struct ToolRunView<Content: View>: View {
       Button {
         onToggle(!open)
       } label: {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
           Image(systemName: icon)
-            .font(.footnote)
+            .font(.subheadline)
           Text(title)
-            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .font(.subheadline.weight(.medium))
           if seconds > 0 {
             Text(ChatRowView.duration(seconds))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(.tertiary)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
-            .font(.footnote)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
         }
         .foregroundStyle(.secondary)
@@ -590,7 +591,7 @@ struct ToolRunView<Content: View>: View {
             rowView(member)
           }
         }
-        .padding(.leading, 15)
+        .padding(.leading, 17)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
@@ -668,7 +669,7 @@ struct ChatRowView: View, Equatable {
     // account for the tokens someone is waiting on before a word comes back.
     case .system:
       disclosure(
-        title: "instructions", icon: "list.bullet.rectangle", tint: .instructing,
+        title: "Instructions", icon: "list.bullet.rectangle", tint: .instructing,
         rawBody: row.text, monospaced: false)
 
     case .prompt:
@@ -682,22 +683,22 @@ struct ChatRowView: View, Equatable {
           .textSelection(.enabled)
       }
       .bubble(mine: true)
-      .padding(.trailing, 10)
-      .padding(.leading, 44)
+      .padding(.trailing, 11)
+      .padding(.leading, 48)
       .frame(maxWidth: .infinity, alignment: .trailing)
 
     case .steer:
       EmptyView()
 
     case .answer:
-      VStack(alignment: .leading, spacing: 5) {
+      VStack(alignment: .leading, spacing: 6) {
         StreamedMarkdown(text: row.text, mono: mono, size: size, live: live)
         if let total = meta?.turnSeconds, total >= 1 {
           HStack(spacing: 3) {
             Image(systemName: "stopwatch")
-              .font(.system(size: 9))
+              .font(.system(size: 10))
             Text(Self.duration(total))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
           }
           .foregroundStyle(.tertiary)
         }
@@ -706,9 +707,11 @@ struct ChatRowView: View, Equatable {
         Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
         ShareLink(item: row.text)
       }
-      .plateBubble()
-      .padding(.leading, 10)
-      .padding(.trailing, 44)
+      .environment(\.proseDesign, .serif)
+      .foregroundStyle(Color.ink)
+      .padding(.vertical, 6)
+      .padding(.leading, 18)
+      .padding(.trailing, 64)
       .frame(maxWidth: .infinity, alignment: .leading)
 
     case .reasoning:
@@ -737,21 +740,21 @@ struct ChatRowView: View, Equatable {
     // Where a turn stopped or came apart, drawn in the conversation at the point it happened
     // rather than in a bar under it that the next turn wipes.
     case .notice(let tone):
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 7) {
         Image(systemName: tone == .stopped ? "stop.circle" : "exclamationmark.triangle")
-          .font(.footnote)
+          .font(.subheadline)
         Text(row.text)
-          .font(.footnote)
+          .font(.subheadline)
           .textSelection(.enabled)
         Spacer(minLength: 0)
       }
-      .foregroundStyle(tone == .stopped ? Color.secondary : .orange)
+      .foregroundStyle(tone == .stopped ? Color.secondary : Color.clay)
       .chipPlate(radius: 8, horizontal: 10, vertical: 5)
       .contextMenu {
         Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
       }
-      .padding(.leading, 10)
-      .padding(.trailing, 44)
+      .padding(.leading, 11)
+      .padding(.trailing, 48)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
@@ -759,9 +762,9 @@ struct ChatRowView: View, Equatable {
   /// "Thought" once it has settled, and for how long when that is known — the same thing a
   /// transcript of someone else's session tells you, and the one number worth having here.
   private var thoughtTitle: String {
-    if live { return "thinking…" }
-    guard let seconds = meta?.elapsed, seconds >= 0.5 else { return "thought" }
-    return "thought for \(Self.duration(seconds))"
+    if live { return "Thinking…" }
+    guard let seconds = meta?.elapsed, seconds >= 0.5 else { return "Thought" }
+    return "Thought for \(Self.duration(seconds))"
   }
 
   /// What a step took, in whichever unit reads as a number rather than a decimal.
@@ -785,36 +788,35 @@ struct ChatRowView: View, Equatable {
       Button {
         onExpand(!open)
       } label: {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
           Image(systemName: icon)
-            .font(.footnote)
+            .font(.subheadline)
           Text(title)
-            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .font(.subheadline.weight(.medium))
           // A tool call says what it did on the line itself, open or shut: the command is the
           // point of the row, not something to be found inside it.
           if let inlineDetail, !inlineDetail.isEmpty {
             Text(inlineDetail)
-              .font(.system(.footnote, design: .monospaced))
+              .font(.system(.subheadline, design: .monospaced))
+              .fontDesign(.monospaced)
               .foregroundStyle(.primary.opacity(0.75))
               .lineLimit(1)
               .truncationMode(.middle)
           } else if !open {
             Text(caption ?? summary(of: body))
-              .font(
-                caption == nil
-                  ? .system(.footnote, design: .monospaced) : .footnote
-              )
+              .font(.subheadline)
+              .fontDesign(caption == nil && monospaced ? .monospaced : .serif)
               .foregroundStyle(.secondary)
               .lineLimit(1)
               .truncationMode(.tail)
           }
           if let seconds = meta?.elapsed, seconds >= 0.02 {
             Text(Self.duration(seconds))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(.tertiary)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
-            .font(.footnote)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
         }
         .foregroundStyle(tint)
@@ -840,14 +842,14 @@ struct ChatRowView: View, Equatable {
             } label: {
               HStack(spacing: 3) {
                 Image(systemName: capped ? "chevron.up" : "chevron.down")
-                  .font(.footnote)
+                  .font(.subheadline)
                 Text(capped ? "see more" : "see less")
               }
               .frame(minHeight: Metrics.hit)
               .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
           }
 
@@ -857,6 +859,7 @@ struct ChatRowView: View, Equatable {
             if monospaced {
               Text(shown)
                 .font(mono)
+                .fontDesign(.monospaced)
                 .textSelection(.enabled)
             } else {
               StreamedMarkdown(text: shown, mono: mono, size: size - 1, live: live)
@@ -872,7 +875,7 @@ struct ChatRowView: View, Equatable {
         }
         .textPlate(radius: 8, horizontal: 9, vertical: 5)
         // Indented to sit under its own title rather than beside it.
-        .padding(.leading, 15)
+        .padding(.leading, 17)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
@@ -992,34 +995,35 @@ struct ChatRowView: View, Equatable {
       Button {
         onExpand(!open)
       } label: {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
           Image(systemName: icon)
-            .font(.footnote)
+            .font(.subheadline)
           Text(title)
-            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .font(.subheadline.weight(.medium))
           Text(path)
-            .font(.system(.footnote, design: .monospaced))
+            .font(.system(.subheadline, design: .monospaced))
+            .fontDesign(.monospaced)
             .foregroundStyle(.primary.opacity(0.75))
             .lineLimit(1)
             .truncationMode(.middle)
           // What the patch came to, which is the part someone scanning a turn is after.
           if added > 0 {
             Text("+\(added)")
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(Color.diffAdded)
           }
           if removed > 0 {
             Text("-\(removed)")
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(Color.diffRemoved)
           }
           if let seconds = meta?.elapsed, seconds >= 0.02 {
             Text(Self.duration(seconds))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(.tertiary)
           }
           Image(systemName: open ? "chevron.down" : "chevron.right")
-            .font(.footnote)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
         }
         .foregroundStyle(Color.reading)
@@ -1039,14 +1043,14 @@ struct ChatRowView: View, Equatable {
             } label: {
               HStack(spacing: 3) {
                 Image(systemName: capped ? "chevron.up" : "chevron.down")
-                  .font(.footnote)
+                  .font(.subheadline)
                 Text(capped ? "see more" : "see less")
               }
               .frame(minHeight: Metrics.hit)
               .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .font(.system(.footnote, design: .monospaced, weight: .medium))
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
           }
 
@@ -1059,7 +1063,7 @@ struct ChatRowView: View, Equatable {
         }
         .textPlate(radius: 8, horizontal: 9, vertical: 5)
         // Indented to sit under its own title rather than beside it.
-        .padding(.leading, 15)
+        .padding(.leading, 17)
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
@@ -1076,12 +1080,14 @@ struct ChatRowView: View, Equatable {
 
   @ViewBuilder private func diffRow(_ line: (text: String, kind: DiffKind)) -> some View {
     let (prefix, color, background) = style(for: line.kind)
-    HStack(alignment: .top, spacing: 6) {
+    HStack(alignment: .top, spacing: 7) {
       Text(prefix)
         .font(mono)
+        .fontDesign(.monospaced)
         .foregroundStyle(color)
       Text(line.text.isEmpty ? " " : line.text)
         .font(mono)
+        .fontDesign(.monospaced)
         .foregroundStyle(color)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1159,15 +1165,15 @@ struct PromptImages: View {
           image
             .resizable()
             .aspectRatio(contentMode: .fill)
-            .frame(width: 54, height: 54)
-            .clipShape(.rect(cornerRadius: 6))
+            .frame(width: 54, height: 59)
+            .clipShape(.rect(cornerRadius: 7))
         } else {
-          RoundedRectangle(cornerRadius: 6)
+          RoundedRectangle(cornerRadius: 7)
             .fill(.white.opacity(0.18))
-            .frame(width: 54, height: 54)
+            .frame(width: 54, height: 59)
             .overlay {
               Image(systemName: "photo")
-                .font(.footnote)
+                .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.7))
             }
         }
@@ -1206,7 +1212,8 @@ struct RowCost: View {
           Text("\(ReadoutFormat.group(tokens)) tok")
         }
       }
-      .font(.system(.footnote, design: .monospaced))
+      .font(.system(.subheadline, design: .monospaced))
+      .fontDesign(.monospaced)
       .foregroundStyle(.tertiary)
     }
   }
@@ -1241,68 +1248,69 @@ struct TurnSummaryCard: View {
         Button {
           withAnimation(.easeOut(duration: 0.2)) { showingAll.toggle() }
         } label: {
-          HStack(spacing: 5) {
+          HStack(spacing: 6) {
             Text(
               showingAll
                 ? "Show fewer"
                 : "Show \(summary.files.count - Self.shownByDefault) more")
             Image(systemName: showingAll ? "chevron.up" : "chevron.down")
-              .font(.system(size: 9))
+              .font(.system(size: 10))
             Spacer(minLength: 0)
           }
-          .font(.footnote)
+          .font(.subheadline)
           .foregroundStyle(.secondary)
-          .padding(.horizontal, 10)
+          .padding(.horizontal, 11)
           .frame(minHeight: Metrics.hit)
           .contentShape(.rect)
         }
         .buttonStyle(.plain)
       }
     }
-    .background(.thinMaterial, in: .rect(cornerRadius: 10))
+    .background(Color.surface, in: .rect(cornerRadius: Radius.card))
     .overlay {
-      RoundedRectangle(cornerRadius: 10)
+      RoundedRectangle(cornerRadius: 11)
         .strokeBorder(Color.hairline, lineWidth: 0.5)
     }
-    .padding(.leading, 10)
-    .padding(.trailing, 44)
+    .padding(.leading, 11)
+    .padding(.trailing, 48)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder private var header: some View {
-    HStack(spacing: 7) {
+    HStack(spacing: 8) {
       Image(systemName: "plusminus.circle")
-        .font(.footnote)
+        .font(.subheadline)
         .foregroundStyle(.secondary)
       Text(
         summary.files.count == 1
           ? "Edited 1 file" : "Edited \(summary.files.count) files"
       )
-      .font(.system(.footnote, weight: .medium))
+      .font(.system(.subheadline, weight: .medium))
       Spacer(minLength: 8)
       counts(added: summary.added, removed: summary.removed)
     }
-    .padding(.horizontal, 10)
-    .frame(minHeight: 28)
+    .padding(.horizontal, 11)
+    .frame(minHeight: 31)
   }
 
   @ViewBuilder private func row(_ file: ChatController.FileChange) -> some View {
     Button {
       NSWorkspace.shared.activateFileViewerSelecting([resolved(file)])
     } label: {
-      HStack(spacing: 7) {
+      HStack(spacing: 8) {
         Image(systemName: "chevron.left.forwardslash.chevron.right")
-          .font(.system(size: 9))
+          .font(.system(size: 10))
           .foregroundStyle(.tertiary)
         Text(file.name)
-          .font(.system(.footnote, design: .monospaced))
+          .font(.system(.subheadline, design: .monospaced))
+          .fontDesign(.monospaced)
           .lineLimit(1)
           .truncationMode(.middle)
         Spacer(minLength: 8)
         counts(added: file.added, removed: file.removed)
       }
-      .padding(.horizontal, 10)
-      .frame(minHeight: 26)
+      .padding(.horizontal, 11)
+      .frame(minHeight: 29)
       .contentShape(.rect)
     }
     .buttonStyle(.plain)
@@ -1310,7 +1318,7 @@ struct TurnSummaryCard: View {
   }
 
   @ViewBuilder private func counts(added: Int, removed: Int) -> some View {
-    HStack(spacing: 5) {
+    HStack(spacing: 6) {
       if added > 0 {
         Text("+\(added)")
           .foregroundStyle(Color.diffAdded)
@@ -1320,7 +1328,8 @@ struct TurnSummaryCard: View {
           .foregroundStyle(Color.diffRemoved)
       }
     }
-    .font(.system(.footnote, design: .monospaced))
+    .font(.system(.subheadline, design: .monospaced))
+    .fontDesign(.monospaced)
     .monospacedDigit()
   }
 

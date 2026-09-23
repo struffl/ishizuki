@@ -8,9 +8,28 @@ import SwiftUI
 
 /// The sizes the platform asks for, kept in one place so no control drifts under them.
 enum Metrics {
-  /// The floor for anything clickable. The platform's own default is 28; 22 is the smallest
-  /// the guidelines allow room for, and what the inline chevrons and dismissers use.
-  static let hit: CGFloat = 22
+  /// The floor for anything clickable, and what the inline chevrons and dismissers use.
+  static let hit: CGFloat = 24
+}
+
+/// The gaps between things, on one scale.
+enum Spacing {
+  static let xs: CGFloat = 4.5
+  static let s: CGFloat = 9
+  static let m: CGFloat = 13
+  static let l: CGFloat = 18
+  static let xl: CGFloat = 26
+}
+
+extension Font {
+  /// Body text, a step above the platform's 13 points.
+  static let base = Font.system(size: 14.5)
+}
+
+enum Radius {
+  static let chip: CGFloat = 7
+  static let control: CGFloat = 9
+  static let card: CGFloat = 11
 }
 
 extension View {

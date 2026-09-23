@@ -15,18 +15,18 @@ struct CacheSection: View {
   @State private var confirmingClear = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: "Prefix cache")
 
       GlassCard {
-        VStack(alignment: .leading, spacing: 10) {
-          HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 11) {
+          HStack(spacing: 9) {
             Text(
               entries.isEmpty
                 ? "Nothing archived yet."
                 : "\(entries.count) archived · \(ReadoutFormat.bytes(totalBytes)) on disk"
             )
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout.monospacedDigit())
             .foregroundStyle(.secondary)
             Spacer()
             Button("Reload") { reload() }
@@ -44,18 +44,18 @@ struct CacheSection: View {
                 + "\(ReadoutFormat.bytes(totalBytes - sharedBytes)) across \(conversations) "
                 + (conversations == 1 ? "conversation" : "conversations")
             )
-            .font(.system(.footnote, design: .monospaced))
+            .font(.subheadline.monospacedDigit())
             .foregroundStyle(.tertiary)
             .help("The instructions and tool schemas every conversation starts from are kept once")
           }
 
           ForEach(entries.prefix(12), id: \.id) { entry in
-            HStack(spacing: 10) {
+            HStack(spacing: 11) {
               Text(MemoryBudget.tokens(entry.tokens.count) + " tok")
-                .frame(width: 80, alignment: .leading)
+                .frame(width: 88, alignment: .leading)
               Text(ReadoutFormat.bytes(entry.byteCount))
                 .foregroundStyle(.secondary)
-                .frame(width: 70, alignment: .leading)
+                .frame(width: 77, alignment: .leading)
               Text(entry.lastUsed.formatted(date: .abbreviated, time: .shortened))
                 .foregroundStyle(.tertiary)
               Spacer()
@@ -70,12 +70,12 @@ struct CacheSection: View {
               .accessibilityLabel("Forget this prefix")
               .help("Forget this prefix")
             }
-            .font(.system(.footnote, design: .monospaced))
+            .font(.subheadline.monospacedDigit())
           }
 
           if entries.count > 12 {
             Text("+\(entries.count - 12) more")
-              .font(.system(.footnote, design: .monospaced))
+              .font(.subheadline.monospacedDigit())
               .foregroundStyle(.tertiary)
           }
         }

@@ -20,16 +20,16 @@ struct CompanionSection: View {
     Section("Companion") {
       Toggle("Let an iPhone use this Mac", isOn: running)
       if case .failed(let message) = companion.phase {
-        Text(message).font(.caption).foregroundStyle(.red)
+        Text(message).font(.subheadline).foregroundStyle(.red)
       }
       TextField("Name on the network", text: Bindable(settings).serviceName)
       TextField(
         "Companion port", value: Bindable(settings).port, format: .number.grouping(.never))
       Toggle("Share the shell as well as files", isOn: Bindable(settings).allowShell)
       LabeledContent("Folders shared") {
-        HStack(spacing: 8) {
+        HStack(spacing: 9) {
           Text(sharedSummary)
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout.monospacedDigit())
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.head)
@@ -39,7 +39,7 @@ struct CompanionSection: View {
       }
       LabeledContent("Key") {
         Text(companion.fingerprint)
-          .font(.system(.subheadline, design: .monospaced))
+          .font(.callout)
           .foregroundStyle(.secondary)
       }
 
@@ -58,9 +58,9 @@ struct CompanionSection: View {
 
       ForEach(companion.devices) { device in
         LabeledContent(device.name) {
-          HStack(spacing: 8) {
+          HStack(spacing: 9) {
             Text(device.system)
-              .font(.system(.footnote, design: .monospaced))
+              .font(.subheadline)
               .foregroundStyle(.tertiary)
             Button("Forget") { companion.forget(device) }
               .buttonStyle(.borderless)
@@ -107,29 +107,29 @@ struct PairingSheet: View {
   let done: () -> Void
 
   var body: some View {
-    VStack(spacing: 16) {
+    VStack(spacing: 18) {
       Text("Point the phone's camera at this")
-        .font(.headline)
+        .font(.system(size: 14.5, weight: .semibold))
 
       if let ticket = companion.ticket, let url = ticket.url {
         if let image = QRCode.image(for: url.absoluteString, side: 260) {
           Image(nsImage: image)
             .interpolation(.none)
             .resizable()
-            .frame(width: 260, height: 260)
+            .frame(width: 260, height: 286)
             .background(.white)
-            .clipShape(.rect(cornerRadius: 12))
+            .clipShape(.rect(cornerRadius: 13))
         }
         VStack(spacing: 4) {
           Text(ticket.hosts.first ?? "—")
-            .font(.system(.callout, design: .monospaced))
+            .font(.body)
           Text("port \(String(ticket.port)) · key \(companion.fingerprint)")
-            .font(.system(.subheadline, design: .monospaced))
+            .font(.callout)
             .foregroundStyle(.secondary)
         }
         if let closes = companion.pairingCloses {
           Text("Pairing closes \(closes, style: .relative) from now")
-            .font(.caption)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
         }
         Button("Copy the link instead") {
@@ -145,8 +145,8 @@ struct PairingSheet: View {
       Button("Done", action: done)
         .keyboardShortcut(.defaultAction)
     }
-    .padding(24)
-    .frame(width: 340)
+    .padding(26)
+    .frame(width: 374)
   }
 }
 

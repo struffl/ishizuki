@@ -1,65 +1,49 @@
 // SPDX-FileCopyrightText: 2026 Sarah Truffle <me@heni.lol>
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The glass the panels are cut from: the window is clear, controls are glass, and content
-// sits on standard materials — the layering the platform draws everything else with.
+// The surfaces the panels are cut from: the window's own background, grouped sections the way
+// Settings draws them, and glass left to the controls the system gives it to.
 
 import AppKit
 import SwiftUI
 
 extension Color {
+  init(light: (Double, Double, Double), dark: (Double, Double, Double)) {
+    self = Color(
+      NSColor(name: nil) { appearance in
+        let (r, g, b) = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        return NSColor(red: r, green: g, blue: b, alpha: 1)
+      })
+  }
+
+  /// The window: parchment, or a warm charcoal after dark.
+  static let paper = Color(light: (0.957, 0.937, 0.894), dark: (0.114, 0.106, 0.094))
+  /// The sidebar, a sheet further down the stack.
+  static let paperDeep = Color(light: (0.925, 0.898, 0.843), dark: (0.086, 0.080, 0.071))
+  /// What a section, a plate or a chip is cut from: a fresher sheet laid on the page.
+  static let surface = Color(light: (0.988, 0.976, 0.949), dark: (0.160, 0.149, 0.133))
+  /// A pencil line rather than a system separator.
+  static let hairline = Color(light: (0.839, 0.800, 0.722), dark: (0.290, 0.271, 0.239))
+  /// Ink for text that is not the model's or the person's.
+  static let ink = Color(light: (0.200, 0.176, 0.141), dark: (0.906, 0.878, 0.827))
+
+  /// The bonsai's own green: the accent, and the person's bubble.
+  static let moss = Color(light: (0.310, 0.431, 0.259), dark: (0.529, 0.667, 0.447))
+  /// Fired clay, for what needs a look.
+  static let clay = Color(light: (0.639, 0.333, 0.200), dark: (0.851, 0.557, 0.408))
+
   /// Reading, held apart from writing because the wait for one feels nothing like the wait
-  /// for the other. Fixed rather than the system accent, which is the person's to spend.
-  static let reading = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.53, green: 0.73, blue: 0.96, alpha: 1)
-        : NSColor(red: 0.16, green: 0.37, blue: 0.68, alpha: 1)
-    })
+  /// for the other: a faded blue-black ink.
+  static let reading = Color(light: (0.220, 0.330, 0.470), dark: (0.600, 0.710, 0.820))
+  /// Writing: new growth.
+  static let generating = Color(light: (0.310, 0.431, 0.259), dark: (0.580, 0.740, 0.490))
+  /// The instructions the model is handed every turn: an ochre margin note.
+  static let instructing = Color(light: (0.500, 0.350, 0.110), dark: (0.890, 0.740, 0.450))
+  /// The person's own bubble. Fixed so white text stays readable on it.
+  static let mine = Color(light: (0.290, 0.404, 0.239), dark: (0.290, 0.404, 0.239))
 
-  /// Writing.
-  static let generating = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.45, green: 0.85, blue: 0.58, alpha: 1)
-        : NSColor(red: 0.11, green: 0.44, blue: 0.24, alpha: 1)
-    })
-
-  /// The instructions the model is handed every turn, which is most of what it reads before
-  /// it can say anything. Darkened in the light appearance to clear 4.5:1 on a plate.
-  static let instructing = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 1.0, green: 0.82, blue: 0.40, alpha: 1)
-        : NSColor(red: 0.46, green: 0.29, blue: 0.0, alpha: 1)
-    })
-
-  /// The person's own bubble. Fixed rather than the system accent, because white text has to
-  /// stay readable on it whatever accent someone has chosen.
-  static let mine = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.13, green: 0.47, blue: 0.96, alpha: 1)
-        : NSColor(red: 0.04, green: 0.42, blue: 0.94, alpha: 1)
-    })
-
-  /// The system's own separator, for the borders that used to be a guess at white.
-  static let hairline = Color(nsColor: .separatorColor)
-
-  /// A line an edit added, and the line it took out: subdued next to a real git diff, since
-  /// this one sits on glass rather than a terminal's flat background.
-  static let diffAdded = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.45, green: 0.85, blue: 0.58, alpha: 1)
-        : NSColor(red: 0.11, green: 0.44, blue: 0.24, alpha: 1)
-    })
-  static let diffRemoved = Color(
-    NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ? NSColor(red: 0.98, green: 0.55, blue: 0.53, alpha: 1)
-        : NSColor(red: 0.75, green: 0.20, blue: 0.18, alpha: 1)
-    })
+  static let diffAdded = Color(light: (0.290, 0.420, 0.220), dark: (0.580, 0.760, 0.490))
+  static let diffRemoved = Color(light: (0.640, 0.250, 0.180), dark: (0.900, 0.560, 0.480))
 }
 
 /// A message bubble with a tail on the side it came from. Only the two ends of the
@@ -70,8 +54,8 @@ extension Color {
 /// spur hanging off the bottom of every bubble.
 struct Bubble: Shape {
   var mine: Bool
-  var radius: CGFloat = 13
-  var tail: CGFloat = 6
+  var radius: CGFloat = 14
+  var tail: CGFloat = 7
 
   func path(in rect: CGRect) -> Path {
     let r = min(radius, min(rect.width, rect.height) / 2)
@@ -110,7 +94,7 @@ extension View {
   /// A bubble's padding plus the tail's own width on the side it hangs off. The shape takes
   /// the tail out of the rect it is given, so without this the text loses exactly as much room
   /// as the tail occupies and its last letter ends up against the edge.
-  func bubble(mine: Bool, horizontal: CGFloat = 13, vertical: CGFloat = 8) -> some View {
+  func bubble(mine: Bool, horizontal: CGFloat = 14, vertical: CGFloat = 9) -> some View {
     let shape = Bubble(mine: mine)
     return padding(.vertical, vertical)
       .padding(mine ? .leading : .trailing, horizontal)
@@ -118,138 +102,82 @@ extension View {
       .background(Color.mine.opacity(mine ? 1 : 0), in: shape)
   }
 
-  /// The model's side of the conversation. Content, so it takes a standard material rather
-  /// than glass: glass belongs to the controls that float over the content, not to the
-  /// content itself.
-  func plateBubble(horizontal: CGFloat = 13, vertical: CGFloat = 8) -> some View {
+  /// The model's side of the conversation: the same quiet fill a grouped form row uses.
+  func plateBubble(horizontal: CGFloat = 14, vertical: CGFloat = 9) -> some View {
     let shape = Bubble(mine: false)
     return padding(.vertical, vertical)
       .padding(.trailing, horizontal)
       .padding(.leading, horizontal + shape.tail)
-      .background(.thinMaterial, in: shape)
-      .gloss(shape)
+      .background(Color.surface, in: shape)
   }
 
-  /// A plate cut to a shape of its own, for the bubbles that are not rectangles.
-  func textPlate(
-    _ shape: some Shape, horizontal: CGFloat = 12, vertical: CGFloat = 8
-  ) -> some View {
-    padding(.horizontal, horizontal)
-      .padding(.vertical, vertical)
-      .background(.thinMaterial, in: shape)
-      .gloss(shape)
+  /// Paper for the window itself.
+  func paperBackground() -> some View {
+    containerBackground(for: .window) { Color.paper }
+      .tint(.moss)
+      .fontDesign(.serif)
   }
 
-  /// The window lays down the backdrop photo, which is what the panels on top read as layered
-  /// glass against, rather than the desktop the old flat material used to blur.
-  func windowBackdrop() -> some View {
-    containerBackground(for: .window) { WindowBackdrop() }
-  }
-
-  /// Anything carrying text sits on this. A thin material rather than clear glass, so small
-  /// type keeps its contrast against whatever is behind the window.
-  func textPlate(
-    radius: CGFloat = 10, horizontal: CGFloat = 10, vertical: CGFloat = 7
-  ) -> some View {
-    padding(.horizontal, horizontal)
-      .padding(.vertical, vertical)
-      .background(.thinMaterial, in: .rect(cornerRadius: radius))
-      .gloss(.rect(cornerRadius: radius))
-  }
-
-  /// A plate for something short: a row's own header, the line over the composer. The sheen a
-  /// panel gets runs over the shape's whole height, which on a bubble is a highlight at the top
-  /// and on a chip two lines tall is a wash over the entire thing — and small secondary type
-  /// under that wash cannot be read at all. So this one takes a denser material and no sheen.
-  func chipPlate(
-    radius: CGFloat = 8, horizontal: CGFloat = 8, vertical: CGFloat = 2
-  ) -> some View {
-    padding(.horizontal, horizontal)
-      .padding(.vertical, vertical)
-      .background(.regularMaterial, in: .rect(cornerRadius: radius))
+  /// A sheet laid on the page: fresh paper with a pencil edge.
+  func paperCard(radius: CGFloat = Radius.card) -> some View {
+    background(Color.surface, in: .rect(cornerRadius: radius))
       .overlay {
         RoundedRectangle(cornerRadius: radius)
-          .strokeBorder(Color.hairline.opacity(0.5), lineWidth: 0.5)
-          .allowsHitTesting(false)
+          .strokeBorder(Color.hairline, lineWidth: 0.5)
       }
+      .shadow(color: Color.ink.opacity(0.05), radius: 1.5, y: 1)
   }
 
-  /// The sheen that tells the eye "glass" rather than "blurred photo": light catching the top
-  /// edge, and a rim that picks it up the same way a real edge would.
-  ///
-  /// The highlight is a band of fixed height rather than a share of the shape. As a share it
-  /// ran two thirds of the way down, which is a different thing at every size: on a card
-  /// holding a paragraph it lifted the material almost to white underneath the text, and on a
-  /// pill two lines tall it was a ramp across the whole control — a gradient nobody drew on
-  /// purpose. Real glass catches the light at its edge whatever size the pane is, so this does
-  /// the same, and a tall card and a small chip now read as the same material.
-  func gloss(_ shape: some Shape) -> some View {
-    overlay {
-      Color.clear
-        .overlay(alignment: .top) {
-          LinearGradient(
-            colors: [.white.opacity(0.22), .white.opacity(0)],
-            startPoint: .top, endPoint: .bottom
-          )
-          .frame(height: 14)
-        }
-        .clipShape(shape)
-        .blendMode(.overlay)
-        .allowsHitTesting(false)
-    }
-    .overlay {
-      shape
-        .stroke(
-          LinearGradient(
-            colors: [.white.opacity(0.28), .white.opacity(0.04)],
-            startPoint: .top, endPoint: .bottom),
-          lineWidth: 0.5
-        )
-        .allowsHitTesting(false)
-    }
+  func textPlate(
+    _ shape: some Shape, horizontal: CGFloat = 13, vertical: CGFloat = 9
+  ) -> some View {
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .background(Color.surface, in: shape)
+  }
+
+  func textPlate(
+    radius: CGFloat = Radius.control, horizontal: CGFloat = 11, vertical: CGFloat = 8
+  ) -> some View {
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .background(Color.surface, in: .rect(cornerRadius: radius))
+  }
+
+  /// Something short that sits on content: a row's own header, a chip, the line over the
+  /// composer.
+  func chipPlate(
+    radius: CGFloat = Radius.chip, horizontal: CGFloat = 9, vertical: CGFloat = 2
+  ) -> some View {
+    padding(.horizontal, horizontal)
+      .padding(.vertical, vertical)
+      .background(Color.surface, in: .rect(cornerRadius: radius))
   }
 }
 
-/// A panel in the content layer: a material, a hairline, and nothing that fights the window
-/// state the system already draws for us.
+/// A panel in the content layer, drawn the way a grouped form draws its sections.
 struct GlassCard<Content: View>: View {
-  var padding: CGFloat = 12
-  var radius: CGFloat = 14
+  var padding: CGFloat = Spacing.m
+  var radius: CGFloat = Radius.card
   @ViewBuilder var content: Content
 
   var body: some View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.regularMaterial, in: .rect(cornerRadius: radius))
-      .overlay {
-        RoundedRectangle(cornerRadius: radius)
-          .strokeBorder(Color.hairline, lineWidth: 1)
-      }
-      .gloss(.rect(cornerRadius: radius))
+      .paperCard(radius: radius)
   }
 }
 
-/// The label over a panel, which is the one piece of text in the window with nothing behind
-/// it but the photograph.
-///
-/// So it is not styled like a caption. Secondary grey is right on a solid background and
-/// illegible over a photograph whose brightness changes across the width of the word. A halo
-/// behind the glyphs was the first attempt and was not enough: a shadow gives an edge to sit
-/// against but leaves the strokes themselves competing with whatever is behind them.
-///
-/// So it gets the same plate everything else in this window gets. The dense material and no
-/// sheen, which is what the small chips use — a header is two words on its own, and the wash
-/// that suits a panel is the thing small type cannot be read under.
+/// A section's title, set as Settings sets its own.
 struct SectionHeader: View {
   let title: String
 
   var body: some View {
     Text(title)
-      .font(.system(.subheadline, weight: .semibold))
-      .foregroundStyle(.primary)
-      .chipPlate(radius: 7, horizontal: 9, vertical: 3)
-      .fixedSize()
+      .font(.system(size: 17, weight: .semibold, design: .serif))
+      .foregroundStyle(Color.ink)
+      .padding(.leading, Spacing.xs)
   }
 }
 
@@ -258,7 +186,7 @@ struct GlassSection<Content: View>: View {
   @ViewBuilder var content: Content
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       SectionHeader(title: title)
       GlassCard { content }
     }

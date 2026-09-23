@@ -31,12 +31,12 @@ struct Composer: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 7) {
       if !chat.attachments.isEmpty {
         chips
       }
       if let refused = chat.refusedDrop {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
           Image(systemName: "exclamationmark.triangle")
           Text("\(refused) could not be attached")
           Spacer(minLength: 0)
@@ -44,8 +44,8 @@ struct Composer: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
         }
-        .font(.footnote)
-        .foregroundStyle(.orange)
+        .font(.subheadline)
+        .foregroundStyle(Color.clay)
       }
       field
     }
@@ -61,7 +61,7 @@ struct Composer: View {
     .animation(.easeOut(duration: 0.22), value: chat.refusedDrop)
     .overlay {
       if targeted {
-        RoundedRectangle(cornerRadius: 10)
+        RoundedRectangle(cornerRadius: 11)
           .strokeBorder(
             Color.reading, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
       }
@@ -72,12 +72,12 @@ struct Composer: View {
     } isTargeted: {
       targeted = $0
     }
-    .padding(.horizontal, 10)
-    .padding(.bottom, 10)
+    .padding(.horizontal, 11)
+    .padding(.bottom, 11)
   }
 
   @ViewBuilder private var field: some View {
-    HStack(alignment: .bottom, spacing: 8) {
+    HStack(alignment: .bottom, spacing: 9) {
       // Built to the same geometry as the two buttons on the other end of the row, so all
       // three sit on one line however tall the box has grown.
       Button {
@@ -85,13 +85,13 @@ struct Composer: View {
       } label: {
         ZStack {
           Circle()
-            .fill(Color.primary.opacity(0.08))
-            .frame(width: 27, height: 27)
+            .fill(Color.ink.opacity(0.08))
+            .frame(width: 27, height: 30)
           Image(systemName: "paperclip")
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 14.5, weight: .medium))
             .foregroundStyle(.secondary)
         }
-        .frame(width: 38, height: 38)
+        .frame(width: 38, height: 42)
         .contentShape(.circle)
       }
       .buttonStyle(.plain)
@@ -105,12 +105,12 @@ struct Composer: View {
         text: $chat.draft, axis: .vertical
       )
       .textFieldStyle(.plain)
-      .font(mono)
+      .font(.base)
       .lineLimit(1...max(2, maxLines))
       // One line sits in the middle of the row rather than on its floor. The buttons are all
       // 38 across and the row is bottom-aligned so they stay put as the box grows, which
       // means a single line of text has to claim the same height to share their centre.
-      .frame(minHeight: 38)
+      .frame(minHeight: 42)
       // Return sends, shift-return opens a line. Handled here rather than through onSubmit,
       // which cannot tell the two apart.
       .onKeyPress(phases: .down) { press in
@@ -133,15 +133,15 @@ struct Composer: View {
           ZStack {
             Circle()
               .fill(Color.primary.opacity(0.1))
-              .frame(width: 27, height: 27)
+              .frame(width: 27, height: 30)
             Circle()
               .stroke(.quaternary, lineWidth: 2.5)
-              .frame(width: 34, height: 34)
+              .frame(width: 34, height: 37)
             Image(systemName: "stop.fill")
-              .font(.system(size: 11, weight: .semibold))
+              .font(.system(size: 12, weight: .semibold))
               .foregroundStyle(.secondary)
           }
-          .frame(width: 38, height: 38)
+          .frame(width: 38, height: 42)
           .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -172,7 +172,7 @@ struct Composer: View {
   @ViewBuilder private var chips: some View {
     VStack(alignment: .leading, spacing: 4) {
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
           ForEach(chat.attachments) { attachment in
             AttachmentChip(attachment: attachment) { chat.detach(attachment) }
           }
@@ -184,7 +184,7 @@ struct Composer: View {
             + "the pictures will be named but not seen.",
           systemImage: "eye.slash"
         )
-        .font(.footnote)
+        .font(.subheadline)
         .foregroundStyle(Color.instructing)
       }
     }
@@ -211,42 +211,42 @@ struct AttachmentChip: View {
   @State private var thumbnail: Image?
 
   var body: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 7) {
       if let thumbnail {
         thumbnail
           .resizable()
           .aspectRatio(contentMode: .fill)
-          .frame(width: 22, height: 22)
+          .frame(width: 22, height: 24)
           .clipShape(.rect(cornerRadius: 4))
       } else {
         Image(systemName: attachment.icon)
-          .font(.footnote)
+          .font(.subheadline)
           .foregroundStyle(.secondary)
-          .frame(width: 22, height: 22)
+          .frame(width: 22, height: 24)
       }
       VStack(alignment: .leading, spacing: 0) {
         Text(attachment.name)
-          .font(.system(.footnote, weight: .medium))
+          .font(.system(.subheadline, weight: .medium))
           .lineLimit(1)
           .truncationMode(.middle)
         Text(ReadoutFormat.compact(attachment.byteCount))
-          .font(.system(size: 9, design: .monospaced))
+          .font(.system(size: 10).monospacedDigit())
           .foregroundStyle(.tertiary)
       }
       .frame(maxWidth: 140, alignment: .leading)
       Button(action: onRemove) {
         Image(systemName: "xmark")
-          .font(.system(size: 8, weight: .semibold))
+          .font(.system(size: 9, weight: .semibold))
           .foregroundStyle(.secondary)
           .hitTarget(16)
       }
       .buttonStyle(.plain)
       .accessibilityLabel("Remove \(attachment.name)")
     }
-    .padding(.leading, 5)
+    .padding(.leading, 6)
     .padding(.trailing, 4)
     .padding(.vertical, 4)
-    .background(.quaternary, in: .rect(cornerRadius: 7))
+    .background(Color.surface, in: .rect(cornerRadius: Radius.control))
     .task(id: attachment.url) {
       guard attachment.kind == .image else { return }
       let url = attachment.url
@@ -294,29 +294,29 @@ struct SendRing: View {
     } label: {
       ZStack {
         Circle()
-          .fill(chat.canSubmit ? Color.mine : Color.primary.opacity(0.08))
-          .frame(width: 27, height: 27)
+          .fill(chat.canSubmit ? Color.mine : Color.ink.opacity(0.08))
+          .frame(width: 27, height: 30)
 
         Circle()
           .stroke(.quaternary, lineWidth: 2.5)
-          .frame(width: 34, height: 34)
+          .frame(width: 34, height: 37)
         if let prefill = chat.prefillFraction {
           Circle()
             .trim(from: 0, to: max(0.02, min(1, prefill)))
             .stroke(Color.reading, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             .rotationEffect(.degrees(-90))
-            .frame(width: 34, height: 34)
+            .frame(width: 34, height: 37)
         } else if chat.isGenerating {
           Circle()
             .stroke(Color.generating, lineWidth: 2.5)
-            .frame(width: 34, height: 34)
+            .frame(width: 34, height: 37)
         }
 
         Image(systemName: glyph)
-          .font(.system(size: 12, weight: .semibold))
+          .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(chat.canSubmit ? .white : Color.secondary)
       }
-      .frame(width: 38, height: 38)
+      .frame(width: 38, height: 42)
       .contentShape(.circle)
     }
     .buttonStyle(.plain)
@@ -351,6 +351,7 @@ struct FlightBubble: View {
   var body: some View {
     Text(text)
       .font(mono)
+      .fontDesign(.monospaced)
       .lineLimit(3)
       .truncationMode(.tail)
       .foregroundStyle(.white)

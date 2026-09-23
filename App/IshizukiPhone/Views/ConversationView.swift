@@ -55,7 +55,7 @@ struct ConversationView: View {
           }
           if let failure = model.failure {
             Text(failure)
-              .font(.callout)
+              .font(.body)
               .foregroundStyle(.red)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
@@ -83,7 +83,7 @@ struct ConversationView: View {
     VStack(spacing: 8) {
       if model.showingCached {
         Label("Saved copy · reconnecting to your Mac", systemImage: "clock.arrow.circlepath")
-          .font(.caption).foregroundStyle(.secondary)
+          .font(.footnote).foregroundStyle(.secondary)
       }
       ActivityLine(activity: model.activity, status: model.status, steers: model.steers.count)
 
@@ -102,7 +102,7 @@ struct ConversationView: View {
           Task { await model.send() }
         } label: {
           Image(systemName: model.isRunning ? "arrow.turn.down.right" : "arrow.up")
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: 16.5, weight: .semibold))
             .frame(width: 34, height: 34)
             .background(Color.reading.opacity(model.canSend ? 1 : 0.3), in: .circle)
             .foregroundStyle(.white)
@@ -129,11 +129,11 @@ struct ActivityLine: View {
       case .idle:
         if let status {
           Text(status.model ?? "no pack")
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(size: 11).monospacedDigit())
             .foregroundStyle(.tertiary)
           if status.tokensPerSecond > 0 {
             Text(String(format: "%.0f tok/s", status.tokensPerSecond))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(.tertiary)
           }
         }
@@ -155,7 +155,7 @@ struct ActivityLine: View {
       Spacer()
       if steers > 0 {
         Text("\(steers) queued")
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(size: 11).monospacedDigit())
           .foregroundStyle(Color.instructing)
       }
     }
@@ -166,7 +166,7 @@ struct ActivityLine: View {
     HStack(spacing: 6) {
       AnimatedDots(size: 3, tint: Color.reading)
       Text(text)
-        .font(.system(size: 10, design: .monospaced))
+        .font(.system(size: 11).monospacedDigit())
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

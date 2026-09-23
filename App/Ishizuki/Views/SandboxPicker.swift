@@ -25,12 +25,12 @@ struct SandboxPicker: View {
       ZStack {
         Circle()
           .fill(Color.primary.opacity(choice.isSandboxed ? 0.14 : 0.08))
-          .frame(width: 27, height: 27)
+          .frame(width: 27, height: 30)
         Image(systemName: choice.kind.glyph)
-          .font(.system(size: 12, weight: .medium))
+          .font(.system(size: 13, weight: .medium))
           .foregroundStyle(choice.isSandboxed ? Color.reading : .secondary)
       }
-      .frame(width: 38, height: 38)
+      .frame(width: 38, height: 42)
       .contentShape(.circle)
     }
     .buttonStyle(.plain)
@@ -38,13 +38,13 @@ struct SandboxPicker: View {
     .help("Commands run in \(choice.summary)")
     .popover(isPresented: $open, arrowEdge: .bottom) {
       form
-        .frame(width: 320)
-        .padding(14)
+        .frame(width: 352)
+        .padding(15)
     }
   }
 
   @ViewBuilder private var form: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 13) {
       Picker("Run commands in", selection: kind) {
         ForEach(SandboxChoice.Kind.allCases, id: \.self) { kind in
           Label(kind.label, systemImage: kind.glyph).tag(kind)
@@ -56,7 +56,7 @@ struct SandboxPicker: View {
       switch choice.kind {
       case .native:
         Text("This Mac, this user, no boundary. Fast, and nothing is fenced off.")
-          .font(.footnote)
+          .font(.subheadline)
           .foregroundStyle(.secondary)
       case .container:
         container
@@ -67,16 +67,16 @@ struct SandboxPicker: View {
   }
 
   @ViewBuilder private var container: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 11) {
       Text(
         "A Linux VM on this Mac. The folder is shared into it at /workspace; the rest of the Mac is not."
       )
-      .font(.footnote)
+      .font(.subheadline)
       .foregroundStyle(.secondary)
 
-      HStack(spacing: 6) {
+      HStack(spacing: 7) {
         TextField("image", text: $typedImage)
-          .font(.system(size: 11, design: .monospaced))
+          .font(.system(size: 12))
           .onSubmit { commitImage() }
         Menu {
           ForEach(chat.sandboxes.settings.recentImages, id: \.self) { image in
@@ -89,7 +89,7 @@ struct SandboxPicker: View {
           Image(systemName: "clock.arrow.circlepath")
         }
         .menuStyle(.borderlessButton)
-        .frame(width: 26)
+        .frame(width: 29)
       }
 
       Picker("Architecture", selection: architecture) {
@@ -110,27 +110,27 @@ struct SandboxPicker: View {
 
       if !SandboxArtifacts.isReady, chat.sandboxes.settings.kernelPath.isEmpty {
         Text("First boot fetches a Linux kernel automatically; after that it's cached.")
-          .font(.footnote)
+          .font(.subheadline)
           .foregroundStyle(.secondary)
       }
     }
   }
 
   @ViewBuilder private var cluster: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 11) {
       Text(
         "A pod on your cluster, through kubectl. The folder is copied in; the pod outlives this app, so a build keeps going."
       )
-      .font(.footnote)
+      .font(.subheadline)
       .foregroundStyle(.secondary)
 
       TextField("image", text: $typedImage)
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: 12))
         .onSubmit { commitImage() }
       TextField("context", text: context)
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: 12))
       TextField("namespace", text: namespace)
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: 12))
 
       slider(title: "CPUs", value: cpus, range: 1...32, caption: "\(choice.cpus) requested")
       slider(
@@ -144,10 +144,10 @@ struct SandboxPicker: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       HStack {
-        Text(title).font(.footnote)
+        Text(title).font(.subheadline)
         Spacer(minLength: 6)
         Text(caption)
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(size: 11).monospacedDigit())
           .foregroundStyle(.tertiary)
       }
       Slider(
@@ -251,10 +251,10 @@ struct SandboxChip: View {
             AnimatedDots(size: 3, tint: Color.reading)
           } else {
             Image(systemName: choice.kind.glyph)
-              .font(.system(size: 9))
+              .font(.system(size: 10))
           }
           Text(label(phase, choice))
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(size: 11, weight: .medium))
             .lineLimit(1)
         }
         .foregroundStyle(tint(phase))
@@ -284,7 +284,7 @@ struct SandboxChip: View {
     case .off: .secondary
     case .starting: Color.reading
     case .running: Color.generating
-    case .failed: .orange
+    case .failed: Color.clay
     }
   }
 }

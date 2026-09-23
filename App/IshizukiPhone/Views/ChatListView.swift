@@ -23,7 +23,7 @@ struct ChatListView: View {
           Section {
             VStack(alignment: .leading, spacing: 8) {
               Label(why, systemImage: "wifi.exclamationmark")
-                .font(.callout)
+                .font(.body)
                 .foregroundStyle(.secondary)
               Button("Try again") { Task { await chats.refresh() } }
                 .buttonStyle(.borderless)
@@ -39,7 +39,7 @@ struct ChatListView: View {
               VStack(alignment: .leading, spacing: 2) {
                 Text("Ask this iPhone")
                 Text(local.blocker ?? Self.readyDetail(local))
-                  .font(.caption)
+                  .font(.footnote)
                   .foregroundStyle(.secondary)
               }
             } icon: {
@@ -71,7 +71,7 @@ struct ChatListView: View {
 
         if let failure = chats.failure {
           Section {
-            Text(failure).font(.callout).foregroundStyle(.red)
+            Text(failure).font(.body).foregroundStyle(.red)
           }
         }
       }
@@ -132,18 +132,18 @@ struct ChatRow: View {
       }
       if let preview = chat.preview, !preview.isEmpty {
         Text(preview)
-          .font(.caption)
+          .font(.footnote)
           .foregroundStyle(.secondary)
           .lineLimit(2)
       }
       HStack(spacing: 6) {
         if let workspace = chat.workspace {
           Text(URL(filePath: workspace).lastPathComponent)
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(size: 11).monospacedDigit())
             .foregroundStyle(.tertiary)
         }
         Text(chat.updated, style: .relative)
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(size: 11).monospacedDigit())
           .foregroundStyle(.tertiary)
       }
     }
@@ -167,7 +167,7 @@ struct FolderPicker: View {
               VStack(alignment: .leading, spacing: 2) {
                 Text(root.name)
                 Text(root.path)
-                  .font(.system(size: 10, design: .monospaced))
+                  .font(.system(size: 11))
                   .foregroundStyle(.secondary)
                   .lineLimit(1)
                   .truncationMode(.head)

@@ -28,14 +28,14 @@ struct PairView: View {
             Label("Assistant on this iPhone", systemImage: "iphone.gen3")
           }
           Text("Use the on-device model without pairing a Mac. Web search needs internet.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.footnote).foregroundStyle(.secondary)
         }
         Section {
           Text(
             "Open Ishizuki on your Mac, then Settings → Companion → Pair a phone. "
               + "Point the camera at the square it shows."
           )
-          .font(.callout)
+          .font(.body)
           .foregroundStyle(.secondary)
           Button {
             scanning = true
@@ -49,21 +49,21 @@ struct PairView: View {
             ForEach(store.browser.found) { found in
               LabeledContent(found.name) {
                 Text(found.model ?? "—")
-                  .font(.system(size: 11, design: .monospaced))
+                  .font(.system(size: 12).monospacedDigit())
                   .foregroundStyle(.secondary)
               }
             }
             Text(
               "A Mac found here still needs its pairing square once, so the key can be handed over."
             )
-            .font(.caption)
+            .font(.footnote)
             .foregroundStyle(.secondary)
           }
         }
 
         Section("Or paste the link") {
           TextField("ishizuki://pair/…", text: $typed, axis: .vertical)
-            .font(.system(size: 12, design: .monospaced))
+            .font(.system(size: 13))
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
           Button("Pair") { pair(with: typed) }
@@ -72,7 +72,7 @@ struct PairView: View {
 
         if let failure {
           Section {
-            Text(failure).font(.callout).foregroundStyle(.red)
+            Text(failure).font(.body).foregroundStyle(.red)
           }
         }
       }
@@ -92,7 +92,7 @@ struct PairView: View {
         if pairing {
           ProgressView("Pairing…")
             .padding(24)
-            .background(.regularMaterial, in: .rect(cornerRadius: 14))
+            .background(Color.surface, in: .rect(cornerRadius: 14))
         }
       }
     }

@@ -46,6 +46,8 @@ struct ChatSidebar: View {
       }
     }
     .listStyle(.sidebar)
+    .scrollContentBackground(.hidden)
+    .background(Color.paperDeep)
     .safeAreaInset(edge: .top) { toolbar }
     .alert("Rename chat", isPresented: renamingBinding) {
       TextField("Title", text: $draftTitle)
@@ -60,14 +62,14 @@ struct ChatSidebar: View {
   /// One button, and everything a new conversation needs to decide: which folder it is in.
   /// The folder bar that used to sit over the transcript is this menu now.
   @ViewBuilder private var toolbar: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 7) {
       Button {
         chat.startNewChat()
       } label: {
         Label("New chat", systemImage: "square.and.pencil")
       }
       .buttonStyle(.plain)
-      .font(.subheadline)
+      .font(.callout)
       .frame(minHeight: Metrics.hit)
       .contentShape(.rect)
       .help("Start a new conversation in \(chat.workspace?.lastPathComponent ?? "no folder")")
@@ -86,7 +88,7 @@ struct ChatSidebar: View {
         Button("Other folder…") { chat.startNewChatInChosenFolder() }
       } label: {
         Image(systemName: "plus")
-          .font(.subheadline)
+          .font(.callout)
           .hitTarget()
       }
       .menuStyle(.borderlessButton)
@@ -95,8 +97,8 @@ struct ChatSidebar: View {
       .accessibilityLabel("New chat in a folder")
       .help("Start a conversation somewhere else")
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 6)
+    .padding(.horizontal, 13)
+    .padding(.vertical, 7)
   }
 
   /// Folders worth offering, which is the ones lately worked in minus the one already open.
@@ -111,28 +113,28 @@ struct ChatSidebar: View {
     Button {
       if shut { collapsed.remove(folder.id) } else { collapsed.insert(folder.id) }
     } label: {
-      HStack(spacing: 5) {
+      HStack(spacing: 6) {
         Image(systemName: shut ? "chevron.right" : "chevron.down")
-          .font(.system(size: 9, weight: .semibold))
+          .font(.system(size: 10, weight: .semibold))
           .foregroundStyle(.tertiary)
         Image(systemName: folder.path == nil ? "questionmark.folder" : "folder")
-          .font(.footnote)
+          .font(.subheadline)
           .foregroundStyle(isOpen ? Color.reading : .secondary)
         Text(folder.name)
-          .font(.system(.footnote, design: .monospaced, weight: .medium))
+          .font(.subheadline.weight(.semibold))
           .lineLimit(1)
           .truncationMode(.head)
         // Only the folder being worked in says which branch it is on: the others would each
         // cost a git call on every tick, and none of them is the one about to be changed.
         if isOpen, let status = chat.git.status {
           Text(status.summary)
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(size: 11).monospacedDigit())
             .foregroundStyle(status.isClean ? Color.secondary : Color.instructing)
             .lineLimit(1)
         }
         Spacer(minLength: 0)
         Text("\(folder.chats.count)")
-          .font(.system(size: 10, design: .monospaced))
+          .font(.system(size: 11).monospacedDigit())
           .foregroundStyle(.tertiary)
       }
       .frame(minHeight: Metrics.hit)
@@ -163,15 +165,15 @@ struct ChatSidebar: View {
 
   @ViewBuilder private func row(_ saved: SavedChat) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-      HStack(spacing: 5) {
+      HStack(spacing: 6) {
         Text(saved.title)
-          .font(.callout)
+          .font(.body)
           .lineLimit(1)
         // A turn keeps going in the conversation it was started in, so the one still being
         // answered says so from the list rather than only from its own transcript.
         if chat.isAsking(saved) {
           Image(systemName: "questionmark.bubble.fill")
-            .font(.caption)
+            .font(.subheadline)
             .foregroundStyle(Color.reading)
             .help("Waiting on your answer")
         } else if chat.isRunning(saved) {
@@ -181,7 +183,7 @@ struct ChatSidebar: View {
             .help("Reading into the cache ahead of the next turn")
         }
       }
-      HStack(spacing: 5) {
+      HStack(spacing: 6) {
         if saved.parent != nil {
           Image(systemName: "arrow.triangle.branch")
             .help("Branched from another conversation")
@@ -192,7 +194,7 @@ struct ChatSidebar: View {
           // Said only when it differs: sending here loads that model again, or branches.
           Text("· \(short(chat.name(of: pick)))")
             .lineLimit(1)
-            .foregroundStyle(chat.isAvailable(pick) ? Color.instructing : .orange)
+            .foregroundStyle(chat.isAvailable(pick) ? Color.instructing : Color.clay)
         }
         if let reuse = chat.reuse[saved.id], reuse.prompt > 0 {
           Text("· \(Int((reuse.fraction * 100).rounded()))% cached")
@@ -205,7 +207,7 @@ struct ChatSidebar: View {
             .help("Cache this conversation keeps on disk")
         }
       }
-      .font(.footnote)
+      .font(.subheadline)
       .foregroundStyle(.secondary)
     }
     .padding(.vertical, 2)

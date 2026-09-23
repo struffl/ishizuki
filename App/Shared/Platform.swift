@@ -34,10 +34,10 @@ extension PlatformFont {
 }
 
 extension View {
-  /// A List or Form's rows, turned from an opaque platter into frosted glass over the window's
-  /// backdrop photo.
+  /// A List or Form laid on paper, its rows fresh sheets on the page.
   func glassList() -> some View {
     scrollContentBackground(.hidden)
-      .listRowBackground(Rectangle().fill(.ultraThinMaterial))
+      .background(Color.paper)
+      .listRowBackground(Color.surface)
   }
 }

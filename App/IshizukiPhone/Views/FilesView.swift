@@ -47,7 +47,7 @@ struct DirectoryView: View {
   var body: some View {
     List {
       if cached {
-        Label("Saved copy · refreshing…", systemImage: "clock.arrow.circlepath").font(.caption)
+        Label("Saved copy · refreshing…", systemImage: "clock.arrow.circlepath").font(.footnote)
       }
       if loading && listing == nil { ProgressView("Loading folder…") }
       if let listing {
@@ -66,7 +66,7 @@ struct DirectoryView: View {
                 Label(entry.name, systemImage: "doc.text")
                 Spacer()
                 Text(ReadoutFormat.bytes(entry.size))
-                  .font(.system(size: 10, design: .monospaced))
+                  .font(.system(size: 11).monospacedDigit())
                   .foregroundStyle(.tertiary)
               }
             }
@@ -74,7 +74,7 @@ struct DirectoryView: View {
         }
       }
       if let failure {
-        Text(failure).font(.callout).foregroundStyle(.red)
+        Text(failure).font(.body).foregroundStyle(.red)
       }
     }
     .glassList()
@@ -135,7 +135,7 @@ struct FileView: View {
     ScrollView([.horizontal, .vertical]) {
       VStack(alignment: .leading, spacing: 0) {
         if cached {
-          Label("Saved copy", systemImage: "clock.arrow.circlepath").font(.caption).padding(
+          Label("Saved copy", systemImage: "clock.arrow.circlepath").font(.footnote).padding(
             .bottom, 8)
         }
         if loading && slice == nil { ProgressView("Reading file…") }
@@ -148,11 +148,13 @@ struct FileView: View {
             ForEach(Array(slice.lines.enumerated()), id: \.offset) { offset, line in
               HStack(alignment: .top, spacing: 8) {
                 Text("\(slice.start + offset)")
-                  .font(.system(size: 10, design: .monospaced))
+                  .font(.system(size: 11, design: .monospaced))
+                  .fontDesign(.monospaced)
                   .foregroundStyle(.tertiary)
                   .frame(width: 44, alignment: .trailing)
                 Text(line.isEmpty ? " " : line)
-                  .font(.system(size: 12, design: .monospaced))
+                  .font(.system(size: 13, design: .monospaced))
+                  .fontDesign(.monospaced)
                   .textSelection(.enabled)
               }
             }
@@ -166,12 +168,12 @@ struct FileView: View {
           }
         }
         if let failure {
-          Text(failure).font(.callout).foregroundStyle(.red).padding()
+          Text(failure).font(.body).foregroundStyle(.red).padding()
         }
       }
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.regularMaterial, in: .rect(cornerRadius: 14))
+      .background(Color.surface, in: .rect(cornerRadius: 14))
       .padding(12)
     }
     .navigationTitle(URL(filePath: path).lastPathComponent)

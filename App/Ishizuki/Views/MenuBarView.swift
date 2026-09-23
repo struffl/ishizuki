@@ -11,34 +11,34 @@ struct MenuBarView: View {
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 13) {
       header
 
       if let readout = controller.readout {
         VStack(alignment: .leading, spacing: 4) {
-          Field(label: "decode") {
-            HStack(spacing: 5) {
+          Field(label: "Decode") {
+            HStack(spacing: 6) {
               Text(String(format: "%.1f", readout.totals.decodeRate)).fontWeight(.semibold)
               Text("tok/s").foregroundStyle(.secondary)
             }
           }
-          Field(label: "memory") {
-            HStack(spacing: 8) {
+          Field(label: "Memory") {
+            HStack(spacing: 9) {
               Bar(fraction: readout.load.fraction, width: 70)
               Text(ReadoutFormat.gigabytes(readout.load.held)).foregroundStyle(.secondary)
             }
           }
-          Field(label: "in flight") {
+          Field(label: "In flight") {
             Text("\(readout.running) running · \(readout.queued) queued")
               .foregroundStyle(.secondary)
           }
-          Field(label: "up") {
+          Field(label: "Uptime") {
             Text(ReadoutFormat.duration(readout.state.uptime)).foregroundStyle(.secondary)
           }
         }
       } else {
         Text(status)
-          .font(.system(.subheadline, design: .monospaced))
+          .font(.callout)
           .foregroundStyle(.secondary)
       }
 
@@ -54,11 +54,14 @@ struct MenuBarView: View {
       }
 
       HStack {
-        Button(controller.phase.isRunning ? "Stop" : "Start") {
-          controller.phase.isRunning ? controller.stop() : controller.start()
+        if controller.phase.isRunning {
+          Button("Stop") { controller.stop() }
+            .buttonStyle(.glass)
+        } else {
+          Button("Start") { controller.start() }
+            .buttonStyle(.glassProminent)
+            .disabled(controller.phase.isBusy || controller.catalog.entries.isEmpty)
         }
-        .buttonStyle(.glassProminent)
-        .disabled(controller.phase.isBusy || controller.catalog.entries.isEmpty)
         Button("Dashboard") { openWindow(id: "dashboard") }
           .buttonStyle(.glass)
         Spacer()
@@ -66,8 +69,11 @@ struct MenuBarView: View {
           .buttonStyle(.glass)
       }
     }
-    .padding(14)
-    .frame(width: 320)
+    .padding(Spacing.l)
+    .font(.base)
+    .tint(.moss)
+    .fontDesign(.serif)
+    .frame(width: 352)
   }
 
   private var modelSelection: Binding<String> {
@@ -77,15 +83,15 @@ struct MenuBarView: View {
   }
 
   private var header: some View {
-    HStack(spacing: 8) {
-      Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "no model")
-        .font(.system(.callout, design: .monospaced, weight: .semibold))
+    HStack(spacing: 9) {
+      Text(controller.readout?.modelName ?? controller.activeEntry?.displayName ?? "No model")
+        .font(.system(size: 14.5, weight: .semibold))
         .lineLimit(1)
         .truncationMode(.middle)
       Spacer()
       if controller.phase.isRunning {
         Text("\(controller.settings.port)")
-          .font(.system(.subheadline, design: .monospaced))
+          .font(.callout.monospacedDigit())
           .foregroundStyle(.secondary)
       }
     }
@@ -93,9 +99,9 @@ struct MenuBarView: View {
 
   private var status: String {
     switch controller.phase {
-    case .stopped: "stopped"
-    case .starting(let name): "loading \(name)…"
-    case .running: "starting up…"
+    case .stopped: "Stopped"
+    case .starting(let name): "Loading \(name)…"
+    case .running: "Starting up…"
     case .failed(let message): message
     }
   }

@@ -88,10 +88,10 @@ struct AppleModelSettingsView: View {
         Button("Done", action: done)
           .keyboardShortcut(.defaultAction)
       }
-      .padding([.horizontal, .bottom], 16)
+      .padding([.horizontal, .bottom], 18)
       .padding(.top, 4)
     }
-    .frame(width: 420, height: model == .privateCloudCompute ? 360 : 300)
+    .frame(width: 462, height: model == .privateCloudCompute ? 360 : 300)
     .onChange(of: draft) { _, newValue in
       controller.updateSamplerSettings(newValue, for: model.id)
     }

@@ -73,7 +73,7 @@ struct MarkdownText: View {
 
   var body: some View {
     let blocks = MarkdownStream.blocks(in: text)
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 9) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
         let tail = index == blocks.count - 1 ? fadeTail : 0
         switch block {
@@ -113,14 +113,20 @@ enum StreamFade {
 
 /// Headings and bullets are drawn here rather than handed to the markdown parser, which would
 /// collapse the whitespace a streamed answer depends on.
+extension EnvironmentValues {
+  /// The face prose is set in.
+  @Entry var proseDesign: Font.Design = .serif
+}
+
 @available(macOS 27.0, iOS 27.0, *)
 struct ProseText: View {
   let text: String
   let size: Double
   var fadeTail = 0
+  @Environment(\.proseDesign) private var face
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: face == .serif ? 6 : 3) {
       ForEach(Array(fades.enumerated()), id: \.offset) { _, line in
         rendered(line.text, fade: line.fade)
       }
@@ -150,20 +156,23 @@ struct ProseText: View {
       Color.clear.frame(height: 4)
     } else if let heading = heading(trimmed) {
       Text(styled(heading.text, fade: fade))
-        .font(.system(size: size + (heading.level == 1 ? 5 : 3), weight: .semibold))
+        .font(.system(size: size + (heading.level == 1 ? 5 : 3), weight: .semibold, design: face))
         .padding(.top, 2)
     } else if let bullet = bullet(trimmed) {
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 7) {
         Text(bullet.marker)
           .font(.system(size: size, design: .monospaced))
+          .fontDesign(.monospaced)
           .foregroundStyle(.tertiary)
         Text(styled(bullet.text, fade: fade))
-          .font(.system(size: size))
+          .font(.system(size: size, design: face))
+          .lineSpacing(face == .serif ? 3 : 0)
       }
       .padding(.leading, CGFloat(indent(raw)) * 12)
     } else {
       Text(styled(raw, fade: fade))
-        .font(.system(size: size))
+        .font(.system(size: size, design: face))
+        .lineSpacing(face == .serif ? 3 : 0)
     }
   }
 
@@ -191,7 +200,7 @@ struct ProseText: View {
     }
     for range in coded {
       attributed[range].font = .system(size: size * 0.94, design: .monospaced)
-      attributed[range].backgroundColor = Color.primary.opacity(0.08)
+      attributed[range].backgroundColor = Color.ink.opacity(0.08)
     }
     return attributed
   }
@@ -231,9 +240,10 @@ struct CodeBlock: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 6) {
+      HStack(spacing: 7) {
         Text(language ?? "text")
-          .font(.system(.footnote, design: .monospaced, weight: .medium))
+          .font(.system(.subheadline, design: .monospaced, weight: .medium))
+          .fontDesign(.monospaced)
           .foregroundStyle(.secondary)
         if !closed {
           // The fence is still open, so the block says so rather than looking finished.
@@ -244,7 +254,7 @@ struct CodeBlock: View {
           Clipboard.copy(code)
         } label: {
           Image(systemName: "doc.on.doc")
-            .font(.footnote)
+            .font(.subheadline)
             .hitTarget()
         }
         .buttonStyle(.plain)
@@ -252,22 +262,22 @@ struct CodeBlock: View {
         .accessibilityLabel("Copy this code")
         .help("Copy")
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 5)
+      .padding(.horizontal, 11)
+      .padding(.vertical, 6)
       .background(.quaternary)
 
       ScrollView(.horizontal, showsIndicators: false) {
         text
           .textSelection(.enabled)
-          .padding(.horizontal, 10)
-          .padding(.vertical, 8)
+          .padding(.horizontal, 11)
+          .padding(.vertical, 9)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
     .background(.quinary)
-    .clipShape(.rect(cornerRadius: 8))
+    .clipShape(.rect(cornerRadius: 9))
     .overlay {
-      RoundedRectangle(cornerRadius: 8)
+      RoundedRectangle(cornerRadius: 9)
         .strokeBorder(Color.hairline, lineWidth: 0.5)
     }
   }
@@ -285,6 +295,7 @@ struct CodeBlock: View {
     } else {
       Text(code)
         .font(mono)
+        .fontDesign(.monospaced)
         .foregroundStyle(.primary)
     }
   }

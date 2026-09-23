@@ -11,15 +11,16 @@ struct Field<Content: View>: View {
   @ViewBuilder var content: Content
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 10) {
+    HStack(alignment: .firstTextBaseline, spacing: Spacing.m) {
       Text(label)
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout)
         .foregroundStyle(.secondary)
-        .frame(width: 62, alignment: .trailing)
+        .frame(width: 84, alignment: .leading)
       content
-        .font(.system(.subheadline, design: .monospaced))
+        .font(.callout.monospacedDigit())
       Spacer(minLength: 0)
     }
+    .padding(.vertical, 2)
   }
 }
 
@@ -31,19 +32,19 @@ struct Bar: View {
   private var level: Color {
     if let tint { return tint }
     if fraction >= 0.85 { return .red }
-    if fraction >= 0.6 { return .orange }
-    return .green
+    if fraction >= 0.6 { return Color.clay }
+    return Color.moss
   }
 
   var body: some View {
     let clamped = min(max(fraction, 0), 1)
-    RoundedRectangle(cornerRadius: 2)
+    Capsule()
       .fill(.quaternary)
-      .frame(width: width, height: 5)
+      .frame(width: width, height: 6)
       .overlay(alignment: .leading) {
-        RoundedRectangle(cornerRadius: 2)
+        Capsule()
           .fill(level)
-          .frame(width: width * clamped, height: 5)
+          .frame(width: width * clamped, height: 6)
       }
       // Every bar is read out in words beside it, so it would only say the number twice.
       .accessibilityHidden(true)
@@ -55,9 +56,9 @@ struct RequestRow: View {
 
   private var phaseColor: Color {
     switch request.phase {
-    case .queued: .orange
+    case .queued: Color.clay
     case .prefill: .accentColor
-    case .decode: .green
+    case .decode: Color.moss
     case .finishing: .secondary
     }
   }
@@ -89,39 +90,39 @@ struct RequestRow: View {
   }
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 9) {
       Text("#\(request.id)")
         .foregroundStyle(.tertiary)
-        .frame(width: 34, alignment: .trailing)
+        .frame(width: 37, alignment: .trailing)
       Text(request.api)
-        .foregroundStyle(Color.accentColor)
-        .frame(width: 66, alignment: .leading)
+        .foregroundStyle(Color.moss)
+        .frame(width: 73, alignment: .leading)
       Text(request.stream ? "stream" : "block")
         .foregroundStyle(.tertiary)
-        .frame(width: 44, alignment: .leading)
+        .frame(width: 48, alignment: .leading)
       Text(request.phase.rawValue)
         .foregroundStyle(phaseColor)
-        .frame(width: 58, alignment: .leading)
+        .frame(width: 64, alignment: .leading)
 
       if let progress {
         Bar(fraction: progress.fraction, tint: .accentColor, width: 70)
         Text(progress.rate)
-          .frame(width: 66, alignment: .trailing)
+          .frame(width: 73, alignment: .trailing)
         Text(progress.counts)
           .foregroundStyle(.tertiary)
-          .frame(width: 150, alignment: .leading)
+          .frame(width: 165, alignment: .leading)
       } else {
-        Spacer(minLength: 0).frame(width: 70)
-        Text("").frame(width: 66)
-        Text("").frame(width: 150)
+        Spacer(minLength: 0).frame(width: 77)
+        Text("").frame(width: 73)
+        Text("").frame(width: 165)
       }
 
       Text(String(format: "%.1fs", request.elapsed))
         .foregroundStyle(.secondary)
-        .frame(width: 48, alignment: .trailing)
+        .frame(width: 53, alignment: .trailing)
       Spacer(minLength: 0)
     }
-    .font(.system(.subheadline, design: .monospaced))
+    .font(.callout.monospacedDigit())
     .lineLimit(1)
   }
 }

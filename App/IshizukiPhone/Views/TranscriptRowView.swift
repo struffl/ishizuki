@@ -15,8 +15,8 @@ struct TranscriptRowView: View {
 
   @State private var open: Bool?
 
-  private let size = 14.0
-  private var mono: Font { .system(size: 12, design: .monospaced) }
+  private let size = 15.5
+  private var mono: Font { .system(size: 13, design: .monospaced) }
 
   var body: some View {
     switch row.kind {
@@ -42,16 +42,16 @@ struct TranscriptRowView: View {
     let stopped = row.tool == "stopped"
     return HStack(alignment: .firstTextBaseline, spacing: 6) {
       Image(systemName: stopped ? "stop.circle" : "exclamationmark.triangle")
-        .font(.footnote)
+        .font(.subheadline)
       Text(row.text)
-        .font(.footnote)
+        .font(.subheadline)
         .textSelection(.enabled)
       Spacer(minLength: 0)
     }
     .foregroundStyle(stopped ? Color.secondary : .orange)
     .padding(.horizontal, 10)
     .padding(.vertical, 6)
-    .background(.thinMaterial, in: .rect(cornerRadius: 10))
+    .background(Color.surface, in: .rect(cornerRadius: 10))
   }
 
   private var prompt: some View {
@@ -71,7 +71,7 @@ struct TranscriptRowView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
-      .background(.thinMaterial, in: .rect(cornerRadius: 14))
+      .background(Color.surface, in: .rect(cornerRadius: 14))
       .textSelection(.enabled)
       .contextMenu {
         Button("Copy text", systemImage: "doc.on.doc") { Clipboard.copy(row.text) }
@@ -88,20 +88,20 @@ struct TranscriptRowView: View {
       } label: {
         HStack(spacing: 6) {
           Image(systemName: icon)
-            .font(.system(size: 10))
+            .font(.system(size: 11))
           Text(title)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(.system(size: 12, weight: .medium).monospacedDigit())
           if live {
             AnimatedDots(size: 3, tint: tint)
           }
           Spacer()
           if let seconds = row.seconds, seconds > 0 {
             Text(ReadoutFormat.duration(seconds))
-              .font(.system(size: 10, design: .monospaced))
+              .font(.system(size: 11).monospacedDigit())
               .foregroundStyle(.tertiary)
           }
           Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-            .font(.system(size: 9))
+            .font(.system(size: 10))
         }
         .foregroundStyle(tint)
       }
@@ -110,6 +110,7 @@ struct TranscriptRowView: View {
       if isOpen {
         Text(body(of: row))
           .font(mono)
+          .fontDesign(.monospaced)
           .foregroundStyle(.primary.opacity(0.85))
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)

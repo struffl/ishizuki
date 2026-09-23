@@ -70,7 +70,7 @@ struct PhoneSettingsView: View {
                       "\(entry.quantization ?? "—") · "
                         + ReadoutFormat.bytes(entry.sizeBytes)
                     )
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.secondary)
                   }
                   Spacer()
