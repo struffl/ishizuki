@@ -206,8 +206,13 @@ public final class Quantizer: @unchecked Sendable {
     var streamed: Set<String> = []
     var expertBytes = 0
     if streamExperts {
+      // Only the trunk's layers stream. The draft head's one bank stays in the shards: it is
+      // read every drafted token, and the blobs are addressed by trunk layer alone.
       streamed = Set(
-        (quantizable + passthrough).filter { ExpertRepack.isExpert(canonical[$0] ?? $0) })
+        (quantizable + passthrough).filter {
+          let name = canonical[$0] ?? $0
+          return ExpertRepack.isExpert(name) && ExpertRepack.address(name) != nil
+        })
       if !streamed.isEmpty {
         expertBytes = try writeExperts(
           names: streamed, canonical: canonical, allocation: allocation,

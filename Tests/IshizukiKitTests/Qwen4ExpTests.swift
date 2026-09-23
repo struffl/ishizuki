@@ -212,6 +212,49 @@ struct Qwen4ExpTests {
     #expect(error / scale < 0.2, "the pack's logits drifted by \(error) against \(scale)")
   }
 
+  /// The shape the 125B-A6B is converted in: routed experts in per-layer blobs read a slot at a
+  /// time, and the n-gram table asked for at eight bits. The fixture's rows are narrower than a
+  /// group, so the table has to fall back to fp16 rather than refuse.
+  @Test("streams its experts, falls back from an 8-bit table it cannot group, and stays close")
+  func streamsAndReadsEightBitTable() throws {
+    let scratch = try scratch()
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let source = try SourceCheckpoint(directory: fixture)
+    let profile = QuantProfile(
+      name: "test", baseBits: 8, boostBits: [], targetBpw: 8, groupSize: 32,
+      summary: "as close to the checkpoint as a pack gets")
+    _ = try Quantizer(
+      source: source, profile: profile, destination: scratch, streamExperts: true,
+      engramBits: 8
+    ).run()
+    #expect(ExpertRepack.isSplit(scratch))
+
+    let config = try BonsaiConfig.load(directory: scratch)
+    try config.validate()
+    let store = try WeightStore(directory: scratch)
+      .openingExperts(at: scratch, slots: 64)
+      .openingEngrams(at: scratch, capacity: BonsaiRuntime.engramRows)
+    #expect(store.engrams != nil)
+    #expect(store.engrams?.layout.bits == nil)
+    #expect(store.experts(layer: 0) != nil)
+    #expect(!store.has("model.layers.0.mlp.switch_mlp.gate_proj.weight"))
+
+    let factory = PackedModuleFactory(
+      store: store, config: config, tensorPrefix: "", dense: false)
+    let model = try TextModel(config: config, factory: factory, store: store)
+
+    let reference = try loadArrays(url: fixture.appending(path: "reference.safetensors"))
+    let tokens = try #require(reference["tokens"]).asType(.int32).reshaped([1, -1])
+    let logits = model(tokens, cache: model.makeCache())
+    eval(logits)
+    let want = try #require(reference["logits"])
+    let error = (logits.asType(.float32) - want).square().mean().sqrt().item(Float.self)
+    let scale = want.square().mean().sqrt().item(Float.self)
+    #expect(error / scale < 0.2, "the streamed pack's logits drifted by \(error) against \(scale)")
+    #expect((store.expertTraffic?.misses ?? 0) > 0)
+  }
+
   /// A table of any size lands in files of a fixed number of rows, and a row's address has to
   /// survive being cut across them. The shipped tables run to nineteen parts; the fixture's is
   /// one, so the split is driven here rather than left to the only size a test would see.

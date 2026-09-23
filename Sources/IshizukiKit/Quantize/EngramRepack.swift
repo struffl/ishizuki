@@ -66,6 +66,12 @@ public enum EngramRepack {
       ?? ((text["eos_token_id"] as? [NSNumber])?.first?.intValue ?? 0)
 
     let headDim = try source.tensor(shardNames[0]).dim(1)
+    // A row narrower than a group has nothing to quantize over, so it is written as it is.
+    var bits = bits
+    if bits != nil, headDim % groupSize != 0 {
+      log("engrams: rows of \(headDim) do not divide groups of \(groupSize); writing fp16")
+      bits = nil
+    }
     var total = 0
     for name in shardNames { total += try source.tensor(name).dim(0) }
     // The table is addressed by head, so its last rows may be padding the checkpoint added to
