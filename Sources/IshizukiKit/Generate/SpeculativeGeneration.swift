@@ -12,6 +12,10 @@ extension Generator {
   struct Drafts {
     let lookup: Drafter
     let mtp: MTPDrafter?
+    var dspark: DSparkDrafter? = nil
+
+    /// Whether a head of the model's own drafts, which is what the drafted loop is for.
+    var hasHead: Bool { mtp != nil || dspark != nil }
   }
 
   struct DraftedDecode {
@@ -33,7 +37,9 @@ extension Generator {
     let mtp =
       model.mtp == nil || options.temperature > 0
       ? nil : try? MTPDrafter(model: model, kvConfig: kvConfig)
-    return Drafts(lookup: lookup?() ?? NgramDrafter(minPatternLength: BonsaiRuntime.lookupMinMatch), mtp: mtp)
+    return Drafts(
+      lookup: lookup?() ?? NgramDrafter(minPatternLength: BonsaiRuntime.lookupMinMatch), mtp: mtp,
+      dspark: model.deepseek.flatMap { DSparkDrafter(model: $0) })
   }
 
   func speculate(
@@ -52,11 +58,19 @@ extension Generator {
     var ngramIdle = 0
     let temperature = sampler.options.temperature
 
+    var landed: (hidden: MLXArray?, start: Int) = (nil, 0)
     func forward(_ tokens: [Int], allPositions: Bool) -> (MLXArray, MLXArray) {
       let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
-      let h = model.text.trunk(inputs: ids, cache: cache)
-      let normed = model.text.normed(h)
-      return (h, allPositions ? model.text.lmHead(normed) : model.text.lastLogits(normed))
+      let h: MLXArray
+      if let dspark = drafts.dspark {
+        let step = dspark.forward(ids, cache: cache)
+        landed = (step.hidden, step.start)
+        h = step.trunk
+      } else {
+        h = model.backbone.trunk(inputs: ids, cache: cache)
+      }
+      let normed = model.backbone.normed(h)
+      return (h, allPositions ? model.backbone.logits(normed) : model.backbone.lastLogits(normed))
     }
 
     func emit(_ tokens: [Int]) -> Bool {
@@ -107,6 +121,9 @@ extension Generator {
       if draft.isEmpty, let mtp = drafts.mtp {
         draft = mtp.propose(context: context, count: 1)
       }
+      if draft.isEmpty, let dspark = drafts.dspark {
+        draft = dspark.propose(after: confirmed, at: cache.offset + carry.count, limit: room)
+      }
       if carry.count + 1 + draft.count > 16 { draft = [] }
       out.stats.rounds += 1
 
@@ -118,6 +135,7 @@ extension Generator {
         guard emit([confirmed]) else { break }
         let (h, next) = forward(block, allPositions: false)
         eval(next)
+        drafts.dspark?.commit(landed.hidden, start: landed.start, count: block.count)
         logits = next
         observed = (offset == 0 ? h : h[0..., offset..., 0...], [])
         continue
@@ -159,6 +177,9 @@ extension Generator {
       if fromNgram, accepted == 0 { ngramIdle = 4 }
 
       let kept = [confirmed] + draft.prefix(accepted)
+      drafts.dspark?.commit(
+        landed.hidden, start: landed.start,
+        count: accepted == draft.count ? block.count : offset + kept.count)
       if accepted == draft.count {
         logits = blockLogits[0..., (blockLogits.dim(1) - 1)..., 0...]
         observed = (offset == 0 ? h : h[0..., offset..., 0...], Array(block[(offset + 1)...]))

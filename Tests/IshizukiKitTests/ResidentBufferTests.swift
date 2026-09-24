@@ -62,6 +62,29 @@ struct ResidentBufferTests {
     #expect(held[7].item(Float.self) == 42)
   }
 
+  /// Only a disk's own failure is worth waiting out: a file that ends early or a descriptor
+  /// that is no good fails the first time, and says which it was.
+  @Test("a read the file cannot answer fails at once and says why")
+  func failures() throws {
+    let url = temporary()
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Data(count: 16).write(to: url)
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let buffer = try ResidentBuffer(byteCount: 64)
+
+    let start = Date()
+    let short = #expect(throws: BonsaiError.self) {
+      try buffer.read(from: handle.fileDescriptor, offset: 0, into: 0..<64)
+    }
+    let closed = #expect(throws: BonsaiError.self) {
+      try buffer.read(from: -1, offset: 0, into: 0..<64)
+    }
+    #expect(short?.description == "Missing weight: read 16 of 64 bytes at 0: the file ends first")
+    #expect(closed?.description.hasSuffix("Bad file descriptor") == true)
+    #expect(-start.timeIntervalSinceNow < 0.25)
+  }
+
   @Test("a read past the end is refused rather than scribbling")
   func bounds() throws {
     let buffer = try ResidentBuffer(byteCount: 64)

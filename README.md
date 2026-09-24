@@ -60,6 +60,15 @@ reads the Hadamard rotation from `config.json` and the norm layout from `jang_co
 the quantized vision tower runs as it ships. A pack that declares a transform Ishizuki can't
 apply is refused rather than loaded as plain affine.
 
+`deepseek-ai/DeepSeek-V4.1-Flash` loads from its 48 release shards as they ship: the fp8 and
+fp4 weights are multiplied where they lie, the routed experts are read into slots as tokens
+route to them, and the two 100 GB n-gram tables are read a row at a time. About 10 GB stays in
+memory, plus the slots, which are sized to the machine — 40 a layer, 30 GB, on a 64 GB Mac.
+Everything else is disk, so the disk sets the pace: off a USB hard drive, an 11-token prompt
+took 8 minutes and each token after it 43 seconds. Its DSpark draft head only runs when the
+experts are held in memory. A prompt longer than 128 tokens runs the decoder over its last 128
+only, the way DeepSeek serves the model; `BonsaiRuntime.deepseekBoundedReplay` turns that off.
+
 ## Agents
 
 Point a coding agent at the local model. Start the server from the status bar; the dashboard

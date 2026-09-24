@@ -79,6 +79,20 @@ public enum BonsaiRuntime {
   /// that being generous costs nothing.
   public nonisolated(unsafe) static var engramRows = 16384
 
+  /// The width a DeepSeek-V4.1 release computes at: its fp8 and fp4 weights are multiplied
+  /// where they lie, so this is the activations' width alone.
+  public nonisolated(unsafe) static var deepseekCompute: DType = .float16
+
+  /// Whether a DeepSeek-V4.1 release streams its routed experts from the shards. Off holds all
+  /// of them, which takes the better part of 300 GB.
+  public nonisolated(unsafe) static var deepseekStreamsExperts = true
+
+  /// Whether a DeepSeek-V4.1 prompt runs its decoder over the last window of tokens only, as
+  /// DeepSeek serves it: the encoder still reads every token and the decoder's global KV is made
+  /// from it, but the decoder's windows start again at the replay. Off runs every layer over
+  /// every token, which is exact and costs nearly twice as much.
+  public nonisolated(unsafe) static var deepseekBoundedReplay = true
+
   // Share of the wide projections to prefill on the Neural Engine, or nil for none.
   public nonisolated(unsafe) static var aneOffload: ANEOffload?
 

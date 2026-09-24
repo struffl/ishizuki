@@ -66,6 +66,12 @@ public enum StreamedPlan {
 
   /// What a pack holds once it is open: its shards, and its slots when it streams.
   public static func residentBytes(in directory: URL) -> Int? {
+    if let raw = try? Data(contentsOf: directory.appending(path: "config.json")),
+      let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+      DeepSeekConfig.describes(object)
+    {
+      return DeepSeekModel.residentBytes(in: directory)
+    }
     guard let weights = MemoryBudget.weightBytes(in: directory) else { return nil }
     guard let layers = layers(in: directory), let slots = slots(for: directory) else {
       return weights

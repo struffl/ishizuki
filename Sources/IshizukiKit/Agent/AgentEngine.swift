@@ -5,6 +5,8 @@
 // the window and a client on the port never hold the weights at once.
 
 import Foundation
+import Jinja
+import OrderedCollections
 
 /// A tool as the chat template wants it: a name, a sentence, and a JSON Schema for the
 /// arguments. Carried as text so a schema can cross to the generation queue.
@@ -24,6 +26,16 @@ public struct ToolSchema: Sendable, Equatable {
       (parametersJSON.data(using: .utf8)
         .flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
     return ["name": name, "description": description, "parameters": parameters]
+  }
+
+  /// The same, keys in the order the schema's text has them, for a template that writes the
+  /// schema out as JSON and would otherwise have to pick an order of its own.
+  var orderedValue: Value {
+    var function = OrderedDictionary<ObjectKey, Value>()
+    function["name"] = .string(name)
+    function["description"] = .string(description)
+    function["parameters"] = OrderedJSON.object(parametersJSON)
+    return .object(function)
   }
 }
 
@@ -270,10 +282,12 @@ public final class AgentEngine: @unchecked Sendable {
             let opened = resolveImages(in: messages)
             let messages = opened.messages
             let schemas = tools.isEmpty ? nil : tools.map(\.templateValue)
+            let ordered = tools.isEmpty ? nil : tools.map(\.orderedValue)
 
             let request = APIServer.Request(
               messages: messages,
               tools: schemas,
+              orderedTools: ordered,
               maxTokens: maxTokens,
               temperature: nil,
               stream: onText != nil,
@@ -283,7 +297,9 @@ public final class AgentEngine: @unchecked Sendable {
               model: nil,
               effort: effort,
               tag: tag)
-            measure(messages: messages, tools: schemas, thinking: thinking, effort: effort)
+            measure(
+              messages: messages, tools: schemas, ordered: ordered, thinking: thinking,
+              effort: effort)
 
             let outcome = try server.complete(
               request,
@@ -324,7 +340,8 @@ public final class AgentEngine: @unchecked Sendable {
   /// How much of a prompt is instructions and how much is tool schemas, measured by rendering
   /// it without each. Done once for each model, effort and tool set rather than every turn.
   private func measure(
-    messages: [ChatMessage], tools: [[String: Any]]?, thinking: Bool, effort: ReasoningEffort
+    messages: [ChatMessage], tools: [[String: Any]]?, ordered: [Value]?, thinking: Bool,
+    effort: ReasoningEffort
   ) {
     let names = (tools ?? []).compactMap { $0["name"] as? String }.joined(separator: ",")
     let signature = "\(server.activeModelID)|\(effort.rawValue)|\(thinking)|\(names)"
@@ -334,7 +351,7 @@ public final class AgentEngine: @unchecked Sendable {
       guard !of.isEmpty,
         let text = try? server.template.render(
           messages: of, addGenerationPrompt: true, enableThinking: thinking,
-          reasoningEffort: effort, tools: tools),
+          reasoningEffort: effort, tools: tools, orderedTools: tools == nil ? nil : ordered),
         let encoded = try? server.model().tokenizer.encode(text)
       else { return nil }
       return encoded.count

@@ -78,7 +78,7 @@ public final class Generator: @unchecked Sendable {
     onProgress: ((GenerationProgress) -> Void)? = nil,
     onToken: ((String) -> Bool)? = nil
   ) -> GenerationResult {
-    let cache = cache ?? model.text.makeCache(kvConfig: kvConfig)
+    let cache = cache ?? model.backbone.makeCache(kvConfig: kvConfig)
     let sampler = Sampler(options: options)
     var detokenizer = StreamingDetokenizer(tokenizer: model.tokenizer)
 
@@ -104,10 +104,20 @@ public final class Generator: @unchecked Sendable {
 
     if isCancelled?() == true { return abandoned() }
 
+    let replay = model.backbone.replayTail.map {
+      max(cachedPrefixLength, promptTokens.count - $0)
+    } ?? cachedPrefixLength
+
     if let promptEmbeddings {
-      logits = model.text.lastLogits(
-        inputs: nil, inputEmbeddings: promptEmbeddings, cache: cache,
-        positions: positions)
+      let ids = MLXArray(promptTokens.map { Int32($0) }).reshaped([1, promptTokens.count])
+      if replay > 0 {
+        model.backbone.encode(
+          inputs: ids[0..., ..<replay], inputEmbeddings: promptEmbeddings[0..., ..<replay],
+          cache: cache)
+      }
+      logits = model.backbone.lastLogits(
+        inputs: ids[0..., replay...], inputEmbeddings: promptEmbeddings[0..., replay...],
+        cache: cache, positions: positions?[.ellipsis, replay...])
       eval(logits)
       prefilled = prefillTotal
       onProgress?(.prefill(done: prefillTotal, total: prefillTotal))
@@ -121,11 +131,27 @@ public final class Generator: @unchecked Sendable {
       while index < promptTokens.count {
         if isCancelled?() == true { return abandoned() }
         var end = min(index + prefillChunkSize, promptTokens.count)
+        if index < replay { end = min(end, replay) }
         if let stop = checkpointAt, index < stop, stop < end { end = stop }
         let chunk = MLXArray(promptTokens[index..<end].map { Int32($0) })
           .reshaped([1, end - index])
-        let trunk = model.text.trunk(inputs: chunk, cache: cache)
-        last = model.text.normed(trunk)
+        if index < replay {
+          model.backbone.encode(inputs: chunk, inputEmbeddings: nil, cache: cache)
+          index = end
+          prefilled = index - cachedPrefixLength
+          onProgress?(.prefill(done: prefilled, total: prefillTotal))
+          if index == checkpointAt { onCheckpoint?() }
+          continue
+        }
+        let trunk: MLXArray
+        if let dspark = drafting?.dspark {
+          let step = dspark.forward(chunk, cache: cache)
+          dspark.commit(step.hidden, start: step.start, count: end - index)
+          trunk = step.trunk
+        } else {
+          trunk = model.backbone.trunk(inputs: chunk, cache: cache)
+        }
+        last = model.backbone.normed(trunk)
         eval(last!)
         if let mtp = drafting?.mtp {
           if end < promptTokens.count {
@@ -139,7 +165,7 @@ public final class Generator: @unchecked Sendable {
         onProgress?(.prefill(done: prefilled, total: prefillTotal))
         if index == checkpointAt { onCheckpoint?() }
       }
-      logits = model.text.lastLogits(last!)
+      logits = model.backbone.lastLogits(last!)
       eval(logits)
     }
     let promptSeconds = -promptStart.timeIntervalSinceNow
@@ -165,7 +191,7 @@ public final class Generator: @unchecked Sendable {
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
 
-    if let drafting, drafting.mtp != nil {
+    if let drafting, drafting.hasHead {
       let decoded = speculate(
         drafting, logits: logits, observed: observed, cache: cache, sampler: sampler,
         promptTokens: promptTokens, maxTokens: maxTokens, detokenizer: &detokenizer,
@@ -205,7 +231,7 @@ public final class Generator: @unchecked Sendable {
           : concatenated([MLXArray(carry.map { Int32($0) }), pending.reshaped([-1]).asType(.int32)])
             .reshaped([1, -1])
         carry = []
-        let step = model.text(input, cache: cache, positions: stepPositions())
+        let step = model.backbone(input, cache: cache, positions: stepPositions())
         if decodePosition != nil { decodePosition! += 1 }
         let following = sampler.token(
           step[0..., -1, 0...], recentTokens: promptTokens + generated, pending: pending)
@@ -245,7 +271,7 @@ public final class Generator: @unchecked Sendable {
 
         stats.proposed += draft.count
         let settled = cache.snapshot()
-        let block = model.text(
+        let block = model.backbone(
           MLXArray(draft.map { Int32($0) }).reshaped([1, draft.count]), cache: cache)
         let picks = sampler.token(block[0])
         eval(following, picks)
@@ -328,7 +354,7 @@ public final class Generator: @unchecked Sendable {
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }
 
         let input = MLXArray([Int32(token)]).reshaped([1, 1])
-        let step = model.text(input, cache: cache, positions: stepPositions())
+        let step = model.backbone(input, cache: cache, positions: stepPositions())
         eval(step)
         if decodePosition != nil { decodePosition! += 1 }
         nextLogits = step[0..., -1, 0...]

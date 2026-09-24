@@ -80,6 +80,9 @@ public final class ExpertStore: @unchecked Sendable {
   public let slotCount: Int
 
   private let descriptor: Int32
+  /// Where each expert's parts sit when they are not one blob of a repacked file: a release
+  /// checkpoint keeps every projection of every expert as a tensor of its own, in shards.
+  private let located: Located?
   private let buffer: ResidentBuffer
   /// Where each part's slots begin in the buffer. The file is expert major — one blob per
   /// expert — but the slots are part major, so all the slots of one projection are contiguous
@@ -155,12 +158,53 @@ public final class ExpertStore: @unchecked Sendable {
     }
   }
 
-  public init(url: URL, layout: ExpertLayout, slots: Int) throws {
+  /// Parts read from wherever they already are: `places[expert][part]` is a file in `files` and
+  /// the byte offset of that part's tensor in it.
+  public struct Placement: Sendable {
+    public var files: [URL]
+    public var places: [[String: (file: Int, offset: Int)]]
+
+    public init(files: [URL], places: [[String: (file: Int, offset: Int)]]) {
+      self.files = files
+      self.places = places
+    }
+  }
+
+  private struct Located {
+    let descriptors: [Int32]
+    let places: [[String: (file: Int, offset: Int)]]
+  }
+
+  public convenience init(url: URL, layout: ExpertLayout, slots: Int) throws {
     let opened = open(url.path, O_RDONLY)
     guard opened >= 0 else {
       throw BonsaiError.missingWeight("cannot open \(url.lastPathComponent)")
     }
-    self.descriptor = opened
+    try self.init(descriptor: opened, located: nil, layout: layout, slots: slots)
+  }
+
+  public convenience init(placement: Placement, layout: ExpertLayout, slots: Int) throws {
+    guard placement.places.count == layout.expertCount else {
+      throw BonsaiError.shapeMismatch(
+        "\(placement.places.count) experts placed for a layout of \(layout.expertCount)")
+    }
+    var descriptors: [Int32] = []
+    for url in placement.files {
+      let opened = open(url.path, O_RDONLY)
+      guard opened >= 0 else {
+        for previous in descriptors { close(previous) }
+        throw BonsaiError.missingWeight("cannot open \(url.lastPathComponent)")
+      }
+      descriptors.append(opened)
+    }
+    try self.init(
+      descriptor: -1, located: Located(descriptors: descriptors, places: placement.places),
+      layout: layout, slots: slots)
+  }
+
+  private init(descriptor: Int32, located: Located?, layout: ExpertLayout, slots: Int) throws {
+    self.descriptor = descriptor
+    self.located = located
     self.layout = layout
     self.slotCount = min(slots, layout.expertCount)
     var base: [String: Int] = [:]
@@ -175,7 +219,17 @@ public final class ExpertStore: @unchecked Sendable {
     self.lastTouched = Array(repeating: 0, count: self.slotCount)
   }
 
-  deinit { close(descriptor) }
+  deinit {
+    if descriptor >= 0 { close(descriptor) }
+    for other in located?.descriptors ?? [] { close(other) }
+  }
+
+  private func source(expert: Int, part name: String, _ part: ExpertLayout.Part) -> (Int32, Int) {
+    guard let located, let place = located.places[expert][name] else {
+      return (descriptor, expert * layout.stride + part.offset)
+    }
+    return (located.descriptors[place.file], place.offset)
+  }
 
   /// Brings `experts` into slots and says where each landed, in the order asked for. A repeated
   /// expert is read once.
@@ -237,9 +291,8 @@ public final class ExpertStore: @unchecked Sendable {
       let (miss, (name, part)) = reads[index]
       let target = base[name]! + miss.slot * part.byteCount
       do {
-        try buffer.read(
-          from: descriptor, offset: miss.expert * layout.stride + part.offset,
-          into: target..<(target + part.byteCount))
+        let (file, offset) = source(expert: miss.expert, part: name, part)
+        try buffer.read(from: file, offset: offset, into: target..<(target + part.byteCount))
       } catch {
         failure.record(error)
       }

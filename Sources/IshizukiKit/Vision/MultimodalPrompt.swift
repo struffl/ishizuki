@@ -14,6 +14,7 @@ extension BonsaiModel {
   public func prepareMultimodal(tokens: [Int], images: [ProcessedImage]) throws
     -> MultimodalPrompt
   {
+    if let deepseek { return try prepareDeepSeek(deepseek, tokens: tokens, images: images) }
     guard let tower = try vision() else {
       throw BonsaiError.missingComponent("this pack has no vision tower")
     }
@@ -62,6 +63,47 @@ extension BonsaiModel {
       embeddings: embeddings,
       positions: mropePositions(
         tokens: expanded, images: images, imageToken: imageToken))
+  }
+
+  /// Each placeholder opens into its picture's whole span — start, rows ended by newlines, end —
+  /// every position of it holding the image token, the span's embeddings the tower's. DeepSeek
+  /// keeps no positions of its own beyond the cache's offset, so the ones handed back are just
+  /// the sequence.
+  private func prepareDeepSeek(
+    _ model: DeepSeekModel, tokens: [Int], images: [ProcessedImage]
+  ) throws -> MultimodalPrompt {
+    guard let tower = try deepseekVision(), let imageToken = model.config.imageTokenId else {
+      throw BonsaiError.missingComponent("this release has no vision tower")
+    }
+    let pictures = images.compactMap(\.deepseek)
+    let placeholders = tokens.filter { $0 == imageToken }.count
+    guard placeholders == pictures.count, pictures.count == images.count else {
+      throw BonsaiError.imageProcessing(
+        "prompt has \(placeholders) image placeholder(s) but \(pictures.count) picture(s)")
+    }
+    var expanded: [Int] = []
+    var starts: [Int] = []
+    var next = 0
+    for token in tokens {
+      guard token == imageToken else {
+        expanded.append(token)
+        continue
+      }
+      starts.append(expanded.count)
+      expanded.append(contentsOf: Array(repeating: imageToken, count: pictures[next].spanLength))
+      next += 1
+    }
+    let ids = MLXArray(expanded.map { Int32($0) }).reshaped([1, expanded.count])
+    let embeddings = model.embed(ids).asType(model.compute)
+    for (start, picture) in zip(starts, pictures) {
+      embeddings[0..., start..<(start + picture.spanLength), 0...] =
+        tower.span(picture, dtype: model.compute).expandedDimensions(axis: 0)
+    }
+    eval(embeddings)
+    let sequence = MLXArray((0..<expanded.count).map { Int32($0) })
+    return MultimodalPrompt(
+      tokens: expanded, embeddings: embeddings,
+      positions: broadcast(sequence.reshaped([1, 1, -1]), to: [3, 1, expanded.count]))
   }
 
   func mropePositions(tokens: [Int], images: [ProcessedImage], imageToken: Int) -> MLXArray {

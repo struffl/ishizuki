@@ -34,7 +34,7 @@ struct Qwen4ExpStepProbe {
     let path = ProcessInfo.processInfo.environment["ISHIZUKI_STEP_PACK"]!
     let steps = Int(ProcessInfo.processInfo.environment["ISHIZUKI_STEPS"] ?? "") ?? 32
     let model = try BonsaiModel(path: URL(filePath: path))
-    let text = model.text
+    let text: TextModel = model.text
     let prompt = model.tokenizer.encode("Write a short story about a lighthouse keeper.")
 
     func prefilled() -> (ModelCache, MLXArray) {

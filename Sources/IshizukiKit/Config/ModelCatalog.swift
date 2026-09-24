@@ -162,6 +162,8 @@ public struct ModelCatalog: Sendable {
       object["quantization"] != nil || object["quantization_config"] != nil
     else { return nil }
 
+    if DeepSeekConfig.describes(object) { return inspect(deepseek: directory) }
+
     guard let config = try? BonsaiConfig.load(directory: directory),
       (try? config.validate()) != nil
     else { return nil }
@@ -193,6 +195,29 @@ public struct ModelCatalog: Sendable {
       hasVision: config.components?.vision == true,
       hasMTP: config.components?.mtp == true,
       contextTokens: config.textConfig.maxPositionEmbeddings)
+  }
+
+  /// A DeepSeek-V4.1 release, read as it ships: listed once every shard its index names is
+  /// here, with the routed experts and the n-gram tables counted as what it streams.
+  private static func inspect(deepseek directory: URL) -> Entry? {
+    guard let checkpoint = try? DeepSeekCheckpoint(directory: directory) else { return nil }
+    let (resident, _) = DeepSeekModel.footprint(of: checkpoint)
+    let streamed = checkpoint.entries.reduce(0) { total, item in
+      let (name, entry) = item
+      let read = name.contains(".ffn.experts.") && !name.hasPrefix("mtp.")
+        || name.contains(".engram.embed.")
+      return total + (read ? entry.byteCount : 0)
+    }
+    return Entry(
+      id: name(for: directory),
+      format: .pack,
+      url: directory,
+      byteCount: MemoryBudget.diskBytes(in: directory) ?? resident + streamed,
+      streamedBytes: streamed,
+      quantization: "fp8/fp4",
+      hasVision: false,
+      hasMTP: false,
+      contextTokens: 1_048_576)
   }
 
   /// A HuggingFace checkout is named by its revision, which says nothing; the repo name two

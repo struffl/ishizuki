@@ -7,7 +7,9 @@ public final class BonsaiTokenizer: @unchecked Sendable {
   public let vocabulary: [String: Int]
   public let reverseVocabulary: [Int: String]
   private let mergeRanks: [String: Int]
-  private let splitPattern: NSRegularExpression
+  /// Applied in order, each splitting every piece the one before it left: DeepSeek's tokenizer
+  /// chains three, Qwen's has one.
+  private let splitPatterns: [NSRegularExpression]
   private let addedTokenPattern: NSRegularExpression?
   private let addedTokenIds: [String: Int]
 
@@ -47,7 +49,9 @@ public final class BonsaiTokenizer: @unchecked Sendable {
     "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}"
     + "| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
 
-  public convenience init(directory: URL, config: BonsaiConfig? = nil) throws {
+  public convenience init(
+    directory: URL, config: BonsaiConfig? = nil, eosTokenIds: [Int] = []
+  ) throws {
     let data = try Data(contentsOf: directory.appending(path: "tokenizer.json"))
     guard
       let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -88,19 +92,31 @@ public final class BonsaiTokenizer: @unchecked Sendable {
       }
     }
 
-    var pattern = Self.defaultSplitPattern
+    var patterns: [String] = []
     if let pre = root["pre_tokenizer"] as? [String: Any] {
       let candidates = (pre["pretokenizers"] as? [[String: Any]]) ?? [pre]
       for entry in candidates where entry["type"] as? String == "Split" {
         if let p = entry["pattern"] as? [String: Any], let regex = p["Regex"] as? String {
-          pattern = regex
+          patterns.append(regex)
         }
       }
     }
 
+    var eos = eosTokenIds
+    let settings = directory.appending(path: "tokenizer_config.json")
+    if let raw = try? Data(contentsOf: settings),
+      let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    {
+      let declared =
+        (object["eos_token"] as? String)
+        ?? ((object["eos_token"] as? [String: Any])?["content"] as? String)
+      if let declared, let id = addedIds[declared] { eos.append(id) }
+    }
+
     try self.init(
-      vocabulary: vocabulary, addedIds: addedIds, merges: merges, pattern: pattern,
-      config: config, normalization: normalization)
+      vocabulary: vocabulary, addedIds: addedIds, merges: merges,
+      patterns: patterns.isEmpty ? [Self.defaultSplitPattern] : patterns,
+      config: config, normalization: normalization, extraEOS: eos)
   }
 
   /// A GGUF carries its tokenizer as metadata rather than a file: the vocabulary is an array
@@ -134,13 +150,13 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
     try self.init(
       vocabulary: vocabulary, addedIds: addedIds, merges: merges,
-      pattern: Self.defaultSplitPattern, config: config, normalization: .nfc,
+      patterns: [Self.defaultSplitPattern], config: config, normalization: .nfc,
       extraEOS: [file["tokenizer.ggml.eos_token_id"]?.intValue].compactMap { $0 })
   }
 
   private init(
     vocabulary: [String: Int], addedIds: [String: Int], merges: [(String, String)],
-    pattern: String, config: BonsaiConfig?, normalization: Normalization,
+    patterns: [String], config: BonsaiConfig?, normalization: Normalization,
     extraEOS: [Int] = []
   ) throws {
     self.normalization = normalization
@@ -155,7 +171,7 @@ public final class BonsaiTokenizer: @unchecked Sendable {
       ranks[pair.0 + "\u{0}" + pair.1] = rank
     }
     self.mergeRanks = ranks
-    self.splitPattern = try NSRegularExpression(pattern: pattern)
+    self.splitPatterns = try patterns.map { try NSRegularExpression(pattern: $0) }
 
     if addedIds.isEmpty {
       self.addedTokenPattern = nil
@@ -239,18 +255,33 @@ public final class BonsaiTokenizer: @unchecked Sendable {
 
   private func encodeOrdinary(_ text: String) -> [Int] {
     guard !text.isEmpty else { return [] }
-    let normalized = normalization.apply(text)
-    let ns = normalized as NSString
-
-    var ids: [Int] = []
-    splitPattern.enumerateMatches(
-      in: normalized, range: NSRange(location: 0, length: ns.length)
-    ) { match, _, _ in
-      guard let match, match.range.length > 0 else { return }
-      let piece = ns.substring(with: match.range)
-      ids.append(contentsOf: encodePiece(piece))
+    var pieces = [normalization.apply(text)]
+    for pattern in splitPatterns {
+      pieces = pieces.flatMap { Self.isolate($0, by: pattern) }
     }
-    return ids
+    return pieces.flatMap { encodePiece($0) }
+  }
+
+  /// Every match its own piece, and every stretch between matches its own piece too, which is
+  /// what a `Split` pre-tokenizer means by `Isolated`.
+  static func isolate(_ text: String, by pattern: NSRegularExpression) -> [String] {
+    let ns = text as NSString
+    var pieces: [String] = []
+    var cursor = 0
+    pattern.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) {
+      match, _, _ in
+      guard let match, match.range.length > 0 else { return }
+      if match.range.location > cursor {
+        pieces.append(
+          ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+      }
+      pieces.append(ns.substring(with: match.range))
+      cursor = match.range.location + match.range.length
+    }
+    if cursor < ns.length {
+      pieces.append(ns.substring(with: NSRange(location: cursor, length: ns.length - cursor)))
+    }
+    return pieces
   }
 
   private func encodePiece(_ piece: String) -> [Int] {
@@ -318,6 +349,14 @@ public final class BonsaiTokenizer: @unchecked Sendable {
   }
 
   public func tokenString(_ id: Int) -> String? { reverseVocabulary[id] }
+
+  /// One token decoded on its own: an added token as written, any other through the byte-level
+  /// map, a broken UTF-8 fragment as replacement characters.
+  public func standaloneText(_ id: Int) -> String {
+    guard let token = reverseVocabulary[id] else { return "" }
+    if addedTokenIds[token] != nil { return token }
+    return String(decoding: tokenBytes(id), as: UTF8.self)
+  }
 
   /// The raw bytes a token contributes to the output, undoing the byte-level BPE mapping.
   public func tokenBytes(_ id: Int) -> [UInt8] {

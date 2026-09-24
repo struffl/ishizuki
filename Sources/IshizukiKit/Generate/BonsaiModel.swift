@@ -7,25 +7,39 @@ import MLX
 public final class BonsaiModel: @unchecked Sendable {
   public let config: BonsaiConfig
   public let store: WeightStore
-  public let text: TextModel
+  /// The Qwen-shaped stack, for every pack but a DeepSeek-V4.1 one.
+  public let text: TextModel!
+  public let deepseek: DeepSeekModel?
   public let mtp: MTPHead?
   public let tokenizer: BonsaiTokenizer
   public let directory: URL
 
   public let tensorPrefix: String
 
+  /// What the generator runs, whichever stack this is.
+  public var backbone: any LanguageBackbone { deepseek ?? text }
+
   /// Whether the routed experts are read from disk into slots rather than held.
-  public var streamsExperts: Bool { store.expertTraffic != nil }
+  public var streamsExperts: Bool { store.expertTraffic != nil || deepseek?.streamsExperts == true }
 
   private static let visionPrefix = "vision_tower."
   private static let visionProbe = visionPrefix + "patch_embed.proj.weight"
 
   private let visionLock = NSLock()
   private var tower: VisionTower?
+  private let deepseekWeights: DeepSeekWeights?
+  private var deepseekTower: DeepSeekVision?
 
   public convenience init(
     directory: URL, ropeScaling: RopeScaling = .none, hot: Bool = false
   ) throws {
+    if let raw = try? Data(contentsOf: directory.appending(path: "config.json")),
+      let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+      DeepSeekConfig.describes(object)
+    {
+      try self.init(deepseek: directory)
+      return
+    }
     let config = try BonsaiConfig.load(directory: directory)
     try config.validate()
     var store = try WeightStore(directory: directory)
@@ -125,6 +139,8 @@ public final class BonsaiModel: @unchecked Sendable {
     }
     self.text = try TextModel(
       config: config, factory: factory, store: store, ropeScaling: scaling)
+    self.deepseek = nil
+    self.deepseekWeights = nil
 
     // The head is optional twice over: the config has to declare it and the pack has to ship
     // the tensors. A pack that declares it and omits them still loads, without drafting, and so
@@ -143,16 +159,78 @@ public final class BonsaiModel: @unchecked Sendable {
     if hot { try vision() }
   }
 
+  /// A DeepSeek-V4.1 release, read from its own shards: the fp8 and fp4 weights multiplied as
+  /// they are, the routed experts streamed into slots, the n-gram tables read a row at a time.
+  private init(deepseek directory: URL) throws {
+    let checkpoint = try DeepSeekCheckpoint(directory: directory)
+    let config = checkpoint.config
+    let tokenizer = try BonsaiTokenizer(
+      directory: directory, eosTokenIds: [config.eosTokenId].compactMap { $0 })
+    let streams = BonsaiRuntime.deepseekStreamsExperts
+    let weights = DeepSeekWeights(
+      checkpoint: checkpoint, compute: BonsaiRuntime.deepseekCompute,
+      expertSlots: streams ? DeepSeekModel.expertSlots(for: checkpoint) : nil)
+    let map =
+      DeepSeekTokenMap.saved(in: directory, count: config.vocabSize)
+      ?? DeepSeekTokenMap.build(tokenizer: tokenizer, count: config.vocabSize)
+    self.deepseek = try DeepSeekModel(weights: weights, tokenMap: map)
+    self.deepseekWeights = weights
+    self.text = nil
+    self.mtp = nil
+    self.directory = directory
+    self.store = WeightStore(arrays: [:])
+    self.tokenizer = tokenizer
+    self.tensorPrefix = ""
+    self.config = try BonsaiConfig.flat([
+      "model_type": "deepseek_v41", "hidden_size": config.dim,
+      "num_hidden_layers": config.layers, "num_attention_heads": config.heads,
+      "num_key_value_heads": 1, "head_dim": config.headDim, "vocab_size": config.vocabSize,
+      "max_position_embeddings": 1_048_576, "rms_norm_eps": Double(config.normEps),
+      "eos_token_id": config.eosTokenId ?? 1, "bos_token_id": config.bosTokenId ?? 0,
+      "num_experts": config.routedExperts, "num_experts_per_tok": config.activatedExperts,
+      "moe_intermediate_size": config.moeInterDim,
+    ])
+  }
+
   /// A pack has a tower when its config declares one and the shards actually carry it. Asking
   /// reads no tensors, so the question stands on its own before anything has been built.
   public var hasVision: Bool {
-    config.visionConfig != nil && store.has(Self.visionProbe)
+    if let deepseekWeights { return deepseekWeights.has("vision.patch_embed.proj.weight") }
+    return config.visionConfig != nil && store.has(Self.visionProbe)
   }
 
   public var isVisionLoaded: Bool {
     visionLock.lock()
     defer { visionLock.unlock() }
-    return tower != nil
+    return tower != nil || deepseekTower != nil
+  }
+
+  /// DeepSeek-V4.1's tower, built the first time a picture needs it.
+  public func deepseekVision() throws -> DeepSeekVision? {
+    visionLock.lock()
+    defer { visionLock.unlock() }
+    if let deepseekTower { return deepseekTower }
+    guard let deepseekWeights, hasVision else { return nil }
+    let built = try DeepSeekVision(weights: deepseekWeights)
+    deepseekTower = built
+    return built
+  }
+
+  /// A picture off disk, prepared the way this model's tower reads pictures.
+  public func processImage(contentsOf url: URL) throws -> ProcessedImage {
+    if deepseek != nil {
+      guard let tower = try deepseekVision() else {
+        throw BonsaiError.missingComponent("this release has no vision tower")
+      }
+      let image = try tower.prepare(contentsOf: url)
+      return ProcessedImage(
+        patches: image.patches, grid: (t: 1, h: image.patchRows, w: image.patchColumns),
+        deepseek: image)
+    }
+    guard let visionConfig = config.visionConfig, hasVision else {
+      throw BonsaiError.missingComponent("this pack has no vision tower")
+    }
+    return try ImageProcessor(config: visionConfig).process(contentsOf: url)
   }
 
   /// The tower, built and read off disk the first time an image needs it and held afterwards.
@@ -160,6 +238,10 @@ public final class BonsaiModel: @unchecked Sendable {
   /// server asks for that cost at startup instead of on the first picture.
   @discardableResult
   public func vision() throws -> VisionTower? {
+    if deepseek != nil {
+      _ = try deepseekVision()
+      return nil
+    }
     visionLock.lock()
     defer { visionLock.unlock() }
     if let tower { return tower }

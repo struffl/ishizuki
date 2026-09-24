@@ -13,8 +13,16 @@ import MLX
 public struct ProcessedImage: @unchecked Sendable {
   public var patches: MLXArray
   public var grid: (t: Int, h: Int, w: Int)
+  /// The same picture as DeepSeek-V4.1's tower reads it, when that is the model it is for.
+  public var deepseek: DeepSeekImage?
 
-  public var tokenCount: Int { (grid.t * grid.h * grid.w) / 4 }
+  public init(patches: MLXArray, grid: (t: Int, h: Int, w: Int), deepseek: DeepSeekImage? = nil) {
+    self.patches = patches
+    self.grid = grid
+    self.deepseek = deepseek
+  }
+
+  public var tokenCount: Int { deepseek?.spanLength ?? (grid.t * grid.h * grid.w) / 4 }
 }
 
 public struct ImageProcessor: Sendable {

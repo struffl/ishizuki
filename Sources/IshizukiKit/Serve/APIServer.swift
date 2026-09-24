@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
+import Jinja
 import MLX
+import OrderedCollections
 
 public final class APIServer: @unchecked Sendable {
   /// The pack directory or the `.gguf` this server is serving. Either can be handed to
@@ -261,6 +263,9 @@ public final class APIServer: @unchecked Sendable {
   struct Request {
     var messages: [ChatMessage]
     var tools: [[String: Any]]?
+    /// The same tools with their keys in the order the client wrote them, for a template that
+    /// writes the schemas out as JSON and would otherwise have to pick an order of its own.
+    var orderedTools: [Value]? = nil
     var maxTokens: Int
     var temperature: Float?
     var stream: Bool
@@ -297,7 +302,7 @@ public final class APIServer: @unchecked Sendable {
       addGenerationPrompt: true,
       enableThinking: request.thinking,
       reasoningEffort: request.effort,
-      tools: request.tools)
+      tools: request.tools, orderedTools: request.orderedTools)
 
     stats.enter(id, phase: .prefill)
     var promptTokens = model.tokenizer.encode(rendered)
@@ -533,7 +538,8 @@ public final class APIServer: @unchecked Sendable {
     }
 
     do {
-      let parsed = try parseOpenAI(body)
+      var parsed = try parseOpenAI(body)
+      parsed.orderedTools = Self.orderedTools(request.body, anthropic: false)
       stats.update(id) { $0.stream = parsed.stream }
       let identifier = "chatcmpl-" + UUID().uuidString.prefix(12)
       let created = Int(Date().timeIntervalSince1970)
@@ -627,6 +633,22 @@ public final class APIServer: @unchecked Sendable {
     } catch {
       writer.sendError(
         status: 400, type: "invalid_request_error", message: "\(error)")
+    }
+  }
+
+  /// A request's tool definitions read again from the raw body, keys in the order they were sent.
+  static func orderedTools(_ body: Data, anthropic: Bool) -> [Value]? {
+    guard case .object(let root) = OrderedJSON.object(String(decoding: body, as: UTF8.self)),
+      case .array(let tools)? = root["tools"], !tools.isEmpty
+    else { return nil }
+    return tools.map { tool in
+      guard case .object(let fields) = tool else { return tool }
+      guard anthropic else { return fields["function"] ?? tool }
+      var function = OrderedDictionary<ObjectKey, Value>()
+      function["name"] = fields["name"] ?? .string("")
+      function["description"] = fields["description"] ?? .string("")
+      function["parameters"] = fields["input_schema"] ?? .object([:])
+      return .object(function)
     }
   }
 
@@ -732,7 +754,8 @@ public final class APIServer: @unchecked Sendable {
     }
 
     do {
-      let parsed = try parseAnthropic(body)
+      var parsed = try parseAnthropic(body)
+      parsed.orderedTools = Self.orderedTools(request.body, anthropic: true)
       stats.update(id) { $0.stream = parsed.stream }
       let identifier = "msg_" + UUID().uuidString.prefix(16)
 
@@ -998,7 +1021,8 @@ public final class APIServer: @unchecked Sendable {
       let parsed = try parseAnthropic(body)
       let rendered = try template.render(
         messages: parsed.messages, addGenerationPrompt: true,
-        enableThinking: parsed.thinking, tools: parsed.tools)
+        enableThinking: parsed.thinking, tools: parsed.tools,
+        orderedTools: Self.orderedTools(request.body, anthropic: true))
       writer.send(json: ["input_tokens": try model().tokenizer.encode(rendered).count])
     } catch {
       fail(writer, error)
@@ -1048,19 +1072,14 @@ public final class APIServer: @unchecked Sendable {
   /// the window as well as the port, so a conversation in the app sees what a client would.
   /// Call it on the generation queue: it reads the model.
   public func processImage(at url: URL) throws -> ProcessedImage {
-    let model = try self.model()
-    guard let visionConfig = model.config.visionConfig, model.hasVision else {
-      throw BonsaiError.missingComponent("this pack has no vision tower")
-    }
-    return try ImageProcessor(config: visionConfig).process(contentsOf: url)
+    try self.model().processImage(contentsOf: url)
   }
 
   private func decodeImage(_ source: String) throws -> ProcessedImage {
     let model = try self.model()
-    guard let visionConfig = model.config.visionConfig, model.hasVision else {
+    guard model.hasVision else {
       throw BonsaiError.missingComponent("this pack has no vision tower")
     }
-    let processor = ImageProcessor(config: visionConfig)
 
     if source.hasPrefix("data:") {
       guard let comma = source.firstIndex(of: ","),
@@ -1073,9 +1092,9 @@ public final class APIServer: @unchecked Sendable {
         .appending(path: UUID().uuidString)
       try data.write(to: url)
       defer { try? FileManager.default.removeItem(at: url) }
-      return try processor.process(contentsOf: url)
+      return try model.processImage(contentsOf: url)
     }
-    return try processor.process(contentsOf: URL(filePath: source))
+    return try model.processImage(contentsOf: URL(filePath: source))
   }
 }
 
@@ -1103,7 +1122,9 @@ struct StreamFilter {
   private var buffer = ""
   private var phase: Phase
   private var started: Bool
-  private let guardLength = 12
+  /// Held back at the end of the buffer in case it is the start of a marker: long enough for
+  /// DeepSeek's `<｜DSML｜ calls>` as well as `<tool_call>`.
+  private let guardLength = 16
 
   init(thinking: Bool) {
     self.phase = thinking ? .thinking : .answer
@@ -1137,7 +1158,9 @@ struct StreamFilter {
     }
 
     if phase == .answer {
-      if let call = buffer.range(of: "<tool_call>") {
+      let opener = [buffer.range(of: "<tool_call>"), buffer.range(of: DeepSeekChatFormat.callsOpen)]
+        .compactMap { $0 }.min { $0.lowerBound < $1.lowerBound }
+      if let call = opener {
         let visible = String(buffer[buffer.startIndex..<call.lowerBound])
         if !visible.isEmpty { out.content = visible }
         buffer = String(buffer[call.upperBound...])

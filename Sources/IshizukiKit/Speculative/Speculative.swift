@@ -86,8 +86,8 @@ public final class MTPDrafter: HiddenStateDrafter {
     }
     let ids = MLXArray(nextTokens.map { Int32($0) }).reshaped([1, nextTokens.count])
     let drafted = head(
-      hidden: hidden, embeddings: model.text.embedTokens(ids), cache: cache)
-    let logits = model.text.lastLogits(drafted)
+      hidden: hidden, embeddings: model.backbone.embed(ids), cache: cache)
+    let logits = model.backbone.lastLogits(drafted)
     pending = [logits[0, -1].argMax().item(Int.self)]
   }
 
@@ -134,7 +134,7 @@ public final class SpeculativeDecoder: @unchecked Sendable {
     maxTokens: Int = 256,
     onToken: ((String) -> Bool)? = nil
   ) -> (result: GenerationResult, speculative: SpeculativeStats) {
-    let cache = model.text.makeCache()
+    let cache = model.backbone.makeCache()
     var detokenizer = StreamingDetokenizer(tokenizer: model.tokenizer)
     var stats = SpeculativeStats()
 
@@ -147,10 +147,10 @@ public final class SpeculativeDecoder: @unchecked Sendable {
     // vocabulary projection is the widest matmul in the model, so everything else takes it once.
     func forward(_ tokens: [Int], allPositions: Bool = false) -> MLXArray {
       let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, tokens.count])
-      let h = model.text.trunk(inputs: ids, cache: cache)
+      let h = model.backbone.trunk(inputs: ids, cache: cache)
       if hiddenDrafter != nil { observed = (h, Array(tokens.dropFirst())) }
-      let normed = model.text.normed(h)
-      return allPositions ? model.text.lmHead(normed) : model.text.lastLogits(normed)
+      let normed = model.backbone.normed(h)
+      return allPositions ? model.backbone.logits(normed) : model.backbone.lastLogits(normed)
     }
 
     // The span just run is handed over once its trailing token is known, which keeps the draft

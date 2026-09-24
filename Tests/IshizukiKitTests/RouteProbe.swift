@@ -33,7 +33,7 @@ struct RouteProbe {
     let prompts = Array(Self.prompts.prefix(Int(env["ISHIZUKI_PROMPTS"] ?? "") ?? Self.prompts.count))
     let output = URL(filePath: env["ISHIZUKI_ROUTE_OUT"] ?? NSTemporaryDirectory() + "routes.json")
     let steps = Int(env["ISHIZUKI_STEPS"] ?? "") ?? 256
-    let text = model.text
+    let text: TextModel = model.text
     MLXRandom.seed(7)
 
     var pending: [(Int, MLXArray)] = []

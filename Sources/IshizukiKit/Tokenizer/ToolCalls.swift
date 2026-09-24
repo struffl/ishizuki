@@ -46,13 +46,21 @@ public enum ToolCallParser {
       // followed an unclosed tag would otherwise be read as prose and never made. What sits
       // before the tag is the answer proper and is kept.
       let after = open.upperBound
-      let stop = text.range(of: "<tool_call>", range: after..<text.endIndex)?.lowerBound
+      let stop = [text.range(of: "<tool_call>", range: after..<text.endIndex)?.lowerBound,
+        text.range(of: DeepSeekChatFormat.callsOpen, range: after..<text.endIndex)?.lowerBound]
+        .compactMap { $0 }.min()
       let thought = String(text[after..<(stop ?? text.endIndex)])
         .trimmingCharacters(in: .whitespacesAndNewlines)
       if !thought.isEmpty { reasoning = thought }
       text =
         String(text[text.startIndex..<open.lowerBound])
         + (stop.map { String(text[$0...]) } ?? "")
+    }
+
+    if let (content, calls) = DeepSeekChatFormat.parseCalls(text) {
+      return ParsedCompletion(
+        reasoning: reasoning,
+        content: content.trimmingCharacters(in: .whitespacesAndNewlines), toolCalls: calls)
     }
 
     var calls: [ToolCall] = []

@@ -39,19 +39,19 @@ public struct BatchCheck: Sendable {
     var singleLogits: [MLXArray] = []
     let singleStart = Date()
     for tokens in encoded {
-      let cache = bonsai.text.makeCache(kvConfig: .full)
+      let cache = bonsai.backbone.makeCache(kvConfig: .full)
       let ids = MLXArray(tokens.map { Int32($0) }).reshaped([1, length])
-      let logits = bonsai.text(ids, cache: cache)
+      let logits = bonsai.backbone(ids, cache: cache)
       eval(logits)
       singleLogits.append(logits[0, -1])
     }
     let singleSeconds = -singleStart.timeIntervalSinceNow
 
     let batchStart = Date()
-    let batchCache = bonsai.text.makeCache(kvConfig: .full)
+    let batchCache = bonsai.backbone.makeCache(kvConfig: .full)
     let batchIds = MLXArray(encoded.flatMap { $0 }.map { Int32($0) })
       .reshaped([count, length])
-    let batchLogits = bonsai.text(batchIds, cache: batchCache)
+    let batchLogits = bonsai.backbone(batchIds, cache: batchCache)
     eval(batchLogits)
     let batchSeconds = -batchStart.timeIntervalSinceNow
 
@@ -75,20 +75,20 @@ public struct BatchCheck: Sendable {
     let decodeBatchStart = Date()
     var next = batchLogits[0..., -1, 0...].argMax(axis: -1)
     for _ in 0..<options.decodeSteps {
-      let step = bonsai.text(next.reshaped([count, 1]), cache: batchCache)
+      let step = bonsai.backbone(next.reshaped([count, 1]), cache: batchCache)
       eval(step)
       next = step[0..., -1, 0...].argMax(axis: -1)
     }
     let batchDecodeSeconds = -decodeBatchStart.timeIntervalSinceNow
 
-    let singleCache = bonsai.text.makeCache(kvConfig: .full)
-    let warm = bonsai.text(
+    let singleCache = bonsai.backbone.makeCache(kvConfig: .full)
+    let warm = bonsai.backbone(
       MLXArray(encoded[0].map { Int32($0) }).reshaped([1, length]), cache: singleCache)
     eval(warm)
     var one = warm[0..., -1, 0...].argMax(axis: -1)
     let singleDecodeStart = Date()
     for _ in 0..<options.decodeSteps {
-      let step = bonsai.text(one.reshaped([1, 1]), cache: singleCache)
+      let step = bonsai.backbone(one.reshaped([1, 1]), cache: singleCache)
       eval(step)
       one = step[0..., -1, 0...].argMax(axis: -1)
     }

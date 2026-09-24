@@ -88,7 +88,7 @@ public struct KVBench: Sendable {
   private static func measure(
     _ bonsai: BonsaiModel, _ promptTokens: [Int], config: KVCacheConfig, options: Options
   ) throws -> (tokens: [Int], bytes: Int, tokensPerSecond: Double) {
-    let cache = bonsai.text.makeCache(kvConfig: config)
+    let cache = bonsai.backbone.makeCache(kvConfig: config)
     let generator = Generator(model: bonsai, kvConfig: config)
     let result = generator.generate(
       promptTokens: promptTokens, options: .greedy, maxTokens: options.maxTokens, cache: cache)

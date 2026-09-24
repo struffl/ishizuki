@@ -24,6 +24,7 @@ public enum CacheSnapshot: @unchecked Sendable {
   case kv(offset: Int)
   case recurrent(
     conv: MLXArray?, state: MLXArray?, ple: MLXArray?, pleTokens: MLXArray?, offset: Int)
+  case windowed(DeepSeekLayerCache.State)
 
   /// An attention layer rewinds by moving an offset, so its snapshot is free. A recurrent layer
   /// has to keep the state itself, which is what makes holding many of them expensive.
@@ -32,6 +33,7 @@ public enum CacheSnapshot: @unchecked Sendable {
     case .kv: 0
     case .recurrent(let conv, let state, let ple, let tokens, _):
       (conv?.nbytes ?? 0) + (state?.nbytes ?? 0) + (ple?.nbytes ?? 0) + (tokens?.nbytes ?? 0)
+    case .windowed(let state): state.byteCount
     }
   }
 }
@@ -219,8 +221,19 @@ public final class ModelCache: @unchecked Sendable {
     }
   }
 
+  /// Layers built elsewhere, for an architecture whose caches are not the ones a config's
+  /// attention schedule describes.
+  public init(layers: [LayerCache], kvConfig: KVCacheConfig = KVCacheConfig()) {
+    self.layers = layers
+    self.kvConfig = kvConfig
+  }
+
   public var byteCount: Int {
-    layers.reduce(0) { $0 + (($1 as? AttentionKVCache)?.byteCount ?? 0) }
+    layers.reduce(0) { total, layer in
+      if let attention = layer as? AttentionKVCache { return total + attention.byteCount }
+      if let windowed = layer as? DeepSeekLayerCache { return total + windowed.byteCount }
+      return total
+    }
   }
 
   public var offset: Int {
@@ -238,6 +251,6 @@ public final class ModelCache: @unchecked Sendable {
   }
 
   public var hasRecurrentLayers: Bool {
-    layers.contains { $0 is GatedDeltaNetCache }
+    layers.contains { $0 is GatedDeltaNetCache || $0 is DeepSeekLayerCache }
   }
 }

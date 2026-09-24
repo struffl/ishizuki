@@ -93,21 +93,35 @@ public enum ReasoningEffort: String, Sendable, CaseIterable, Codable {
 }
 
 public final class ChatTemplate: @unchecked Sendable {
-  private let template: Template
+  private let template: Template?
   public let source: String
+  /// DeepSeek-V4.1 ships its prompt format as a Python encoder, not a template, so a release is
+  /// rendered by `DeepSeekChatFormat` rather than by Jinja.
+  public let isDeepSeek: Bool
 
   public init(directory: URL) throws {
+    if let raw = try? Data(contentsOf: directory.appending(path: "config.json")),
+      let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+      DeepSeekConfig.describes(object)
+    {
+      self.source = "deepseek_v41 encoding.py"
+      self.template = nil
+      self.isDeepSeek = true
+      return
+    }
     let url = directory.appending(path: "chat_template.jinja")
     guard let source = try? String(contentsOf: url, encoding: .utf8) else {
       throw BonsaiError.missingComponent("no chat_template.jinja in \(directory.path)")
     }
     self.source = source
     self.template = try Template(source)
+    self.isDeepSeek = false
   }
 
   public init(source: String) throws {
     self.source = source
     self.template = try Template(source)
+    self.isDeepSeek = false
   }
 
   /// A pack keeps its template in a file beside the weights; a GGUF keeps it in the metadata.
@@ -130,8 +144,15 @@ public final class ChatTemplate: @unchecked Sendable {
     enableThinking: Bool = true,
     reasoningEffort: ReasoningEffort? = nil,
     tools: [[String: Any]]? = nil,
+    orderedTools: [Value]? = nil,
     extraContext: [String: Value] = [:]
   ) throws -> String {
+    guard let template else {
+      return DeepSeekChatFormat.render(
+        messages: messages, addGenerationPrompt: addGenerationPrompt,
+        thinking: enableThinking && reasoningEffort != ReasoningEffort.none,
+        effort: reasoningEffort, tools: tools, orderedTools: orderedTools)
+    }
     var context: [String: Value] = [
       "messages": try Value(any: messages.map(Self.encode)),
       "add_generation_prompt": .boolean(addGenerationPrompt),

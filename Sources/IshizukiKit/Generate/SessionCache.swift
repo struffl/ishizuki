@@ -277,7 +277,7 @@ public final class SessionCache: @unchecked Sendable {
     tag: String? = nil
   ) -> Lease {
     prepare(for: promptTokens, kvConfig: kvConfig, tag: tag) {
-      model.text.makeCache(kvConfig: kvConfig)
+      model.backbone.makeCache(kvConfig: kvConfig)
     }
   }
 

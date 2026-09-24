@@ -47,6 +47,11 @@ public final class ResidentBuffer: @unchecked Sendable {
   }
 
   /// Fills `range` of this buffer from `descriptor` at `offset`, in one read.
+  ///
+  /// A read the disk fails is tried again, waiting longer each time, before it gives up. A USB
+  /// drive pushed hard can reset and report I/O errors for several seconds — reads and writes
+  /// together did it to the one DeepSeek-V4.1 was streamed from — and answers again once it is
+  /// back, so the first `EIO` is no reason to lose a whole generation.
   @discardableResult
   public func read(
     from descriptor: Int32, offset: Int, into range: Range<Int>
@@ -55,18 +60,32 @@ public final class ResidentBuffer: @unchecked Sendable {
       throw BonsaiError.shapeMismatch("read of \(range) runs past a \(byteCount)-byte buffer")
     }
     var done = 0
+    var failures = 0
     while done < range.count {
       let got = pread(
         descriptor, pointer.advanced(by: range.lowerBound + done), range.count - done,
         off_t(offset + done))
-      guard got > 0 else {
-        throw BonsaiError.missingWeight(
-          "read \(done) of \(range.count) bytes at \(offset)")
+      if got > 0 {
+        done += got
+        continue
       }
-      done += got
+      let code = got < 0 ? errno : 0
+      if code == EINTR { continue }
+      if code == EIO || code == EAGAIN, failures < Self.readRetries {
+        Thread.sleep(forTimeInterval: 0.5 * Double(1 << failures))
+        failures += 1
+        continue
+      }
+      let reason = code == 0 ? "the file ends first" : String(cString: strerror(code))
+      throw BonsaiError.missingWeight(
+        "read \(done) of \(range.count) bytes at \(offset): \(reason)")
     }
     return done
   }
+
+  /// How many times a failed read is tried again: after half a second, then doubling, about
+  /// sixteen seconds in all on top of the kernel's own retries of the transfer.
+  static let readRetries = 5
 
   /// An array over a slice of this buffer. The buffer outlives the array: MLX is handed a
   /// retain rather than the allocation, so a slot can be wrapped many times and freed once.

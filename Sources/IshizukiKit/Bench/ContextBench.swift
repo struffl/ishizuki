@@ -40,7 +40,7 @@ public struct ContextBench: Sendable {
       while tokens.count < target { tokens.append(contentsOf: unit) }
       tokens = Array(tokens.prefix(target))
 
-      let cache = bonsai.text.makeCache(kvConfig: kvConfig)
+      let cache = bonsai.backbone.makeCache(kvConfig: kvConfig)
       let generator = Generator(model: bonsai, kvConfig: kvConfig)
 
       let result = generator.generate(
