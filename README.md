@@ -26,6 +26,7 @@ Requires Apple Silicon and macOS 26.
 - [Sampling](#sampling)
 - [Dependencies](#dependencies)
 - [Layout](#layout)
+- [Credits](#credits)
 - [License](#license)
 
 ## Install
@@ -284,6 +285,60 @@ App/IshizukiPhone/    the iPhone companion: pairing, conversations, files,
                       shell, on-device fallback
 App/Shared/           what both apps draw
 ```
+
+## Credits
+
+Ishizuki borrows freely. These are the people and projects its answers came from.
+
+**DeepSeek-V4.1**
+
+- [DeepSeek-AI](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) — the release's reference
+  inference code, its prompt encoder and golden tests, and the technical report, where the
+  encoder–decoder split, the shared compressed attention, DSpark and SWA bounded replay come
+  from. Every DeepSeek layer here is checked against their `model.py`.
+- [NumPy](https://numpy.org) — DeepSeek draws its n-gram hash multipliers with NumPy's
+  `SeedSequence` and PCG64, so those are reimplemented exactly as NumPy has them, down to
+  Daniel Lemire's bounded integers. PCG is Melissa O'Neill's.
+
+**Speculative decoding and kernels**
+
+- [z-lab](https://github.com/z-lab/dflash) — DFlash (Jian Chen, Yesheng Liang, Zhijian Liu,
+  [arXiv 2602.06036](https://arxiv.org/abs/2602.06036)) and the
+  [Qwen3.8-27B DFlash 2 drafter](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2). The Swift
+  drafter is a port of their MLX code, and a rejected block is rewound the way theirs does it,
+  by running the delta rule again over the positions kept.
+- [Inco AI](https://inco.ai/blog/dflash2/) — DFlash 2's convolution and candidate selector, and
+  [Splash](https://github.com/incoai/splash), whose split-K decode keeps a narrow projection's
+  reduction spread across the GPU.
+- [paperniuk](https://github.com/paperniuk/splash/tree/apple7-m1-kernels) — the M1 port of
+  Splash and
+  [its write-up](https://www.reddit.com/r/oMLX/comments/1wovgy5/you_can_now_run_qwen3827b_on_a_2021_m1_max_at_39/):
+  codes turned into exact halves with `| 0x6400` less 1024, half × float32 simdgroup products,
+  each weight unpacked once for every row, and the reminder that an M1 has no bf16. The verify
+  kernel's code path is built on those.
+- [Underdog's Husky](https://husky.underdog.ai) and llm-in-c's Qwen3.8 C/Metal runtime — the
+  prompt to measure what a few-row verify costs at all; llm-in-c's staged tile shape was one of
+  the layouts tried. Liu Liu — on why a megakernel buys nothing on Metal, which has no grid-wide
+  barrier.
+
+**Models and formats**
+
+- [PrismML](https://prismml.com) — Ternary Bonsai 2 27B, the Hadamard pack format, and the pack's
+  bundled MLX runtime, the stock baseline the DFlash numbers are measured against.
+- [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) — Qwen3.8 and its hybrid gated delta-net
+  architecture; [transformers](https://github.com/huggingface/transformers)' `qwen4_exp`
+  modeling code for Qwen3.8-Flash-Next.
+- [ggml / llama.cpp](https://github.com/ggml-org/llama.cpp) — the GGUF block formats, read as they
+  are, and the sampler order.
+- [ExLlamaV3](https://github.com/turboderp-org/exllamav3) (turboderp) — the EXL3 format.
+- [oMLX](https://github.com/jundot/omlx) (jundot) — the oQ4e format.
+- [dealignai](https://huggingface.co/dealignai) — JANG repacks.
+- TurboQuant (Zandieh et al.) — the KV cache's split of 3-bit keys and 4-bit values.
+- [Hugging Face](https://huggingface.co) — `tokenizers` and `transformers`, which the tokenizer and
+  chat-template tests compare against, and the Hub everything downloads from.
+- [MLX](https://github.com/ml-explore/mlx) and [MLX Swift](https://github.com/ml-explore/mlx-swift)
+  — the runtime underneath, and the quantized matmul the verify kernel is tested against;
+  [mlx-lm](https://github.com/ml-explore/mlx-lm), the stock baseline.
 
 ## License
 
