@@ -254,6 +254,18 @@ public final class TextModel: @unchecked Sendable {
     inputs: MLXArray?, inputEmbeddings: MLXArray? = nil,
     cache: ModelCache? = nil, positions: MLXArray? = nil
   ) -> MLXArray {
+    trunk(
+      inputs: inputs, inputEmbeddings: inputEmbeddings, cache: cache, positions: positions,
+      taps: []
+    ).trunk
+  }
+
+  /// The trunk, and the residual after each layer in `taps` side by side, `[b, s, taps.count *
+  /// width]` — what a DFlash draft reads the backbone by. Nil when no layer is tapped.
+  public func trunk(
+    inputs: MLXArray?, inputEmbeddings: MLXArray? = nil, cache: ModelCache? = nil,
+    positions: MLXArray? = nil, taps: [Int]
+  ) -> (trunk: MLXArray, taps: MLXArray?) {
     var h: MLXArray
     if let inputEmbeddings {
       h = inputEmbeddings
@@ -275,12 +287,14 @@ public final class TextModel: @unchecked Sendable {
     if let count = config.hcCount, count > 1 {
       h = concatenated(Array(repeating: h, count: count), axis: -1)
     }
+    var tapped: [MLXArray] = []
     for (index, layer) in layers.enumerated() {
       h = layer(
         h, mask: mask, cache: cache?.layers[index], positions: positions, compute: compute,
         engrams: engramRows)
+      if taps.contains(index) { tapped.append(h) }
     }
-    return h.asType(compute)
+    return (h.asType(compute), tapped.isEmpty ? nil : concatenated(tapped, axis: -1))
   }
 
   /// This chunk's n-gram rows, and the tokens the next chunk will need to reach back over.

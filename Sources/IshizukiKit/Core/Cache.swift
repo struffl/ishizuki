@@ -147,8 +147,42 @@ public final class GatedDeltaNetCache: LayerCache, @unchecked Sendable {
   public var pleConvState: MLXArray?
   public var pleTokens: MLXArray?
   public private(set) var offset = 0
+  /// Set while a drafted block is verified, so that a rejection can keep part of it: each
+  /// forward then leaves what it fed the delta rule in `steps`.
+  public var recordsSteps = false
+  var steps: DeltaSteps?
+
+  /// What one forward fed the delta rule, from the state it started at.
+  struct DeltaSteps {
+    let q: MLXArray
+    let k: MLXArray
+    let v: MLXArray
+    let g: MLXArray
+    let beta: MLXArray
+    let state: MLXArray
+    let convInput: MLXArray
+    let convKeep: Int
+    let headRepeat: Int
+    let layout: ValueHeadLayout
+    let start: Int
+  }
 
   public init() {}
+
+  /// Keeps the first `count` positions of the last forward and drops the rest: the rule runs
+  /// again over just those, from the state the forward started with, which costs the rule and
+  /// not the projections around it.
+  func keep(_ count: Int) {
+    guard let steps else { return }
+    let (_, state) = GatedDeltaNet.deltaRule(
+      q: steps.q[0..., ..<count], k: steps.k[0..., ..<count], v: steps.v[0..., ..<count],
+      g: steps.g[0..., ..<count], beta: steps.beta[0..., ..<count], state: steps.state,
+      headRepeat: steps.headRepeat, layout: steps.layout)
+    recurrentState = state
+    convState = steps.convInput[0..., count..<(count + steps.convKeep), 0...]
+    offset = steps.start + count
+    self.steps = nil
+  }
 
   public func reset() {
     convState = nil
@@ -245,6 +279,30 @@ public final class ModelCache: @unchecked Sendable {
   }
 
   public func snapshot() -> [CacheSnapshot] { layers.map { $0.snapshot() } }
+
+  /// Keeps the first `count` positions of what ran since `snapshot`: an attention layer moves
+  /// its offset back, a recurrent one runs the kept positions again. Only a forward made with
+  /// `recordsSteps` on can be kept in part.
+  public func keep(_ count: Int, since snapshot: [CacheSnapshot]) {
+    for (layer, saved) in zip(layers, snapshot) {
+      if let recurrent = layer as? GatedDeltaNetCache {
+        recurrent.keep(count)
+      } else if case .kv(let offset) = saved {
+        layer.restore(.kv(offset: offset + count))
+      }
+    }
+  }
+
+  public var recordsSteps: Bool {
+    get { layers.contains { ($0 as? GatedDeltaNetCache)?.recordsSteps == true } }
+    set {
+      for layer in layers {
+        guard let recurrent = layer as? GatedDeltaNetCache else { continue }
+        recurrent.recordsSteps = newValue
+        if !newValue { recurrent.steps = nil }
+      }
+    }
+  }
 
   public func restore(_ snapshots: [CacheSnapshot]) {
     for (layer, snapshot) in zip(layers, snapshots) { layer.restore(snapshot) }

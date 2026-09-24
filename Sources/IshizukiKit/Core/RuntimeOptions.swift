@@ -87,6 +87,10 @@ public enum BonsaiRuntime {
   /// of them, which takes the better part of 300 GB.
   public nonisolated(unsafe) static var deepseekStreamsExperts = true
 
+  /// Whether a loaded pack looks for a DFlash drafter trained on its base model and drafts
+  /// with it. The drafter costs about two gigabytes held at eight bits.
+  public nonisolated(unsafe) static var dflash = true
+
   /// Whether a DeepSeek-V4.1 prompt runs its decoder over the last window of tokens only, as
   /// DeepSeek serves it: the encoder still reads every token and the decoder's global KV is made
   /// from it, but the decoder's windows start again at the replay. Off runs every layer over

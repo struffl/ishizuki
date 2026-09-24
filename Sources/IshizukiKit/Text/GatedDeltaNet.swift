@@ -136,6 +136,11 @@ public final class GatedDeltaNet: @unchecked Sendable {
       ?? MLXArray.zeros(
         [b, numValueHeads, valueHeadDim, keyHeadDim], dtype: .float32)
 
+    if let cache, cache.recordsSteps {
+      cache.steps = GatedDeltaNetCache.DeltaSteps(
+        q: q, k: k, v: v, g: g, beta: beta, state: state, convInput: convInput, convKeep: keep,
+        headRepeat: headRepeat, layout: valueHeadLayout, start: cache.offset)
+    }
     let (y, newState) = GatedDeltaNet.deltaRule(
       q: q, k: k, v: v, g: g, beta: beta, state: state, headRepeat: headRepeat,
       layout: valueHeadLayout)

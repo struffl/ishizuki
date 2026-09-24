@@ -228,3 +228,34 @@ where it wins; below that MLX's own path is faster.
 Lossless: every run matches greedy token for token. M1 Max, 2026-09-23. An M1 has no GPU
 matrix units, so eight rows cost about twice one at best; chips with neural accelerators in the
 GPU should close more of that.
+
+## DFlash drafting
+
+A pack built on Qwen3.8-27B drafts with z-lab's DFlash 2 when the drafter is in reach — in
+`dflash/` inside the pack, beside it in the library, or in the Hugging Face cache, matched by the
+backbone's depth, width and vocabulary. It proposes seven tokens a round from the backbone's own
+residual at five of its layers, and the backbone verifies the eight-token block in one forward.
+A partial accept keeps what agreed in the caches, the delta-net layers running the kept positions
+again, so a verify is never wider than the block. Sampled requests keep a draft with the chance
+the backbone gives it, which leaves the distribution exactly the backbone's.
+
+Ternary Bonsai 2 27B 2-bit, 256 tokens, reasoning off, best of two, M1 Max 2026-09-24 (the desktop
+was in use, so plain decoding ran 17–22 tok/s rather than its usual 22.6):
+
+| | plain | DFlash 2 | tokens / verify |
+|---|---|---|---|
+| math, greedy | 22.09 | **44.21** | 5.89 |
+| code, greedy | 22.27 | **44.17** | 5.86 |
+| code, temp 0.7 min-p 0.05 | 19.07 | **46.21** | 6.35 |
+| prose, greedy | 22.28 | 19.54 | 2.54 |
+
+Greedy output matches plain decoding token for token up to exact ties in the logits. The drafter
+runs at eight bits in float32, not in its bf16: its residual passes 140,000, beyond float16, and
+an M1 has no bf16 arithmetic. The same drafter on stock MLX, driven by z-lab's own loop, is slower
+than plain decoding (13.7 against 20.6 tok/s on math) because MLX's eight-row verify costs five
+to six steps.
+
+The verify multiplies codes, not weights: two codes come out of a word with one mask and become
+exact halves, each group's scale and bias apply once to its partial sums, and a narrow output
+splits its reduction across enough simdgroups to fill the GPU. Eight rows of the MLP projections
+went from 2.6–4.4 to 5.5–5.7 TFLOPS, the head 6.6.

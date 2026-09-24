@@ -11,6 +11,9 @@ public final class BonsaiModel: @unchecked Sendable {
   public let text: TextModel!
   public let deepseek: DeepSeekModel?
   public let mtp: MTPHead?
+  /// A DFlash drafter for this backbone, when one has been attached. It ships apart from the
+  /// pack — z-lab trains one per base model — so it is handed over rather than found.
+  public var dflash: DFlashDraft?
   public let tokenizer: BonsaiTokenizer
   public let directory: URL
 

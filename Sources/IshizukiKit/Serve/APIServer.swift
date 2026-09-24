@@ -183,6 +183,20 @@ public final class APIServer: @unchecked Sendable {
     let model = try BonsaiModel(path: modelPath, ropeScaling: ropeScaling, hot: hot)
     loaded = model
     log?(String(format: "loaded model in %.1fs", -start.timeIntervalSinceNow))
+    if BonsaiRuntime.dflash, model.deepseek == nil, let text = model.text,
+      let found = DFlashDraft.find(for: text, beside: modelPath)
+    {
+      let draftStart = Date()
+      do {
+        model.dflash = try DFlashDraft(directory: found)
+        log?(
+          String(
+            format: "drafting with DFlash from %@ (%.1fs)", found.lastPathComponent,
+            -draftStart.timeIntervalSinceNow))
+      } catch {
+        log?("DFlash drafter at \(found.path) did not load: \(error)")
+      }
+    }
     if let experts = model.store.expertTraffic {
       log?(
         "experts: streamed, \(experts.slots) slots a layer across \(experts.layers) layers, "

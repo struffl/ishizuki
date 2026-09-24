@@ -13,6 +13,7 @@ extension Generator {
     let lookup: Drafter
     let mtp: MTPDrafter?
     var dspark: DSparkDrafter? = nil
+    var dflash: DFlashDrafter? = nil
 
     /// Whether a head of the model's own drafts, which is what the drafted loop is for.
     var hasHead: Bool { mtp != nil || dspark != nil }
@@ -37,9 +38,11 @@ extension Generator {
     let mtp =
       model.mtp == nil || options.temperature > 0
       ? nil : try? MTPDrafter(model: model, kvConfig: kvConfig)
+    let dflash =
+      model.deepseek == nil ? model.dflash.map { DFlashDrafter(draft: $0, backbone: model.text) } : nil
     return Drafts(
       lookup: lookup?() ?? NgramDrafter(minPatternLength: BonsaiRuntime.lookupMinMatch), mtp: mtp,
-      dspark: model.deepseek.flatMap { DSparkDrafter(model: $0) })
+      dspark: model.deepseek.flatMap { DSparkDrafter(model: $0) }, dflash: dflash)
   }
 
   func speculate(

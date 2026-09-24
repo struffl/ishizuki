@@ -148,6 +148,10 @@ public final class Generator: @unchecked Sendable {
           let step = dspark.forward(chunk, cache: cache)
           dspark.commit(step.hidden, start: step.start, count: end - index)
           trunk = step.trunk
+        } else if let dflash = drafting?.dflash {
+          let step = dflash.backbone.trunk(inputs: chunk, cache: cache, taps: dflash.taps)
+          if let taps = step.taps { dflash.observe(taps, at: index) }
+          trunk = step.trunk
         } else {
           trunk = model.backbone.trunk(inputs: chunk, cache: cache)
         }
@@ -190,6 +194,21 @@ public final class Generator: @unchecked Sendable {
 
     var nextLogits = logits[0..., -1, 0...]
     onProgress?(.decode(count: 0))
+
+    if let dflash = drafting?.dflash {
+      let decoded = speculateBlocks(
+        dflash, logits: logits, cache: cache, sampler: sampler, maxTokens: maxTokens,
+        detokenizer: &detokenizer,
+        isCancelled: isCancelled, onProgress: onProgress, onToken: onToken)
+      return GenerationResult(
+        tokens: decoded.generated, text: decoded.text,
+        stats: GenerationStats(
+          promptTokens: promptTokens.count - cachedPrefixLength,
+          generatedTokens: decoded.generated.count, promptSeconds: promptSeconds,
+          generationSeconds: -generationStart.timeIntervalSinceNow),
+        stoppedOnEOS: decoded.stoppedOnEOS, cancelled: decoded.cancelled,
+        speculative: decoded.stats)
+    }
 
     if let drafting, drafting.hasHead {
       let decoded = speculate(
