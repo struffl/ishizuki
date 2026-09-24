@@ -15,7 +15,7 @@ import Testing
 /// structural feature of the real config at a smaller size: window-only layers, ratio-2 encoder
 /// sources and reusers, a ratio-1 decoder source that is also the candidate source, a reindexer,
 /// two engram layers, four residual copies.
-@Suite("DeepSeek-V4.1")
+@Suite("DeepSeek-V4.1", .serialized)
 struct DeepSeekV41Tests {
   private var fixture: URL {
     URL(fileURLWithPath: #filePath)
