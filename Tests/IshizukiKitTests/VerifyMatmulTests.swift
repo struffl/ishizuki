@@ -23,6 +23,7 @@ struct VerifyMatmulTests {
     for (rows, dtype, wide) in [
       (8, DType.float16, DType.float32), (5, .float16, .float32), (7, .float32, .float32),
       (6, .float32, .float32), (8, .float16, .bfloat16), (6, .float32, .bfloat16),
+      (7, .bfloat16, .bfloat16), (8, .bfloat16, .float16),
     ] {
       let x = (MLXRandom.normal([rows, k]) * 2).asType(dtype)
       let scales = scales.asType(wide)
@@ -32,16 +33,57 @@ struct VerifyMatmulTests {
         biases: biases!.asType(.float32), transpose: true, groupSize: groupSize, bits: bits,
         mode: .affine)
       let got = try #require(
-        VerifyMatmul.apply(
+        VerifyMatmul.applyAny(
           x, weight, scales: scales, biases: biases!, groupSize: groupSize, bits: bits))
       let worst = (got.asType(.float32) - want).abs().max().item(Float.self)
       let scale = want.abs().max().item(Float.self)
-      let tolerance: Float = dtype == .float32 && wide == .float32 ? 1e-5 : 2e-3
+      let tolerance: Float =
+        dtype == .bfloat16 ? 8e-3 : dtype == .float32 && wide == .float32 ? 1e-5 : 2e-3
       #expect(
         worst / scale < tolerance,
         "\(bits)-bit, group \(groupSize), \(rows) rows of \(dtype), scales \(wide): off by \(worst / scale)"
       )
     }
+  }
+
+  /// A target in fp16 and a drafter in fp32 can share a projection shape, and one graph then
+  /// holds both. Each must run the kernel built for its own dtype.
+  @Test("keeps one shape's dtypes apart in a single graph")
+  func mixedDTypes() throws {
+    let n = 384
+    let k = 1024
+    let dense = MLXRandom.normal([n, k]) * 0.05
+    let (weight, scales, biases) = quantized(dense, groupSize: 128, bits: 2)
+    let x = MLXRandom.normal([8, k])
+    let want = quantizedMM(
+      x, weight, scales: scales, biases: biases!, transpose: true, groupSize: 128, bits: 2,
+      mode: .affine)
+    let dtypes = [DType.float16, .float32, .bfloat16]
+    let outputs = try dtypes.map {
+      try #require(
+        VerifyMatmul.applyAny(
+          x.asType($0), weight, scales: scales, biases: biases!, groupSize: 128, bits: 2))
+    }
+    eval(outputs)
+    let scale = want.abs().max().item(Float.self)
+    for (dtype, got) in zip(dtypes, outputs) {
+      let worst = (got.asType(.float32) - want).abs().max().item(Float.self)
+      #expect(worst / scale < 8e-3, "\(dtype) beside the others: off by \(worst / scale)")
+    }
+  }
+
+  @Test("takes a shape only from the row count where it beats MLX")
+  func rowFloor() {
+    func rows(_ n: Int, _ k: Int, bits: Int = 2) -> Int {
+      VerifyMatmul.minimumRows(bytes: n * k * bits / 8)
+    }
+    #expect(rows(248_320, 5120) == 2)
+    #expect(rows(17_408, 5120) == 3)
+    #expect(rows(12_288, 5120) == 3)
+    #expect(rows(6144, 5120) == 4)
+    #expect(rows(1024, 5120) == 6)
+    #expect(rows(4096, 5120, bits: 8) == 3)
+    #expect(rows(1024, 5120, bits: 8) == 4)
   }
 
   /// Throughput on the Qwen3.8-27B shapes, eight rows of float16, as a probe.
@@ -78,7 +120,7 @@ struct VerifyMatmulTests {
                 ? quantizedMM(
                   x, weight, scales: s, biases: b, transpose: true, groupSize: 128, bits: 2,
                   mode: .affine)
-                : VerifyMatmul.apply(x, weight, scales: s, biases: b, groupSize: 128, bits: 2)!
+                : VerifyMatmul.applyAny(x, weight, scales: s, biases: b, groupSize: 128, bits: 2)!
               total = total + y
             }
             return total
@@ -119,7 +161,7 @@ struct VerifyMatmulTests {
           biases: biases!.asType(.float32), transpose: true, groupSize: groupSize, bits: bits,
           mode: .affine)
         guard
-          let got = VerifyMatmul.apply(
+          let got = VerifyMatmul.applyAny(
             x, weight, scales: scales, biases: biases!, groupSize: groupSize, bits: bits)
         else {
           print("\(bits)-bit g\(groupSize) \(n)x\(k) \(rows) rows: not taken")

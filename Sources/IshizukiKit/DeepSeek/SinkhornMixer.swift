@@ -84,7 +84,7 @@ public struct SinkhornMixer: @unchecked Sendable {
     #if canImport(Metal)
       let out = kernel(
         [mixes, scale, base, MLXArray([eps])],
-        template: [("HC", copies), ("ITERS", iterations)],
+        template: [("HC", copies), ("ITERS", iterations), ("IT", mixes.dtype)],
         grid: (rows, 1, 1), threadGroup: (min(rows, 64), 1, 1),
         outputShapes: [[rows, copies], [rows, copies], [rows, copies * copies]],
         outputDTypes: [.float32, .float32, .float32])

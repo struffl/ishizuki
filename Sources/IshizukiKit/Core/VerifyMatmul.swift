@@ -9,7 +9,21 @@ import MLX
 import MLXFast
 
 public enum VerifyMatmul {
-  public static let supportedRows = 5...8
+  public static let supportedRows = 2...8
+
+  /// The fewest rows at which this kernel beats MLX's own, by the bytes the weight holds. It
+  /// costs about the same at any row count, and MLX's per-row path is cheap on a small matrix,
+  /// so a small one takes more rows to pay (M1 Max, release): the 2-bit output head from 2, the
+  /// MLP and projections of 10 MB or more from 3, the 6144-wide ones from 4, attention k and v
+  /// from 6.
+  static func minimumRows(bytes: Int) -> Int {
+    switch bytes {
+    case 100_000_000...: 2
+    case 10_000_000...: 3
+    case 5_000_000...: 4
+    default: 6
+    }
+  }
 
   nonisolated(unsafe) static var rowBlocks = 4
   nonisolated(unsafe) static var simdgroups = 2
@@ -50,13 +64,23 @@ public enum VerifyMatmul {
     _ x: MLXArray, _ w: MLXArray, scales: MLXArray, biases: MLXArray,
     groupSize: Int, bits: Int
   ) -> MLXArray? {
+    guard x.ndim == 2, x.dim(0) >= minimumRows(bytes: w.nbytes),
+      supportedRows.contains(x.dim(0))
+    else { return nil }
+    return applyAny(x, w, scales: scales, biases: biases, groupSize: groupSize, bits: bits)
+  }
+
+  static func applyAny(
+    _ x: MLXArray, _ w: MLXArray, scales: MLXArray, biases: MLXArray,
+    groupSize: Int, bits: Int
+  ) -> MLXArray? {
     #if canImport(Metal)
       guard x.ndim == 2 else { return nil }
       let m = x.dim(0)
       let k = x.dim(1)
       let n = w.dim(0)
       let rowsPerGroup = 8 * rowBlocks * simdgroups
-      guard supportedRows.contains(m), (2...8).contains(bits) else { return nil }
+      guard (1...8).contains(m), (2...8).contains(bits) else { return nil }
       guard k % (64 * unroll) == 0, groupSize % (16 * unroll) == 0, k % groupSize == 0 else {
         return nil
       }
@@ -70,26 +94,26 @@ public enum VerifyMatmul {
         let y = codes(
           [x, w, scales, biases, m],
           template: [
-            ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
+            ("XT", x.dtype), ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
             ("RB", rowBlocks), ("SGS", simdgroups), ("U", unroll), ("SPLIT", split),
           ],
           grid: ((n / rowsPerGroup) * 32 * simdgroups, split, 1),
           threadGroup: (32 * simdgroups, 1, 1),
           outputShapes: [split > 1 ? [split, m, n] : [m, n]],
-          outputDTypes: [split > 1 ? .float32 : x.dtype])[0]
-        return split > 1 ? y.sum(axis: 0).asType(x.dtype) : y
+          outputDTypes: [split > 1 || x.dtype == .bfloat16 ? .float32 : x.dtype])[0]
+        return (split > 1 ? y.sum(axis: 0) : y).asType(x.dtype)
       }
 
       return kernel(
         [x, w, scales, biases, m],
         template: [
-          ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
+          ("XT", x.dtype), ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
           ("RB", rowBlocks), ("SGS", simdgroups), ("U", unroll),
         ],
         grid: ((n / rowsPerGroup) * 32 * simdgroups, 1, 1),
         threadGroup: (32 * simdgroups, 1, 1),
         outputShapes: [[m, n]],
-        outputDTypes: [x.dtype])[0]
+        outputDTypes: [x.dtype == .bfloat16 ? .float32 : x.dtype])[0].asType(x.dtype)
     #else
       return nil
     #endif

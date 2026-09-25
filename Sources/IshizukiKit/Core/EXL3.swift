@@ -108,7 +108,7 @@ public enum EXL3Kernels {
       if fused, let rotateKernel {
         return rotateKernel(
           [x, scales],
-          template: [("ROWS", rows), ("D", width), ("PRE", before), ("OT", dtype)],
+          template: [("ROWS", rows), ("D", width), ("PRE", before), ("IT", x.dtype), ("OT", dtype)],
           grid: (rows * width / 128 * 32, 1, 1),
           threadGroup: (256, 1, 1),
           outputShapes: [[rows, width]],
