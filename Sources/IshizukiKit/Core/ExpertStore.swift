@@ -176,11 +176,20 @@ public final class ExpertStore: @unchecked Sendable {
   }
 
   public convenience init(url: URL, layout: ExpertLayout, slots: Int) throws {
-    let opened = open(url.path, O_RDONLY)
+    let opened = Self.openUncached(url)
     guard opened >= 0 else {
       throw BonsaiError.missingWeight("cannot open \(url.lastPathComponent)")
     }
     try self.init(descriptor: opened, located: nil, layout: layout, slots: slots)
+  }
+
+  /// A shard opened for reads that bypass the page cache. The slots are the cache: a copy of
+  /// every expert read left in the file cache as well doubles what streaming holds, and on a
+  /// machine already near its ceiling that is what gets the rest of it swapped out.
+  static func openUncached(_ url: URL) -> Int32 {
+    let opened = open(url.path, O_RDONLY)
+    if opened >= 0 { _ = fcntl(opened, F_NOCACHE, 1) }
+    return opened
   }
 
   public convenience init(placement: Placement, layout: ExpertLayout, slots: Int) throws {
@@ -190,7 +199,7 @@ public final class ExpertStore: @unchecked Sendable {
     }
     var descriptors: [Int32] = []
     for url in placement.files {
-      let opened = open(url.path, O_RDONLY)
+      let opened = Self.openUncached(url)
       guard opened >= 0 else {
         for previous in descriptors { close(previous) }
         throw BonsaiError.missingWeight("cannot open \(url.lastPathComponent)")
@@ -292,7 +301,8 @@ public final class ExpertStore: @unchecked Sendable {
       let target = base[name]! + miss.slot * part.byteCount
       do {
         let (file, offset) = source(expert: miss.expert, part: name, part)
-        try buffer.read(from: file, offset: offset, into: target..<(target + part.byteCount))
+        try buffer.readUncached(
+          from: file, offset: offset, into: target..<(target + part.byteCount))
       } catch {
         failure.record(error)
       }
@@ -333,7 +343,7 @@ public final class ExpertStore: @unchecked Sendable {
 }
 
 /// The first error any of a batch of concurrent reads hit.
-private final class FirstFailure: @unchecked Sendable {
+final class FirstFailure: @unchecked Sendable {
   private let lock = NSLock()
   private var first: Error?
 

@@ -122,21 +122,27 @@ public final class DeepSeekCheckpoint: @unchecked Sendable {
     try read(try entry(name), rows: range)
   }
 
+  /// Read into locked pages, which the array then covers whole: Metal takes memory as it is
+  /// only when it ends on a page, and MLX copies whatever it will not take into memory of its
+  /// own. Only the GPU reads these weights again, and the system cannot see the GPU's reads:
+  /// the pages look idle, so they are the first it compresses when memory runs short, and every
+  /// step then waits while they are expanded again.
   private func read(_ entry: Entry, rows: Range<Int>) throws -> MLXArray {
     let type = try Self.dtype(entry.dtype)
     let stride = entry.rowBytes
     let count = entry.shape.isEmpty ? entry.byteCount : rows.count * stride
     let shape = entry.shape.isEmpty ? [] : [rows.count] + entry.shape.dropFirst()
     guard count > 0 else { return MLXArray.zeros(shape, dtype: type) }
-    let buffer = try ResidentBuffer(byteCount: count)
-    let descriptor = open(entry.file.path, O_RDONLY)
+    let buffer = try ResidentBuffer(byteCount: count, locked: true)
+    let descriptor = ExpertStore.openUncached(entry.file)
     guard descriptor >= 0 else {
       throw BonsaiError.missingWeight("cannot open \(entry.file.lastPathComponent)")
     }
     defer { close(descriptor) }
-    try buffer.read(
+    try buffer.readUncached(
       from: descriptor, offset: entry.offset + rows.lowerBound * stride, into: 0..<count)
-    return buffer.array(shape: shape, dtype: type)
+    let pages = buffer.array(shape: [buffer.byteCount / type.size], dtype: type)
+    return pages[0..<(count / type.size)].reshaped(shape)
   }
 }
 

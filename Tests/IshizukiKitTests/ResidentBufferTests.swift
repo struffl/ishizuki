@@ -85,6 +85,31 @@ struct ResidentBufferTests {
     #expect(-start.timeIntervalSinceNow < 0.25)
   }
 
+  /// A file offset and a destination that share no phase within a page, pieces larger than the
+  /// scratch memory they pass through, and a read that ends where the file does.
+  @Test("an uncached read lands the same bytes wherever the offsets fall")
+  func readsUncached() throws {
+    let url = temporary()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let bytes = (0..<(9 << 20) + 4321).map { UInt8(truncatingIfNeeded: $0 &* 2_654_435_761 >> 7) }
+    try Data(bytes).write(to: url)
+    let descriptor = ExpertStore.openUncached(url)
+    defer { close(descriptor) }
+
+    for (offset, count, at) in [
+      (777, 40_000, 5), (0, 16_384, 0), (123, 8_600_000, 16_390), (bytes.count - 30_001, 30_001, 3),
+    ] {
+      let buffer = try ResidentBuffer(byteCount: at + count)
+      try buffer.readUncached(from: descriptor, offset: offset, into: at..<(at + count))
+      let landed = UnsafeRawBufferPointer(start: buffer.pointer.advanced(by: at), count: count)
+      #expect(Array(landed) == Array(bytes[offset..<(offset + count)]), "\(count) at \(offset)")
+    }
+    let buffer = try ResidentBuffer(byteCount: 64)
+    #expect(throws: BonsaiError.self) {
+      try buffer.readUncached(from: descriptor, offset: bytes.count - 10, into: 0..<64)
+    }
+  }
+
   @Test("a read past the end is refused rather than scribbling")
   func bounds() throws {
     let buffer = try ResidentBuffer(byteCount: 64)
