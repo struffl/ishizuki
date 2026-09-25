@@ -45,5 +45,10 @@ struct CuratedModel: Identifiable, Sendable {
       summary: "IQ2_XS with the MTP head, for speculative decoding. BF16 vision projector.",
       bytes: 9_700_000_000,
       only: ["Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf", "mmproj-Qwen3.8-27B-BF16.gguf"]),
+    CuratedModel(
+      repo: "orcarouter/OrcaSAQ-2-27B",
+      name: "OrcaSAQ 2 27B",
+      summary: "Mixed 2–6-bit EXL3 at 3.2 bpw, with the MTP head. Text only; drafts with DFlash.",
+      bytes: 12_300_000_000),
   ]
 }
