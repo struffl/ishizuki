@@ -276,6 +276,9 @@ public final class PackedEmbedding: @unchecked Sendable {
   /// Set for an embedding built by ``init(dense:)``: `weight` holds the real fp16 checkpoint
   /// rows directly, nothing to dequantize.
   public let isDense: Bool
+  /// Set for an embedding built by ``init(codes:rowScales:dtype:)``: `weight` holds int8 codes
+  /// and `scales` one scale per row.
+  public let isRowScaled: Bool
 
   public init(
     weight: MLXArray, scales: MLXArray, biases: MLXArray,
@@ -292,6 +295,7 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.dtype = dtype
     self.ggml = nil
     self.isDense = false
+    self.isRowScaled = false
     if block > 0 && signs == nil {
       throw BonsaiError.invalidTransform("rotated embedding is missing its sign vector")
     }
@@ -311,6 +315,29 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.dtype = dtype
     self.ggml = nil
     self.isDense = true
+    self.isRowScaled = false
+  }
+
+  /// A table of int8 codes with one scale per row, a row being its codes times its scale. An
+  /// OrcaSAQ2 pack keeps its embedding this way beside EXL3 layers, at half the bytes of the
+  /// bfloat16 table exllamav3 would have left.
+  public init(codes: MLXArray, rowScales: MLXArray, dtype: DType = .float16) throws {
+    guard codes.ndim == 2, codes.dtype == .int8, rowScales.size == codes.dim(0) else {
+      throw BonsaiError.shapeMismatch(
+        "an int8 embedding wants [rows, width] codes and a scale per row, got "
+          + "\(codes.shape) \(codes.dtype) and \(rowScales.shape)")
+    }
+    self.weight = codes
+    self.scales = rowScales.reshaped([-1])
+    self.biases = MLXArray.zeros([1])
+    self.signs = nil
+    self.block = 0
+    self.groupSize = codes.dim(1)
+    self.bits = 8
+    self.dtype = dtype
+    self.ggml = nil
+    self.isDense = false
+    self.isRowScaled = true
   }
 
   public init(ggml blocks: GGUFBlocks, dtype: DType = .bfloat16) {
@@ -324,6 +351,7 @@ public final class PackedEmbedding: @unchecked Sendable {
     self.dtype = dtype
     self.ggml = blocks
     self.isDense = false
+    self.isRowScaled = false
   }
 
   public func callAsFunction(_ ids: MLXArray) -> MLXArray {
@@ -340,6 +368,9 @@ public final class PackedEmbedding: @unchecked Sendable {
     }
     if isDense {
       out = weight[flat]
+    } else if isRowScaled {
+      out =
+        weight[flat].asType(.float32) * scales[flat].asType(.float32).expandedDimensions(axis: -1)
     } else {
       out = dequantized(
         weight[flat], scales: scales[flat], biases: biases[flat],

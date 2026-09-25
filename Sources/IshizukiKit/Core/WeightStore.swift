@@ -260,6 +260,10 @@ public struct PackedModuleFactory {
     if let blocks = store.ggml(key + ".weight") {
       return PackedEmbedding(ggml: blocks)
     }
+    if let codes = store.optional(key + ".qweight"), codes.dtype == .int8 {
+      return try PackedEmbedding(
+        codes: codes, rowScales: try store(key + ".scales"), dtype: activationDType)
+    }
     if dense || (!store.has(key + ".scales") && store.has(key + ".weight")) {
       return PackedEmbedding(dense: try store(key + ".weight"), dtype: activationDType)
     }

@@ -132,6 +132,36 @@ struct EXL3Tests {
     try config.validate()
   }
 
+  /// OrcaSAQ2 ships exllamav3 layers beside an int8 embedding with a scale per row.
+  @Test("an int8 embedding with a scale per row gathers its codes times their scales")
+  func rowScaledEmbedding() throws {
+    let codes = MLXRandom.randInt(low: -127, high: 128, [64, 128]).asType(.int8)
+    let scales = (MLXRandom.uniform(low: 0.001, high: 0.02, [64])).asType(.bfloat16)
+    let object: [String: Any] = [
+      "model_type": "qwen3", "hidden_size": 128, "num_hidden_layers": 1,
+      "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 64,
+      "intermediate_size": 256, "vocab_size": 64, "rms_norm_eps": 1e-6,
+      "max_position_embeddings": 4096,
+      "quantization_config": ["quant_method": "exl3", "bits": 3.21, "embed_quant": "int8"],
+    ]
+    let store = WeightStore(arrays: [
+      "model.embed_tokens.qweight": codes, "model.embed_tokens.scales": scales,
+    ])
+    let factory = PackedModuleFactory(
+      store: store, config: try BonsaiConfig.standard(object), tensorPrefix: "",
+      activationDType: .float32)
+    let embedding = try factory.embedding("model.embed_tokens")
+    #expect(embedding.isRowScaled)
+
+    let ids = MLXArray([Int32(3), 0, 63, 3, 17]).reshaped([1, 5])
+    let got = embedding(ids)
+    let want =
+      codes.asType(.float32)[ids.reshaped([-1])]
+      * scales.asType(.float32)[ids.reshaped([-1])].expandedDimensions(axis: -1)
+    #expect(got.shape == [1, 5, 128])
+    #expect((got.reshaped([5, 128]) - want).abs().max().item(Float.self) == 0)
+  }
+
   @Test("an EXL3 projection refuses to be split by channel")
   func refusesChannelSplit() throws {
     let arrays = try Self.fixture()
