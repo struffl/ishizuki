@@ -92,6 +92,8 @@ public final class DFlashDraft: @unchecked Sendable {
       self.groupSize = groupSize
       self.bits = bits
       eval(self.weight, self.scales, self.biases)
+      VerifyMatmul.warm(
+        self.weight, scales: self.scales, biases: self.biases, groupSize: groupSize, bits: bits)
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {

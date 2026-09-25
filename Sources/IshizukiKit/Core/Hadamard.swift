@@ -81,6 +81,7 @@ public final class PackedLinear: @unchecked Sendable {
           "Hadamard block \(block) does not divide input width \(inputDim)")
       }
     }
+    VerifyMatmul.warm(weight, scales: scales, biases: biases, groupSize: groupSize, bits: bits)
   }
 
   /// A projection over the real, unquantized checkpoint weight — what calibration runs

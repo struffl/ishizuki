@@ -18,6 +18,34 @@ public enum VerifyMatmul {
   /// to go round the GPU's cores, so its reduction is split and the slices added after.
   nonisolated(unsafe) static var occupancy = 2048
 
+  private static let warmedLock = NSLock()
+  nonisolated(unsafe) private static var warmedShapes = Set<[Int]>()
+
+  /// Compiles a weight shape's kernel for each activation dtype at load, so the first drafted
+  /// round does not wait on a Metal library build.
+  public static func warm(
+    _ w: MLXArray, scales: MLXArray, biases: MLXArray, groupSize: Int, bits: Int
+  ) {
+    #if canImport(Metal)
+      guard BonsaiRuntime.useVerifyMatmul else { return }
+      let k = scales.dim(1) * groupSize
+      let key = [k, w.dim(0), w.dim(1), bits, groupSize, scales.dtype.size]
+      warmedLock.lock()
+      let fresh = warmedShapes.insert(key).inserted
+      warmedLock.unlock()
+      guard fresh else { return }
+      let weights = MLXArray.zeros(w.shape, dtype: w.dtype)
+      let groups = MLXArray.zeros(scales.shape, dtype: scales.dtype)
+      let offsets = MLXArray.zeros(biases.shape, dtype: biases.dtype)
+      let outputs = [DType.float16, .float32, .bfloat16].compactMap {
+        apply(
+          MLXArray.zeros([supportedRows.upperBound, k], dtype: $0), weights, scales: groups,
+          biases: offsets, groupSize: groupSize, bits: bits)
+      }
+      eval(outputs)
+    #endif
+  }
+
   public static func apply(
     _ x: MLXArray, _ w: MLXArray, scales: MLXArray, biases: MLXArray,
     groupSize: Int, bits: Int
@@ -40,9 +68,9 @@ public enum VerifyMatmul {
         let split =
           (1...groups).first { groups % $0 == 0 && blocks * $0 >= occupancy } ?? groups
         let y = codes(
-          [x, w, scales, biases],
+          [x, w, scales, biases, m],
           template: [
-            ("M", m), ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
+            ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
             ("RB", rowBlocks), ("SGS", simdgroups), ("U", unroll), ("SPLIT", split),
           ],
           grid: ((n / rowsPerGroup) * 32 * simdgroups, split, 1),
@@ -53,9 +81,9 @@ public enum VerifyMatmul {
       }
 
       return kernel(
-        [x, w, scales, biases],
+        [x, w, scales, biases, m],
         template: [
-          ("M", m), ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
+          ("K", k), ("N", n), ("BITS", bits), ("GS", groupSize),
           ("RB", rowBlocks), ("SGS", simdgroups), ("U", unroll),
         ],
         grid: ((n / rowsPerGroup) * 32 * simdgroups, 1, 1),
@@ -76,7 +104,7 @@ public enum VerifyMatmul {
     /// activations add up among themselves. Only widths whose codes pack a word evenly take it.
     private static let codes: MLXFast.MLXFastKernel = MLXFast.metalKernel(
       name: "ishizuki_verify_qmm_codes",
-      inputNames: ["x", "w", "scales", "biases"],
+      inputNames: ["x", "w", "scales", "biases", "M"],
       outputNames: ["y"],
       source: """
             constexpr uint CH = 16 * U;
@@ -105,10 +133,10 @@ public enum VerifyMatmul {
             device const uchar *wb = (device const uchar *)w;
             uint kl = (fn / 2) * CH;
             uint kb = (fm / 2) * CH + (fm % 2) * D;
-            auto x0 = x + fn * K;
-            auto x1 = x + (fn + 1) * K;
-            bool m0 = fn < M;
-            bool m1 = fn + 1 < M;
+            bool m0 = fn < uint(M);
+            bool m1 = fn + 1 < uint(M);
+            auto x0 = x + min(fn, uint(M) - 1) * K;
+            auto x1 = x + min(fn + 1, uint(M) - 1) * K;
             float sum0 = 0.0f;
             float sum1 = 0.0f;
             constexpr uint KS = K / SPLIT;
@@ -124,8 +152,8 @@ public enum VerifyMatmul {
                 }
                 UNROLL for (uint j = 0; j < CH / 2; ++j) {
                     uint k = k0 + kb + (j % D) + C * (j / D);
-                    float v0 = m0 ? float(x0[k]) : 0.0f;
-                    float v1 = m1 ? float(x1[k]) : 0.0f;
+                    float v0 = float(x0[k]);
+                    float v1 = float(x1[k]);
                     sum0 += v0;
                     sum1 += v1;
                     simdgroup_float8x8 bx;
@@ -163,8 +191,8 @@ public enum VerifyMatmul {
 
             UNROLL for (uint b = 0; b < RB; ++b) {
                 uint row = row_base + b * 8 + fm;
-                if (m0) y[(split * M + fn) * N + row] = acc[b].thread_elements()[0];
-                if (m1) y[(split * M + fn + 1) * N + row] = acc[b].thread_elements()[1];
+                if (m0) y[(split * uint(M) + fn) * N + row] = acc[b].thread_elements()[0];
+                if (m1) y[(split * uint(M) + fn + 1) * N + row] = acc[b].thread_elements()[1];
             }
         """,
       header: """
@@ -175,7 +203,7 @@ public enum VerifyMatmul {
 
     private static let kernel: MLXFast.MLXFastKernel = MLXFast.metalKernel(
       name: "ishizuki_verify_qmm",
-      inputNames: ["x", "w", "scales", "biases"],
+      inputNames: ["x", "w", "scales", "biases", "M"],
       outputNames: ["y"],
       source: """
             constexpr uint CH = 16 * U;
@@ -199,10 +227,10 @@ public enum VerifyMatmul {
             device const uchar *wb = (device const uchar *)w;
             uint kl = (fn / 2) * CH;
             uint kb = (fm / 2) * CH + (fm % 2);
-            auto x0 = x + fn * K;
-            auto x1 = x + (fn + 1) * K;
-            bool m0 = fn < M;
-            bool m1 = fn + 1 < M;
+            bool m0 = fn < uint(M);
+            bool m1 = fn + 1 < uint(M);
+            auto x0 = x + min(fn, uint(M) - 1) * K;
+            auto x1 = x + min(fn + 1, uint(M) - 1) * K;
 
             for (uint k0 = 0; k0 < K; k0 += TK) {
                 uint words[RB][NW + 1];
@@ -221,8 +249,8 @@ public enum VerifyMatmul {
                 UNROLL for (uint j = 0; j < 8 * U; ++j) {
                     simdgroup_float8x8 bx;
                     uint k = k0 + kb + 2 * j;
-                    bx.thread_elements()[0] = m0 ? float(x0[k]) : 0.0f;
-                    bx.thread_elements()[1] = m1 ? float(x1[k]) : 0.0f;
+                    bx.thread_elements()[0] = float(x0[k]);
+                    bx.thread_elements()[1] = float(x1[k]);
                     UNROLL for (uint b = 0; b < RB; ++b) {
                         simdgroup_float8x8 a;
                         uint p0 = (2 * j) * BITS;
