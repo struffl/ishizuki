@@ -85,45 +85,17 @@ signature="$(codesign --display --verbose=2 "$app" 2>&1)"
 
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
-cp -R "$app" "$staging/"
-ln -s /Applications "$staging/Applications"
+sips -z 816 1456 "$root_dir/assets/ishizuki.jpg" -s format png --out "$staging/background@2x.png" >/dev/null
+sips -z 408 728 "$root_dir/assets/ishizuki.jpg" -s format png --out "$staging/background.png" >/dev/null
 
 dmg="$root_dir/.build/Ishizuki.dmg"
-writable_dmg="$root_dir/.build/Ishizuki-writable.dmg"
-rm -f "$dmg" "$writable_dmg"
+rm -f "$dmg"
 
 echo "==> Building DMG"
-diskutil image create from "$staging" --format RAW --volumeName Ishizuki "$writable_dmg"
-mount="$(diskutil image attach --plist "$writable_dmg" | python3 -c 'import plistlib, sys; print(next(e["mount-point"] for e in plistlib.loads(sys.stdin.buffer.read())["system-entities"] if "mount-point" in e))')"
-for attempt in 1 2 3; do
-    osascript \
-    -e 'on run argv' \
-    -e 'set dmgFolder to POSIX file (item 1 of argv) as alias' \
-    -e 'tell application "Finder"' \
-    -e 'set dmgWindow to container window of dmgFolder' \
-    -e 'open dmgWindow' \
-    -e 'set current view of dmgWindow to icon view' \
-    -e 'set toolbar visible of dmgWindow to false' \
-    -e 'set statusbar visible of dmgWindow to false' \
-    -e 'set bounds of dmgWindow to {100, 100, 580, 370}' \
-    -e 'set theViewOptions to the icon view options of dmgWindow' \
-    -e 'set arrangement of theViewOptions to not arranged' \
-    -e 'set icon size of theViewOptions to 64' \
-    -e 'set position of item "Ishizuki.app" of dmgFolder to {120, 178}' \
-    -e 'set position of item "Applications" of dmgFolder to {380, 178}' \
-    -e 'update dmgFolder without registering applications' \
-    -e 'delay 2' \
-    -e 'close dmgWindow' \
-    -e 'end tell' \
-    -e 'end run' "$mount"
-    for _ in $(seq 15); do if [ -f "$mount/.DS_Store" ]; then break; fi; sleep 1; done
-    if [ -f "$mount/.DS_Store" ]; then break; fi
-    echo "Finder has not written the window layout yet; retrying ($attempt)" >&2
-done
-test -f "$mount/.DS_Store" || { echo "Finder never wrote the window layout" >&2; exit 1; }
-diskutil eject "$mount" >/dev/null
-diskutil image create from "$writable_dmg" --format UDZO "$dmg"
-rm -f "$writable_dmg"
+"${DMGBUILD:-dmgbuild}" -s "$root_dir/Scripts/dmg-settings.py" \
+  -D app="$app" -D background="$staging/background.png" \
+  Ishizuki "$dmg"
+codesign --sign "$identity" --timestamp "$dmg"
 
 echo "==> Notarizing"
 xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
