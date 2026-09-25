@@ -17,11 +17,55 @@ Decode scales with memory bandwidth: ~5 tok/s on M4, ~11 on M4 Pro, ~15–22 on 
 
 ## Contents
 
+- [Engines side by side](#engines-side-by-side)
+- [DeepSeek-V4.1 off the SSD](#deepseek-v41-off-the-ssd)
 - [KV quantization](#kv-quantization)
 - [Batching](#batching)
 - [Speculative decoding](#speculative-decoding)
 - [GGUF](#gguf)
 - [Custom kernels](#custom-kernels)
+
+## Engines side by side
+
+Qwen3.8-27B through every engine that reads each file, on one idle M1 Max 64 GB, 2026-09-24:
+greedy, reasoning off, 256 tokens, the better of two runs, tok/s for the math / code / prose
+prompts of `EngineBenchProbe`. llama.cpp's prompt rates are `llama-bench`'s; its decode is
+`llama-server` on the same prompts, its DFlash with z-lab's Q8_0 drafter. mlx-lm reads the Bonsai
+pack through the pack's own runtime, and its DFlash column is z-lab's MLX loop at its best
+setting, blocks of five with the drafter at 4 bits. Nothing else on a Mac runs EXL3.
+
+| Weights | Engine | Prompt 512 / 2048 | Plain | MTP | DFlash 2 |
+|---|---|---|---|---|---|
+| GGUF IQ2_XS + MTP, 8.8 GB | llama.cpp | 99.1 / 103.9 | 12.8 / 13.0 / 12.1 | 11.9 / 11.1 / 8.8 | 11.1 / 10.0 / 5.5 |
+| | ishizuki | 115.6 / 116.1 | 10.6 / 9.7 / 9.7 | 12.5 / 11.8 / 10.6 | **23.9 / 24.7** / 11.4 |
+| EXL3 2.0 bpw, 10.2 GB | ishizuki | 123.4 / 135.3 | 9.2 / 9.3 / 9.2 | 12.5 / 12.5 / 12.0 | **28.7 / 35.4** / 15.9 |
+| OrcaSAQ2 27B, 3.21 bpw, 12.3 GB | ishizuki | 124.3 / 139.4 | 8.3 / 8.3 / 8.3 | 12.6 / 12.8 / 12.1 | **28.9 / 33.3** / 14.1 |
+| Ternary Bonsai 2 27B, 2-bit | mlx-lm | 111.0 / 119.6 | 20.9 / 19.7 / 18.8 | — | 20.3 / 18.9 / 11.5 |
+| | ishizuki | 139.3 / 132.0 | 22.5 / 22.5 / 22.2 | — | **45.0 / 45.0** / 20.2 |
+
+A DFlash round keeps 6–7.5 of its eight tokens on code and math and about three on prose, which
+is why prose runs level with plain decoding. llama.cpp's own MTP and DFlash run slower than its
+plain decode on an M1, and its plain GGUF decode is still ahead of ishizuki's. Run alternately with
+a cool-down before each — mlx-lm, ishizuki, mlx-lm — the Bonsai pack gave 42.5 / 43.0 against
+mlx-lm's 20.9 / 19.7 and then 20.2 / 19.7, the same gap: an hour of back-to-back runs heats this
+machine into about 18% less, and an engine measured second loses to the heat, not to the other
+engine.
+
+## DeepSeek-V4.1 off the SSD
+
+DeepSeek-V4.1-Flash from its release shards — 552B parameters in the backbone and 196B in the two
+n-gram tables, 16B active a token in decode — with every shard on the internal SSD but the two
+tables, which do not fit there and stay on a USB hard disk. Sixteen expert slots a layer, 512-token
+prompt, 64 tokens, 2026-09-24, desktop in use:
+
+| | Prompt | Decode |
+|---|---|---|
+| n-gram rows read off the hard disk | 1.12 tok/s | 0.66 tok/s |
+| rows already in memory, as from an SSD | **14.2 tok/s** | **1.29 tok/s** |
+
+The disk answers about 116 random reads a second, and a prompt of 512 tokens asks for 49,000 of
+them; everything else in the prefill took 36 s. The second row is the same prompt asked again,
+the rows the first run read still in the page cache, which streamed experts no longer crowd out.
 
 ## KV quantization
 
