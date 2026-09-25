@@ -14,6 +14,7 @@ Requires Apple Silicon and macOS 26.
 
 ## Contents
 
+- [What's in it](#whats-in-it)
 - [Install](#install)
 - [Agents](#agents) — Hermes, Claude Code, Pi
 - [Serve](#serve)
@@ -29,6 +30,59 @@ Requires Apple Silicon and macOS 26.
 - [Credits](#credits)
 - [License](#license)
 
+## What's in it
+
+One Swift engine, no Python, written against Metal and MLX Swift from the tensor layout up.
+
+**Faster than the usual tools, on the same Mac.** Qwen3.8-27B on one idle M1 Max, greedy,
+tok/s on math / code prompts ([how it was measured](BENCHMARKS.md#engines-side-by-side)):
+
+| Weights | llama.cpp | mlx-lm | ishizuki |
+|---|---|---|---|
+| Ternary Bonsai 2 27B, 2-bit | — | 20.9 / 19.7 | **45.0 / 45.0** |
+| GGUF IQ2_XS | 12.8 / 13.0 | — | **23.9 / 24.7** |
+| EXL3 2.0 bpw | — | — | **28.7 / 35.4** |
+| OrcaSAQ2 27B | — | — | **28.9 / 33.3** |
+
+**Reads what people actually ship.**
+- GGUF in eleven quantization formats, decoded inside the matmul and never expanded.
+- EXL3 trellis codes, the only way to run them on a Mac.
+- OrcaSAQ2, JANG repacks with their Hadamard rotation, oQ4e, and plain MLX affine packs.
+- Architectures: Qwen3.8's hybrid gated-delta-net and attention stack, Gemma 4, Qwen3.8-Flash-Next
+  (`qwen4_exp`) up to the 125B-A6B, and DeepSeek-V4.1-Flash straight from its 48 release shards,
+  with the routed experts streamed off the SSD.
+
+**Speculative decoding that pays on Apple Silicon.**
+- z-lab's DFlash 2 block drafter, ported to Swift, doubles decode on code and math.
+- Prompt lookup drafting runs inside the pipelined decode loop, so a step with nothing to draft
+  costs what a plain one does. It is on by default and makes a served code edit 16% faster.
+- Pack MTP heads draft greedy turns.
+
+**Kernels written for the verify.** MLX's quantized matmul costs about one decode step per row,
+which is what keeps speculative decoding from paying on a Mac. Ishizuki's verify kernels decode
+each weight once, straight into a simdgroup matrix fragment, and multiply it against every
+drafted row, so eight rows cost about two and a half steps. There is one for MLX affine codes and
+one for GGUF blocks, and the affine one takes a projection only from the row count where it
+beats MLX, which the weight's size sets.
+
+The affine kernel was also tested on hardware it was never written on. In the MLX Fast Bonsai 2
+speed contest, whose runs are timed on an M5, a port of it was entered on the leading entry's own
+tree and draft depth, and the kernel was the only difference between the two. Decode went from
+18.9 to 16.1 ms a token, 15% faster than MLX's own kernels, and the drafts were accepted as they
+had been. That took first place for a time, at 1.655× the reference engine.
+
+**Details that took measuring.**
+- macOS only skips the page cache when a read's file offset and its buffer share a 16 KB phase.
+  Streamed expert reads go through page-aligned scratch, so a long prompt no longer squeezes
+  other apps into compressed memory.
+- MLX caches a custom kernel by name, and the name ignores input dtypes. Every kernel here puts
+  its activation dtype in its template, so an fp16 model and its fp32 drafter never share a build.
+- Streamed experts are locked in memory, because an idle slot the system compressed cost more to
+  hit than the disk read it replaced.
+
+Plus a menu bar app with OpenAI and Anthropic APIs for coding agents, a paired iPhone companion,
+and pack tools for quantizing, measuring and streaming experts.
+
 ## Install
 
 Ishizuki is a menu bar app. The bonsai in the status bar drops down what is loaded, the rate,
@@ -43,8 +97,6 @@ brew install just xcodegen
 just app-run         # build and launch
 just app-store       # archive and export a Mac App Store package
 ```
-
-Requires Apple Silicon and macOS 26.
 
 ### Models
 
@@ -183,6 +235,19 @@ it, so forgetting *every* phone rotates the key instead.
 Without the Mac — asleep, or off the tailnet — the phone falls back to Apple's on-device model
 under **Ask this iPhone**: no files, no shell, and nothing saved to the Mac.
 
+### Reconnecting and cache
+
+The iPhone keeps a disposable, protected cache of previously loaded conversations, shared
+folder listings, model listings, and text previews (up to 32 MB per paired Mac). Saved content
+appears before network refresh and stays readable during outages. Conversation streams
+reconnect, stalled requests time out, and the chat list refreshes when returning to the app.
+Forgetting a Mac clears its cache. Messages and shell commands are not automatically replayed
+after a failed request, to avoid executing an action twice.
+
+Dashboard cache memory is a snapshot published by the generation owner at checkpoints and
+turn completion. It may lag during generation; drawing the dashboard never inspects mutable
+MLX cache arrays from another thread.
+
 ## Tools
 
 The Tools tab carries the work that is not serving:
@@ -201,9 +266,9 @@ The Tools tab carries the work that is not serving:
 
 ## Benchmarks
 
-M1 Max, release build: decode 17.5-20.1 tok/s, prefill up to 138.9 tok/s. Full throughput,
-KV quantization, batching, speculative decoding, and custom-kernel numbers are in
-[BENCHMARKS.md](BENCHMARKS.md).
+M1 Max, release build, Ternary Bonsai 2 27B: plain decode 22.5 tok/s, 45 with DFlash on code and
+math, prefill up to 139 tok/s. The engine comparison, DeepSeek off the SSD, KV quantization,
+batching, speculative decoding and custom-kernel numbers are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Context
 
@@ -347,16 +412,3 @@ AGPL-3.0-or-later © 2026 Sarah Truffle. See [LICENSE](LICENSE).
 ---
 
 Icon art from [StockCake](https://stockcake.com), public domain.
-
-### Reconnecting and cache
-
-The iPhone keeps a disposable, protected cache of previously loaded conversations, shared
-folder listings, model listings, and text previews (up to 32 MB per paired Mac). Saved content
-appears before network refresh and stays readable during outages. Conversation streams
-reconnect, stalled requests time out, and the chat list refreshes when returning to the app.
-Forgetting a Mac clears its cache. Messages and shell commands are not automatically replayed
-after a failed request, to avoid executing an action twice.
-
-Dashboard cache memory is a snapshot published by the generation owner at checkpoints and
-turn completion. It may lag during generation; drawing the dashboard never inspects mutable
-MLX cache arrays from another thread.
