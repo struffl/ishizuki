@@ -11,7 +11,8 @@ import Testing
 /// `ISHIZUKI_BENCH_PACK` is any pack this build reads: a GGUF file, an EXL3 or MLX directory.
 /// Prompt processing is timed at 512 and 2048 tokens; generation on three prompts, greedy and
 /// with reasoning off, plainly, with the pack's MTP head when it has one, and with a DFlash
-/// drafter when one is in reach. Every rate is the better of two runs.
+/// drafter when one is in reach. Every rate is the better of two runs, and `ISHIZUKI_BENCH_SHOW`
+/// prints what the plain runs said, to see a pack answers sensibly and not only quickly.
 @Suite(
   "Engine bench", .serialized,
   .enabled(if: ProcessInfo.processInfo.environment["ISHIZUKI_BENCH_PACK"] != nil))
@@ -82,6 +83,9 @@ struct EngineBenchProbe {
           generator.speculativeDecode = drafting
           let result = generator.generate(promptTokens: tokens, options: .greedy, maxTokens: budget)
           model.dflash = nil
+          if !drafting, rate == 0, environment["ISHIZUKI_BENCH_SHOW"] != nil {
+            print("\(label): \(model.tokenizer.decode(result.tokens).debugDescription)")
+          }
           rate = max(rate, result.stats.generationTokensPerSecond)
           perVerify = result.speculative?.tokensPerRound ?? 0
         }
